@@ -71,6 +71,13 @@ pub enum Answer {
     /// An account added, signed in, with its folders; not a store's
     /// answer, but the form's.
     Added(Result<Added, String>),
+    /// How to sign in on Microsoft's pages, while the form waits.
+    Waiting(crate::oauth::Waiting),
+    /// Whether Microsoft says an address signs in with it.
+    Realm {
+        email: String,
+        microsoft: bool,
+    },
 }
 
 pub struct Added {

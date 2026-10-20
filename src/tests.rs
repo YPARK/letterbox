@@ -314,6 +314,27 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
                 let _ = out.write_all(format!("* BYE\r\n{tag} OK bye\r\n").as_bytes());
                 return;
             }
+            "AUTHENTICATE" => {
+                // XOAUTH2: the token, after the server's `+`, in base64.
+                drop(boxes);
+                out.write_all(b"+ \r\n").unwrap();
+                let mut answer = String::new();
+                lines.read_line(&mut answer).unwrap();
+                use base64::Engine;
+                let said = base64::engine::general_purpose::STANDARD
+                    .decode(answer.trim())
+                    .unwrap_or_default();
+                let said = String::from_utf8_lossy(&said);
+                let good = said.starts_with("user=me\x01auth=Bearer access-")
+                    && said.ends_with("\x01\x01");
+                let done = if good {
+                    format!("{tag} OK signed in\r\n")
+                } else {
+                    format!("{tag} NO [AUTHENTICATIONFAILED] bad token\r\n")
+                };
+                out.write_all(done.as_bytes()).unwrap();
+                continue;
+            }
             "NOOP" | "CAPABILITY" => {}
             _ => done = format!("{tag} BAD unknown\r\n"),
         }
@@ -344,6 +365,9 @@ fn server() -> (Account, Boxes) {
         port: Some(port),
         user: Some("me".to_string()),
         security: Security::None,
+        auth: crate::config::Auth::Password,
+        tenant: None,
+        client_id: None,
         keep: Keeper::Keyring,
         password_command: Some("echo secret".to_string()),
         password: None,
@@ -741,9 +765,11 @@ fn keep_in_test(_: Keeper, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
 }
 
 fn empty_app(config: PathBuf) -> App {
+    microsoft();
     let mut app = App::new(Vec::new(), config);
     app.keep = keep_in_test;
     app.keepers = || vec![Keeper::Keyring, Keeper::Vault];
+    app.browse = |_| {};
     app
 }
 
@@ -765,6 +791,7 @@ fn fill_form(app: &mut App, port: u16, password: &str) {
             "<tab>",
             "<c-u>",
             "me",
+            "<tab>",
             "<tab>",
             password,
             "<enter>",
@@ -935,20 +962,20 @@ fn the_forms_fields_and_buttons_are_clicked() {
     press(&mut app, &[&account.port.unwrap().to_string()]);
     click_at(&mut app, app::Target::Field(4));
     press(&mut app, &["<c-u>", "me"]);
-    click_at(&mut app, app::Target::Field(6));
-    click_at(&mut app, app::Target::Field(6));
+    click_at(&mut app, app::Target::Field(7));
+    click_at(&mut app, app::Target::Field(7));
     assert_eq!(
         app.form.as_ref().unwrap().keeper,
         1,
         "a second click picks the vault"
     );
-    click_at(&mut app, app::Target::Field(6));
+    click_at(&mut app, app::Target::Field(7));
     assert_eq!(
         app.form.as_ref().unwrap().keeper,
         0,
         "and a third the keyring again"
     );
-    click_at(&mut app, app::Target::Field(5));
+    click_at(&mut app, app::Target::Field(6));
     press(&mut app, &["secret"]);
     click_at(&mut app, app::Target::Button(app::Button::Add));
     assert!(
@@ -1010,6 +1037,7 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     unsafe { std::env::set_var("LETTERBOX_VAULT", &vault_at) };
     crate::vault::lock();
     let path = dir.path().join("accounts.toml");
+    microsoft();
     let mut app = App::new(Vec::new(), path.clone());
     app.keepers = || vec![Keeper::Keyring, Keeper::Vault];
     let port = account.port.unwrap().to_string();
@@ -1029,14 +1057,14 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     press(
         &mut app,
         &[
-            &port, "<tab>", "<c-u>", "me", "<tab>", "secret", "<tab>", "<right>",
+            &port, "<tab>", "<c-u>", "me", "<tab>", "<tab>", "secret", "<tab>", "<right>",
         ],
     );
     let form = app.form.as_ref().unwrap();
     assert_eq!(form.kept(), Some(Keeper::Vault));
     assert_eq!(
         form.shown(),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         "a new vault's passphrase, twice"
     );
     press(
@@ -1105,4 +1133,277 @@ fn the_systems_store_keeps_a_password() {
     a.keep = Keeper::Keyring;
     assert!(crate::secret::forget(&a));
     assert!(crate::secret::find(Keeper::Keyring, host, user).is_err());
+}
+
+// ---- Microsoft, as letterbox signs in with it ----
+
+/// A stand-in for Microsoft's sign-in, on this machine, which letterbox is
+/// pointed at in every test: an address at `ubc.example` is its own; a code
+/// is taken from the browser if its verifier answers the challenge the
+/// browser was given; a device's code is taken on the second time it is
+/// asked; tokens are renewed.
+fn microsoft() -> &'static str {
+    static AT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AT.get_or_init(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        // SAFETY: set once, before any test signs in.
+        unsafe { std::env::set_var("LETTERBOX_MS_LOGIN", &at) };
+        std::thread::spawn(move || {
+            for tcp in listener.incoming().flatten() {
+                std::thread::spawn(move || answer_as_microsoft(tcp));
+            }
+        });
+        at
+    })
+}
+
+/// The pages the tests' browser was shown, coming back to letterbox.
+static PAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether the browser was shown `said`, within a second or two: it reads
+/// the page on a thread of its own.
+fn shown(said: &str) -> bool {
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if PAGES.lock().unwrap().iter().any(|p| p.contains(said)) {
+            return true;
+        }
+        if std::time::Instant::now() > until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The challenge the test's browser was given, to check the verifier by.
+static CHALLENGE: Mutex<Option<String>> = Mutex::new(None);
+static DEVICES_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn answer_as_microsoft(tcp: TcpStream) {
+    use std::io::Read;
+    let mut reader = BufReader::new(tcp.try_clone().unwrap());
+    let mut first = String::new();
+    reader.read_line(&mut first).unwrap();
+    let mut length = 0;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        if header.trim().is_empty() {
+            break;
+        }
+        if let Some(v) = header.to_lowercase().strip_prefix("content-length:") {
+            length = v.trim().parse().unwrap();
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    let form: std::collections::HashMap<String, String> = String::from_utf8_lossy(&body)
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.replace("%3A", ":").replace("%2F", "/")))
+        .collect();
+    let target = first.split_whitespace().nth(1).unwrap_or_default();
+    let tokens = r#"{"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600}"#;
+    let json = if target.starts_with("/getuserrealm.srf") {
+        let ours = target.contains("ubc.example");
+        format!(
+            r#"{{"NameSpaceType":"{}"}}"#,
+            if ours { "Managed" } else { "Unknown" }
+        )
+    } else if target.ends_with("/devicecode") {
+        let n = DEVICES_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!(
+            r#"{{"device_code":"device-{n}","user_code":"LBX-CODE","verification_uri":"https://microsoft.example/device","interval":1,"expires_in":900}}"#
+        )
+    } else if target.ends_with("/token") {
+        match form.get("grant_type").map(String::as_str) {
+            Some("authorization_code") => {
+                use base64::Engine;
+                use sha2::Digest;
+                let verifier = form.get("code_verifier").cloned().unwrap_or_default();
+                let answered = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(sha2::Sha256::digest(verifier.as_bytes()));
+                let challenge = CHALLENGE.lock().unwrap().clone();
+                if form.get("code").map(String::as_str) == Some("code-1")
+                    && challenge.as_deref() == Some(answered.as_str())
+                {
+                    tokens.to_string()
+                } else {
+                    r#"{"error":"invalid_grant","error_description":"AADSTS70000: bad code"}"#
+                        .to_string()
+                }
+            }
+            Some(grant) if grant.contains("device_code") => {
+                // Asked first while no one has signed in, then signed in.
+                static POLLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+                let code = form.get("device_code").cloned().unwrap_or_default();
+                let mut polled = POLLED.lock().unwrap();
+                if polled.contains(&code) {
+                    tokens.to_string()
+                } else {
+                    polled.push(code);
+                    r#"{"error":"authorization_pending"}"#.to_string()
+                }
+            }
+            Some("refresh_token") => r#"{"access_token":"access-2","expires_in":3600}"#.to_string(),
+            _ => r#"{"error":"unsupported_grant_type"}"#.to_string(),
+        }
+    } else {
+        r#"{"error":"not_found"}"#.to_string()
+    };
+    let mut out = tcp;
+    let _ = write!(
+        out,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+        json.len()
+    );
+}
+
+/// The query of `url`, by name.
+fn query(url: &str) -> std::collections::HashMap<String, String> {
+    url.split_once('?')
+        .map(|(_, q)| q)
+        .unwrap_or_default()
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.replace("%3A", ":").replace("%2F", "/")))
+        .collect()
+}
+
+/// A browser in which you sign in on Microsoft's page: it comes back to
+/// letterbox with `back` added to what letterbox asked to have back.
+fn come_back(url: &str, back: &str) -> String {
+    let q = query(url);
+    *CHALLENGE.lock().unwrap() = q.get("code_challenge").cloned();
+    let redirect = q.get("redirect_uri").cloned().unwrap();
+    let state = q.get("state").cloned().unwrap();
+    let to = redirect.trim_start_matches("http://localhost:").to_string();
+    let request = format!("GET /?{back}&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    std::thread::spawn(move || {
+        let mut tcp = TcpStream::connect(("127.0.0.1", to.parse::<u16>().unwrap())).unwrap();
+        tcp.write_all(request.as_bytes()).unwrap();
+        let mut page = String::new();
+        use std::io::Read;
+        let _ = tcp.read_to_string(&mut page);
+        page
+    })
+    .join()
+    .unwrap()
+}
+
+#[test]
+fn an_outlook_account_is_signed_into_in_the_browser() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = empty_app(path.clone());
+    app.browse = |url| {
+        let page = come_back(url, "code=code-1");
+        PAGES.lock().unwrap().push(page);
+    };
+    press(&mut app, &["A", "me@ubc.example", "<tab>"]);
+    let form = app.form.as_ref().unwrap();
+    assert_eq!(
+        form.auth,
+        crate::config::Auth::Microsoft,
+        "Microsoft says so"
+    );
+    assert_eq!(form.fields[2], "outlook.office365.com");
+    assert!(
+        !form.shown().contains(&app::PASSWORD),
+        "no password asked for"
+    );
+    let port = account.port.unwrap().to_string();
+    press(
+        &mut app,
+        &["<tab>", "<c-u>", "127.0.0.1", "<tab>", "<c-u>", &port],
+    );
+    press(&mut app, &["<tab>", "<c-u>", "me", "<tab>", "<enter>"]);
+    assert!(
+        app.form.is_none(),
+        "{:?}",
+        app.form.as_ref().and_then(|f| f.note.clone())
+    );
+    assert_eq!(app.status, "added ubc.example");
+    assert_eq!(app.shown.len(), 3, "signed in to IMAP with the token");
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(file.contains("auth = \"microsoft\""), "{file}");
+    assert!(
+        !file.contains("refresh") && !file.contains("access"),
+        "{file}"
+    );
+    assert!(shown("Signed in. You may close this tab"));
+}
+
+#[test]
+fn an_outlook_account_is_signed_into_with_a_code_on_another_device() {
+    microsoft();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut shown = None;
+    let tokens = crate::oauth::sign_in(
+        "me@ubc.example",
+        "common",
+        crate::oauth::CLIENT_ID,
+        &stop,
+        |_| {},
+        |w| shown = w.device.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        shown,
+        Some((
+            "https://microsoft.example/device".to_string(),
+            "LBX-CODE".to_string()
+        ))
+    );
+    assert_eq!(
+        (tokens.access.as_str(), tokens.refresh.as_str()),
+        ("access-1", "refresh-1")
+    );
+}
+
+#[test]
+fn a_sign_in_refused_in_the_browser_is_said() {
+    microsoft();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let e = crate::oauth::sign_in(
+        "me@ubc.example",
+        "common",
+        crate::oauth::CLIENT_ID,
+        &stop,
+        |url| {
+            let page = come_back(
+                url,
+                "error=access_denied&error_description=Your+admin+said+no",
+            );
+            PAGES.lock().unwrap().push(page);
+        },
+        |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(e.to_string(), "Your admin said no");
+    assert!(shown("<p>Your admin said no"), "the browser is told too");
+}
+
+#[test]
+fn a_token_running_out_is_renewed() {
+    microsoft();
+    let mut a = crate::setup::account("O", "me@ubc.example", "outlook.example", 993, "me");
+    a.auth = crate::config::Auth::Microsoft;
+    a.password_command = Some("echo unused".to_string());
+    crate::oauth::remember(
+        &a,
+        crate::oauth::Tokens {
+            access: "access-1".to_string(),
+            refresh: "refresh-1".to_string(),
+            until: std::time::Instant::now(),
+        },
+    );
+    assert_eq!(crate::oauth::access(&a).unwrap(), "access-2");
+    assert_eq!(
+        crate::oauth::access(&a).unwrap(),
+        "access-2",
+        "kept, not renewed again"
+    );
 }

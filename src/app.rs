@@ -2,8 +2,9 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
-use crate::config;
+use crate::config::{self, Auth};
 use crate::mail::{self, Folder, Message, Summary};
+use crate::oauth;
 use crate::secret::Keeper;
 use crate::setup;
 use crate::store::{Flag, Store};
@@ -23,6 +24,7 @@ use ratatui::widgets::ListState;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -76,12 +78,13 @@ pub enum Row {
 /// its password is kept is picked rather than typed, and the vault's
 /// passphrase asked for only if it is kept there and the vault is locked,
 /// twice if there is no vault yet.
-pub const FIELDS: [&str; 9] = [
+pub const FIELDS: [&str; 10] = [
     "Email",
     "Name",
     "Server",
     "Port",
     "User",
+    "Sign in",
     "Password",
     "Keep in",
     "Passphrase",
@@ -92,40 +95,52 @@ const NAME: usize = 1;
 const SERVER: usize = 2;
 const PORT: usize = 3;
 const USER: usize = 4;
-pub const PASSWORD: usize = 5;
-pub const KEEP: usize = 6;
-pub const PASSPHRASE: usize = 7;
-pub const AGAIN: usize = 8;
+pub const SIGN_IN: usize = 5;
+pub const PASSWORD: usize = 6;
+pub const KEEP: usize = 7;
+pub const PASSPHRASE: usize = 8;
+pub const AGAIN: usize = 9;
 
 /// An account being added: what is typed, the field typed in, and which
 /// fields were typed rather than filled in from the address.
 pub struct Form {
-    pub fields: [String; 9],
+    pub fields: [String; 10],
     pub at: usize,
-    typed: [bool; 9],
-    /// Where its password may be kept, and where it will be.
+    typed: [bool; 10],
+    /// How it signs in: with a password, or on Microsoft's page.
+    pub auth: Auth,
+    /// The address Microsoft was last asked about.
+    asked: Option<String>,
+    /// Where its secret may be kept, and where it will be.
     pub keepers: Vec<Keeper>,
     pub keeper: usize,
     /// What to know of the provider, or why signing in failed.
     pub note: Option<String>,
     pub failed: bool,
-    /// Whether it is signing in, to be added if it can.
+    /// Whether it is signing in, to be added if it can; how to sign in on
+    /// Microsoft's pages, while it waits; and what stops it waiting.
     pub checking: bool,
+    pub waiting: Option<oauth::Waiting>,
+    stop: Arc<AtomicBool>,
 }
 
 impl Form {
     fn new(keepers: Vec<Keeper>) -> Self {
-        let mut fields: [String; 9] = Default::default();
+        let mut fields: [String; 10] = Default::default();
         fields[PORT] = "993".to_string();
         Form {
             fields,
             at: EMAIL,
-            typed: [false; 9],
+            typed: [false; 10],
+            auth: Auth::Password,
+            asked: None,
             keepers,
             keeper: 0,
             note: None,
             failed: false,
             checking: false,
+            waiting: None,
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -133,10 +148,14 @@ impl Form {
         self.keepers.get(self.keeper).copied()
     }
 
-    /// The fields shown, by their place: the vault's passphrase only if it
-    /// is to be opened, or made.
+    /// The fields shown, by their place: the password only if it signs in
+    /// with one; the vault's passphrase only if it is to be opened, or made.
     pub fn shown(&self) -> Vec<usize> {
-        let mut all: Vec<usize> = (EMAIL..=KEEP).collect();
+        let mut all: Vec<usize> = (EMAIL..=SIGN_IN).collect();
+        if self.auth == Auth::Password {
+            all.push(PASSWORD);
+        }
+        all.push(KEEP);
         if self.kept() == Some(Keeper::Vault) && !vault::is_open() {
             all.push(PASSPHRASE);
             if !vault::exists() {
@@ -146,12 +165,45 @@ impl Form {
         all
     }
 
+    /// Whether ⏎ in the field typed in adds the account: past what must be
+    /// typed for it.
+    fn last(&self) -> bool {
+        self.at >= PASSWORD || (self.at == SIGN_IN && self.auth == Auth::Microsoft)
+    }
+
     /// Go to the field `by` after the one typed in, among those shown.
     fn step(&mut self, by: isize) {
         let shown = self.shown();
         let at = shown.iter().position(|&i| i == self.at).unwrap_or(0) as isize;
         let n = shown.len() as isize;
         self.at = shown[(at + by).rem_euclid(n) as usize];
+    }
+
+    /// Sign in the other way.
+    fn flip(&mut self) {
+        self.auth = match self.auth {
+            Auth::Password => Auth::Microsoft,
+            Auth::Microsoft => Auth::Password,
+        };
+        self.typed[SIGN_IN] = true;
+        if self.auth == Auth::Microsoft && !self.typed[SERVER] {
+            self.fields[SERVER] = oauth::IMAP_HOST.to_string();
+        }
+    }
+
+    /// Sign in with Microsoft, as Microsoft says the address does, where the
+    /// way to sign in was not picked.
+    fn microsoft(&mut self) {
+        if self.typed[SIGN_IN] {
+            return;
+        }
+        self.auth = Auth::Microsoft;
+        if !self.typed[SERVER] {
+            self.fields[SERVER] = oauth::IMAP_HOST.to_string();
+        }
+        if !self.failed {
+            self.note = Some(config::MICROSOFT_NOTE.to_string());
+        }
     }
 
     /// Keep the password in the next place it may be kept, or the one before.
@@ -164,6 +216,7 @@ impl Form {
     fn fill(&mut self) {
         let email = self.fields[EMAIL].trim().to_string();
         let (host, note) = config::guess(&email);
+        let microsoft = host == oauth::IMAP_HOST;
         if !self.typed[NAME] {
             self.fields[NAME] = setup::name_for(&email);
         }
@@ -175,6 +228,13 @@ impl Form {
         }
         if !self.failed {
             self.note = note.map(str::to_string);
+        }
+        if !self.typed[SIGN_IN] {
+            self.auth = if microsoft {
+                Auth::Microsoft
+            } else {
+                Auth::Password
+            };
         }
     }
 }
@@ -325,6 +385,8 @@ pub struct App {
     /// Where an account's password may be kept, and how, once it signs in.
     pub keepers: fn() -> Vec<Keeper>,
     pub keep: setup::Keep,
+    /// How a page is opened in the browser, as Microsoft's to sign in on.
+    pub browse: fn(&str),
     /// An account being added, or one about to be removed.
     pub form: Option<Box<Form>>,
     pub removing: Option<usize>,
@@ -417,6 +479,7 @@ impl App {
             editable: true,
             keepers: crate::secret::keepers,
             keep: crate::secret::store,
+            browse: oauth::browse,
             form: None,
             removing: None,
             replies,
@@ -525,10 +588,28 @@ impl App {
     }
 
     fn take_reply(&mut self, reply: Reply) {
-        self.pending = self.pending.saturating_sub(1);
         let a = reply.account;
+        // How to sign in comes while signing in, not in answer to an ask.
+        if let Answer::Waiting(waiting) = reply.answer {
+            if let Some(form) = &mut self.form {
+                form.note = None;
+                form.waiting = Some(waiting);
+            }
+            return;
+        }
+        self.pending = self.pending.saturating_sub(1);
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
+        }
+        if let Answer::Realm { email, microsoft } = reply.answer {
+            if let Some(form) = &mut self.form
+                && microsoft
+                && form.fields[EMAIL].trim() == email
+                && !form.checking
+            {
+                form.microsoft();
+            }
+            return;
         }
         if self.accounts.get(a).is_none_or(|x| x.asks.is_none()) {
             return;
@@ -574,7 +655,11 @@ impl App {
                     f.unseen = Some(unseen);
                 }
             }
-            Answer::Count { counts: Err(_), .. } | Answer::Skipped | Answer::Added(_) => {}
+            Answer::Count { counts: Err(_), .. }
+            | Answer::Skipped
+            | Answer::Added(_)
+            | Answer::Waiting(_)
+            | Answer::Realm { .. } => {}
             Answer::Page {
                 folder,
                 offset,
@@ -789,8 +874,10 @@ impl App {
     fn submit(&mut self) {
         let Some(form) = &mut self.form else { return };
         let f = &form.fields;
+        let microsoft = form.auth == Auth::Microsoft;
         let missing = [EMAIL, NAME, SERVER, PASSWORD]
             .into_iter()
+            .filter(|&i| i != PASSWORD || !microsoft)
             .find(|&i| f[i].trim().is_empty());
         let port = f[PORT].trim().parse::<u16>();
         if let Some(i) = missing {
@@ -830,17 +917,49 @@ impl App {
             }
         }
         let mut account = setup::account(&f[NAME], &f[EMAIL], &f[SERVER], port, &f[USER]);
-        account.password = Some(f[PASSWORD].clone());
+        account.auth = form.auth;
+        if !microsoft {
+            account.password = Some(f[PASSWORD].clone());
+        }
         form.checking = true;
         form.failed = false;
-        form.note = Some(format!("signing in to {}…", account.host));
+        form.waiting = None;
+        form.note = Some(if microsoft {
+            "asking Microsoft…".to_string()
+        } else {
+            format!("signing in to {}…", account.host)
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        form.stop = stop.clone();
         let (path, keep, replies) = (self.config.clone(), self.keep, self.replies_to.clone());
+        let browse = self.browse;
         self.pending += 1;
         std::thread::spawn(move || {
             let name = account.name.clone();
+            let shown = replies.clone();
             let done = passphrase
                 .map_or(Ok(()), |p| vault::unlock(&p))
-                .and_then(|()| setup::add(&path, account, keeper, keep))
+                .and_then(|()| {
+                    if microsoft {
+                        let email = account.email.clone();
+                        let tokens = oauth::sign_in(
+                            &email,
+                            account.tenant(),
+                            account.client(),
+                            &stop,
+                            browse,
+                            |waiting| {
+                                let _ = shown.send(Reply {
+                                    account: usize::MAX,
+                                    answer: Answer::Waiting(waiting.clone()),
+                                });
+                            },
+                        )?;
+                        account.password = Some(tokens.refresh.clone());
+                        oauth::remember(&account, tokens);
+                    }
+                    setup::add(&path, account, keeper, keep)
+                })
                 .map(|(imap, folders)| Added {
                     name,
                     store: Box::new(imap),
@@ -850,6 +969,26 @@ impl App {
             let _ = replies.send(Reply {
                 account: usize::MAX,
                 answer: Answer::Added(done),
+            });
+        });
+    }
+
+    /// Ask Microsoft, on a thread of its own, whether the address in the
+    /// form signs in with it, unless it was asked already.
+    fn ask_microsoft(&mut self) {
+        let Some(form) = &mut self.form else { return };
+        let email = form.fields[EMAIL].trim().to_string();
+        if !email.contains('@') || form.asked.as_ref() == Some(&email) {
+            return;
+        }
+        form.asked = Some(email.clone());
+        let replies = self.replies_to.clone();
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let microsoft = oauth::is_microsoft(&email);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Realm { email, microsoft },
             });
         });
     }
@@ -937,20 +1076,25 @@ impl App {
         let Some(form) = &mut self.form else { return };
         if form.checking {
             if key.code == KeyCode::Esc {
+                form.stop.store(true, Ordering::Relaxed);
                 self.form = None;
-                self.status = "the account is still signing in; it is added if it can".into();
+                self.status = "stopped adding the account".into();
             }
             return;
         }
+        let before = form.at;
         match key.code {
             KeyCode::Esc => self.form = None,
             KeyCode::Tab | KeyCode::Down => form.step(1),
             KeyCode::BackTab | KeyCode::Up => form.step(-1),
-            KeyCode::Enter if form.at >= PASSWORD => self.submit(),
+            KeyCode::Enter if form.last() => self.submit(),
             KeyCode::Enter => form.step(1),
             KeyCode::Left if form.at == KEEP => form.turn(-1),
             KeyCode::Right | KeyCode::Char(' ') if form.at == KEEP => form.turn(1),
-            _ if form.at == KEEP => {}
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if form.at == SIGN_IN => {
+                form.flip()
+            }
+            _ if form.at == KEEP || form.at == SIGN_IN => {}
             KeyCode::Backspace => {
                 form.fields[form.at].pop();
                 form.typed[form.at] = true;
@@ -965,12 +1109,13 @@ impl App {
             }
             _ => {}
         }
-        if let Some(form) = &mut self.form
-            && form.at == EMAIL
-            && !form.checking
-        {
+        let Some(form) = &mut self.form else { return };
+        if form.at == EMAIL && !form.checking {
             form.failed = false;
             form.fill();
+        }
+        if before == EMAIL && form.at != EMAIL {
+            self.ask_microsoft();
         }
     }
 
@@ -1510,7 +1655,14 @@ impl App {
                     if i == KEEP && form.at == KEEP {
                         form.turn(1);
                     }
+                    if i == SIGN_IN && form.at == SIGN_IN {
+                        form.flip();
+                    }
+                    let left = form.at == EMAIL && i != EMAIL;
                     form.at = i;
+                    if left {
+                        self.ask_microsoft();
+                    }
                 }
                 Some(Target::Button(Button::Add)) if !form.checking => self.submit(),
                 Some(Target::Button(Button::Cancel)) => {

@@ -2,8 +2,9 @@
 //! with RustCrypto's algorithms and Mozilla's roots, as paperstack's HTTPS.
 //! One connection, opened when first needed and again if it is lost.
 
-use crate::config::{Account, Security};
+use crate::config::{Account, Auth, Security};
 use crate::mail::{self, Folder, Role, Summary};
+use crate::oauth;
 use crate::store::{Flag, Page, Store};
 use anyhow::{Context, bail};
 use imap_proto::NameAttribute;
@@ -148,9 +149,20 @@ impl Imap {
                 .read_greeting()
                 .with_context(|| format!("{} did not greet letterbox", a.host))?;
         }
-        let password = a.password()?;
-        client
-            .login(a.user(), password)
+        let signed = match a.auth {
+            Auth::Password => client.login(a.user(), a.password()?),
+            Auth::Microsoft => {
+                let token = oauth::access(a)?;
+                client.authenticate(
+                    "XOAUTH2",
+                    &oauth::XOAuth2 {
+                        user: a.user().to_string(),
+                        token,
+                    },
+                )
+            }
+        };
+        signed
             .map_err(|(e, _)| e)
             .with_context(|| format!("cannot sign in to {} as {}", a.host, a.user()))
     }

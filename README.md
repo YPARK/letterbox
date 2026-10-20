@@ -73,7 +73,26 @@ host = "imap.example.com"
 # password_command = "pass show mail/work", instead of either
 ```
 
-Outlook signed into in the browser, without a password, is to come.
+## Outlook and Microsoft 365
+
+An address Microsoft says is its own, Outlook.com's or an organisation's
+in Microsoft 365, as a university's, is signed into as Microsoft has mail
+apps do: on Microsoft's page, where the password and any second factor
+are given to Microsoft alone. letterbox asks Microsoft as the address is
+typed, and fills in `outlook.office365.com`; `Sign in` in the form, or
+`--auth microsoft`, picks it by hand.
+
+Two ways are offered at once, whichever is done first: Microsoft's page,
+opened in the browser, which comes back to letterbox on this machine; and
+a code to enter at Microsoft's device page, on any device, as from a
+machine reached over ssh. letterbox is given a token for IMAP, which it
+renews, kept as a password is, in the keyring or the vault; your
+organisation may take it back, and removing the account forgets it.
+
+letterbox signs in as Thunderbird does, by the client ID Mozilla publishes
+for mail apps, which organisations mostly allow already. Where yours does
+not, it says so on Microsoft's page; its IT may approve it, or register an
+app of its own, given to the account as `client_id`, and `tenant`.
 
 ## Use
 

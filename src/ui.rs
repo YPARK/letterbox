@@ -4,8 +4,10 @@
 //! in two, one of them at a time.
 
 use crate::app::{
-    AGAIN, App, Body, Button, FIELDS, Focus, Form, KEEP, PASSPHRASE, PASSWORD, Row, State, Target,
+    AGAIN, App, Body, Button, FIELDS, Focus, Form, KEEP, PASSPHRASE, PASSWORD, Row, SIGN_IN, State,
+    Target,
 };
+use crate::config::Auth;
 use crate::mail::Message;
 use crate::secret::Keeper;
 use crate::theme::Theme;
@@ -167,6 +169,25 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
                 Style::new().fg(t.dim)
             },
         );
+        let pick = |picked: bool| {
+            if picked {
+                Style::new()
+                    .fg(t.title)
+                    .bg(if here { t.focus } else { t.row })
+                    .bold()
+            } else {
+                Style::new().fg(t.dim)
+            }
+        };
+        if i == SIGN_IN {
+            let mut spans = vec![label, Span::raw(" ")];
+            for (auth, name) in [(Auth::Password, "password"), (Auth::Microsoft, "microsoft")] {
+                spans.push(Span::styled(format!(" {name} "), pick(form.auth == auth)));
+                spans.push(Span::raw(" "));
+            }
+            lines.push(Line::from(spans));
+            continue;
+        }
         if i == KEEP {
             let mut spans = vec![label, Span::raw(" ")];
             for (k, keeper) in form.keepers.iter().enumerate() {
@@ -220,22 +241,54 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
                 .map(|l| Line::styled(l, note_style)),
         );
     }
-    let mut about = format!(
-        "It signs in before it is added. The password is kept {}, never in the accounts \
-         file.",
-        form.kept().map_or("nowhere", Keeper::about)
-    );
-    if shown.contains(&AGAIN) {
-        about.push_str(&format!(
-            " The vault is new, at {}: its passphrase is asked for each time letterbox starts.",
-            tilde(&vault::path())
+    if let Some(w) = &form.waiting {
+        lines.push(Line::styled(
+            "Sign in on Microsoft's page, opened in your browser.",
+            Style::new().fg(t.text),
         ));
+        if let Some((page, code)) = &w.device {
+            lines.extend(
+                wrap(&format!("Or, on any device, open {page} and enter"), room)
+                    .into_iter()
+                    .map(|l| Line::styled(l, Style::new().fg(t.text))),
+            );
+            lines.push(Line::styled(
+                format!("    {code}"),
+                Style::new().fg(t.accent).bold(),
+            ));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "If the browser did not open, open this there:",
+            Style::new().fg(t.faint),
+        ));
+        lines.extend(
+            wrap(&w.page, room)
+                .into_iter()
+                .map(|l| Line::styled(l, Style::new().fg(t.faint))),
+        );
+    } else {
+        let secret = match form.auth {
+            Auth::Password => "The password",
+            Auth::Microsoft => "Microsoft's token",
+        };
+        let mut about = format!(
+            "It signs in before it is added. {secret} is kept {}, never in the accounts file.",
+            form.kept().map_or("nowhere", Keeper::about)
+        );
+        if shown.contains(&AGAIN) {
+            about.push_str(&format!(
+                " The vault is new, at {}: its passphrase is asked for each time letterbox \
+                 starts.",
+                tilde(&vault::path())
+            ));
+        }
+        lines.extend(
+            wrap(&about, room)
+                .into_iter()
+                .map(|l| Line::styled(l, Style::new().fg(t.faint))),
+        );
     }
-    lines.extend(
-        wrap(&about, room)
-            .into_iter()
-            .map(|l| Line::styled(l, Style::new().fg(t.faint))),
-    );
     lines.push(Line::raw(""));
     let (row, places) = if form.checking {
         buttons(t, &[("Cancel", Button::Cancel)])
@@ -247,10 +300,12 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
     };
     let buttons_at = lines.len();
     lines.push(row);
-    let foot = if form.checking {
+    let foot = if form.waiting.is_some() {
+        "waiting for Microsoft… · esc stops"
+    } else if form.checking {
         "signing in…"
     } else {
-        "tab next field · ←→ pick · ⏎ on the last two adds · esc cancel"
+        "tab next field · ←→ pick · ⏎ on the last adds · esc cancel"
     };
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);

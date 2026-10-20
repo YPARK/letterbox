@@ -20,6 +20,18 @@ pub enum Security {
     None,
 }
 
+/// How an account signs in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Auth {
+    /// With a password, given to the server.
+    #[default]
+    Password,
+    /// On Microsoft's page, as Microsoft 365 and Outlook.com have it; a
+    /// token renewed, not a password, is kept.
+    Microsoft,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Account {
@@ -32,6 +44,12 @@ pub struct Account {
     pub user: Option<String>,
     #[serde(default)]
     pub security: Security,
+    #[serde(default)]
+    pub auth: Auth,
+    /// Microsoft's tenant and client ID signed in with, if not any
+    /// organisation's and Thunderbird's.
+    pub tenant: Option<String>,
+    pub client_id: Option<String>,
     /// Where letterbox keeps its password: the system's store, unless
     /// `"vault"`.
     #[serde(default)]
@@ -39,8 +57,8 @@ pub struct Account {
     /// A shell command that prints the password, as `pass show mail/work`,
     /// instead.
     pub password_command: Option<String>,
-    /// The password as typed, while an account is being added: never
-    /// written to the file.
+    /// The password as typed, or Microsoft's refresh token as given, while
+    /// an account is being added: never written to the file.
     #[serde(skip)]
     pub password: Option<String>,
     /// Why the password could not be found before the TUI started, not to
@@ -57,6 +75,14 @@ struct File {
 }
 
 impl Account {
+    pub fn tenant(&self) -> &str {
+        self.tenant.as_deref().unwrap_or(crate::oauth::TENANT)
+    }
+
+    pub fn client(&self) -> &str {
+        self.client_id.as_deref().unwrap_or(crate::oauth::CLIENT_ID)
+    }
+
     pub fn user(&self) -> &str {
         self.user.as_deref().unwrap_or(&self.email)
     }
@@ -141,6 +167,10 @@ fn local(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
+/// What to know of signing in with Microsoft.
+pub const MICROSOFT_NOTE: &str = "Signs in on Microsoft's page, in your browser, or with a code \
+     on any device: no password is kept here, only a token, renewed.";
+
 /// The IMAP server of an address, as the large providers have it, else
 /// `imap.` and its domain; and what to know to sign in there.
 pub fn guess(email: &str) -> (String, Option<&'static str>) {
@@ -157,10 +187,9 @@ pub fn guess(email: &str) -> (String, Option<&'static str>) {
             "imap.mail.me.com",
             Some("iCloud takes an app-specific password, made at account.apple.com"),
         )),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => Some((
-            "outlook.office365.com",
-            Some("Outlook signs in through the browser, which letterbox cannot do yet"),
-        )),
+        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => {
+            Some((crate::oauth::IMAP_HOST, Some(MICROSOFT_NOTE)))
+        }
         "yahoo.com" | "ymail.com" => Some((
             "imap.mail.yahoo.com",
             Some("Yahoo takes an app password, made in its account security settings"),
@@ -190,6 +219,15 @@ fn table(a: &Account) -> toml_edit::Table {
     }
     if let Some(u) = a.user.as_ref().filter(|u| **u != a.email) {
         t["user"] = toml_edit::value(u);
+    }
+    if a.auth == Auth::Microsoft {
+        t["auth"] = toml_edit::value("microsoft");
+    }
+    if let Some(v) = &a.tenant {
+        t["tenant"] = toml_edit::value(v);
+    }
+    if let Some(v) = &a.client_id {
+        t["client_id"] = toml_edit::value(v);
     }
     if a.keep == Keeper::Vault && a.password_command.is_none() {
         t["keep"] = toml_edit::value("vault");

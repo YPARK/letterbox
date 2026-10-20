@@ -7,6 +7,7 @@ mod config;
 mod demo;
 mod imap;
 mod mail;
+mod oauth;
 mod secret;
 mod setup;
 mod store;
@@ -136,10 +137,14 @@ enum AccountAction {
         /// A command that prints the password, instead of keeping it
         #[arg(long, conflicts_with = "keep")]
         password_command: Option<String>,
-        /// Where to keep the password: the keychain on macOS, the keyring
-        /// elsewhere, unless gpg is asked for
+        /// Where to keep the password, or Microsoft's token: the system's
+        /// store, unless the vault is asked for
         #[arg(long, value_enum)]
         keep: Option<secret::Keeper>,
+        /// Sign in with a password, or on Microsoft's page; Microsoft's for
+        /// an address Microsoft says is its own
+        #[arg(long, value_enum)]
+        auth: Option<SignIn>,
     },
     /// Remove an account; its mail stays on its server
     Remove {
@@ -148,6 +153,12 @@ enum AccountAction {
         #[arg(long)]
         keep_password: bool,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
+enum SignIn {
+    Password,
+    Microsoft,
 }
 
 /// Ask on the terminal, with `default` taken for nothing typed.
@@ -213,6 +224,7 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         user,
         password_command,
         keep,
+        auth,
     } = action
     else {
         unreachable!("only adding")
@@ -224,7 +236,15 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
     if !email.contains('@') {
         bail!("{email} is not an address");
     }
-    let (guessed, note) = config::guess(&email);
+    let microsoft = match auth {
+        Some(a) => *a == SignIn::Microsoft,
+        None => password_command.is_none() && oauth::is_microsoft(&email),
+    };
+    let (guessed, note) = if microsoft {
+        (oauth::IMAP_HOST.to_string(), Some(config::MICROSOFT_NOTE))
+    } else {
+        config::guess(&email)
+    };
     let name = match name {
         Some(n) => n.clone(),
         None => ask("Name", &setup::name_for(&email))?,
@@ -240,22 +260,45 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         *port,
         user.as_deref().unwrap_or(&email),
     );
-    if let Some(c) = password_command {
-        account.password_command = Some(c.clone());
-    } else {
-        if let Some(note) = note {
-            eprintln!("{note}");
-        }
-        account.password = Some(ask_password("Password")?);
-    }
     let keepers = secret::keepers();
     let keeper = match keep {
         Some(k) if keepers.contains(k) => *k,
         Some(k) => bail!("there is no {} here", k.name()),
         None => keepers[0],
     };
-    if keeper == secret::Keeper::Vault && account.password_command.is_none() {
+    if keeper == secret::Keeper::Vault && password_command.is_none() {
         open_vault(true)?;
+    }
+    if let Some(c) = password_command {
+        account.password_command = Some(c.clone());
+    } else if microsoft {
+        account.auth = config::Auth::Microsoft;
+        eprintln!("{}", config::MICROSOFT_NOTE);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let tokens = oauth::sign_in(
+            &email,
+            account.tenant(),
+            account.client(),
+            &stop,
+            oauth::browse,
+            |w| {
+                eprintln!(
+                    "\nSign in on Microsoft's page, opened in your browser:\n  {}",
+                    w.page
+                );
+                if let Some((page, code)) = &w.device {
+                    eprintln!("or, on any device, open {page} and enter {code}");
+                }
+                eprintln!("\nwaiting…");
+            },
+        )?;
+        account.password = Some(tokens.refresh.clone());
+        oauth::remember(&account, tokens);
+    } else {
+        if let Some(note) = note {
+            eprintln!("{note}");
+        }
+        account.password = Some(ask_password("Password")?);
     }
     eprintln!("signing in to {}…", account.host);
     let (_, folders) = setup::add(&args.config, account, keeper, secret::store)?;

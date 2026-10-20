@@ -13,9 +13,10 @@ use std::path::Path;
 /// Keep a password: given where, the host, the user and the password.
 pub type Keep = fn(Keeper, &str, &str, &str) -> anyhow::Result<()>;
 
-/// Sign in as `account`, with the password it was given as typed; if it
-/// can, keep that password in `keeper`, by `keep`, and add the account to
-/// the file at `path`. The store signed in, and its folders.
+/// Sign in as `account`, with the password it was given as typed, or the
+/// token Microsoft gave; if it can, keep that secret in `keeper`, by
+/// `keep`, and add the account to the file at `path`. The store signed in,
+/// and its folders.
 pub fn add(
     path: &Path,
     mut account: Account,
@@ -28,13 +29,15 @@ pub fn add(
     {
         anyhow::bail!("there is an account named {} already", account.name);
     }
+    if account.password_command.is_none() {
+        account.keep = keeper;
+    }
     let mut imap = Imap::new(account.clone());
     let folders = crate::store::Store::folders(&mut imap)?;
-    if let Some(password) = account.password.take()
+    if let Some(secret) = account.password.take()
         && account.password_command.is_none()
     {
-        keep(keeper, &account.host, account.user(), &password)?;
-        account.keep = keeper;
+        keep(keeper, &account.host, account.user(), &secret)?;
     }
     config::add(path, &account)?;
     Ok((imap, folders))
@@ -68,6 +71,9 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
         user: (!user.is_empty() && user != email).then(|| user.to_string()),
         email,
         security,
+        auth: config::Auth::Password,
+        tenant: None,
+        client_id: None,
         keep: Keeper::default(),
         password_command: None,
         password: None,
