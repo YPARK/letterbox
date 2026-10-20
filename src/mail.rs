@@ -100,12 +100,13 @@ impl Folder {
     }
 }
 
-/// A folder's path, decoded, as the names it is under and its own.
+/// A folder's path, decoded, as the names it is under and its own; with
+/// nothing a terminal would take as a command, as a server could send.
 fn parts(path: &str, delimiter: Option<&str>) -> Vec<String> {
     let decoded = utf7_imap(path);
     match delimiter {
-        Some(d) if !d.is_empty() => decoded.split(d).map(str::to_string).collect(),
-        _ => vec![decoded],
+        Some(d) if !d.is_empty() => decoded.split(d).map(controls).collect(),
+        _ => vec![controls(&decoded)],
     }
 }
 
@@ -334,8 +335,8 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
             mime: p
                 .content_type()
                 .map(|c| match c.subtype() {
-                    Some(s) => format!("{}/{s}", c.ctype()),
-                    None => c.ctype().to_string(),
+                    Some(s) => clean(&format!("{}/{s}", c.ctype())),
+                    None => clean(c.ctype()),
                 })
                 .unwrap_or_default(),
             size: p.contents().len(),
@@ -416,7 +417,13 @@ pub fn clean(s: &str) -> String {
     controls(s).trim().to_string()
 }
 
-fn controls(s: &str) -> String {
+/// `s` without control characters but its line breaks: what a server says
+/// as why something failed, shown a line at a time.
+pub fn clean_lines(s: &str) -> String {
+    s.lines().map(controls).collect::<Vec<_>>().join("\n")
+}
+
+pub fn controls(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()

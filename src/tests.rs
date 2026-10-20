@@ -475,6 +475,15 @@ fn modified_utf7_names_are_decoded() {
 }
 
 #[test]
+fn escapes_from_a_server_never_reach_the_terminal() {
+    // `&ABs-` is an escape, in modified UTF-7.
+    let folder = Folder::new("&ABs-[2J&ABs-]0;x", Some("/"), None, true);
+    assert!(!folder.name.contains('\u{1b}'), "{:?}", folder.name);
+    let said = mail::clean_lines("NO \u{1b}[31mno\u{7}\nsecond line");
+    assert_eq!(said, "NO  [31mno \nsecond line");
+}
+
+#[test]
 fn gmails_folders_come_up_to_the_top() {
     let mut folders = vec![
         Folder::new("[Gmail]", Some("/"), None, false),

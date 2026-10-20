@@ -19,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph,
 };
+use std::sync::Arc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const SIDEBAR: u16 = 26;
@@ -58,11 +59,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::new().style(Style::new().bg(t.page).fg(t.text)),
         f.area(),
     );
-    let foot_height = foot(app, f.area().width).0.len() as u16;
-    let [top, main, foot] = Layout::vertical([
+    let (foot_lines, spots) = foot(app, f.area().width);
+    let [top, main, foot_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(foot_height),
+        Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
     let [side_w, list_w, read_w] = panes(main.width, app.focus);
@@ -83,7 +84,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if read_w > 0 {
         reader(f, app, read);
     }
-    keys(f, app, foot);
+    keys(f, app, foot_area, foot_lines, spots);
     let popup = if app.help {
         let (area, scroll) = help(f, &t, app.help_scroll);
         app.help_scroll = scroll;
@@ -392,7 +393,7 @@ fn rows(area: Rect, offset: usize, heights: &[u16]) -> Vec<(usize, Rect)> {
 fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let width = area.width as usize;
-    let listed = app.listing.as_ref().map(|l| (l.account, l.folder.clone()));
+    let listed = app.listing.as_ref().map(|l| (l.account, l.folder.as_str()));
     let items: Vec<ListItem> = app
         .rows
         .iter()
@@ -428,7 +429,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 let room = width.saturating_sub(indent.len() + 2 + count.len() + 2);
                 let name = clip(&folder.name, room);
                 let pad = room.saturating_sub(name.width());
-                let open = listed.as_ref() == Some(&(a, folder.path.clone()));
+                let open = listed == Some((a, folder.path.as_str()));
                 let style = if !folder.selectable {
                     Style::new().fg(t.dim)
                 } else if open {
@@ -674,28 +675,45 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     app.targets.push((area, Target::Reader));
     let width = inner.width as usize;
     let dim = Style::new().fg(t.dim);
-    let lines: Vec<Line> = match app.reading.as_ref().map(|r| &r.body) {
-        None => vec![
-            Line::raw(""),
-            Line::styled(
-                if app.shown.is_empty() {
-                    "No message picked."
-                } else {
-                    "⏎ reads the message picked."
-                },
-                dim,
-            ),
-        ],
-        Some(Body::Loading) => vec![Line::raw(""), Line::styled("fetching…", dim)],
+    let said: Vec<Line<'static>>;
+    let lines: &[Line<'static>] = match app.reading.as_ref().map(|r| &r.body) {
+        None => {
+            said = vec![
+                Line::raw(""),
+                Line::styled(
+                    if app.shown.is_empty() {
+                        "No message picked."
+                    } else {
+                        "⏎ reads the message picked."
+                    },
+                    dim,
+                ),
+            ];
+            &said
+        }
+        Some(Body::Loading) => {
+            said = vec![Line::raw(""), Line::styled("fetching…", dim)];
+            &said
+        }
         Some(Body::Failed(e)) => {
             let mut lines = vec![
                 Line::raw(""),
                 Line::styled("Cannot read this message:", Style::new().fg(t.title).bold()),
             ];
             lines.extend(wrap(e, width).into_iter().map(|l| Line::styled(l, dim)));
-            lines
+            said = lines;
+            &said
         }
-        Some(Body::Ready(m)) => message(m, width, &t),
+        Some(Body::Ready(m)) => {
+            let drawn = app
+                .drawn
+                .as_ref()
+                .is_some_and(|(d, w, theme, _)| Arc::ptr_eq(d, m) && *w == width && *theme == t);
+            if !drawn {
+                app.drawn = Some((m.clone(), width, t, message(m, width, &t)));
+            }
+            &app.drawn.as_ref().expect("drawn above").3
+        }
     };
     // A message longer than the pane gives its last line to saying how far
     // in it is.
@@ -704,7 +722,12 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     app.height = height;
     app.lines = lines.len();
     app.scroll = app.scroll.min(lines.len().saturating_sub(height));
-    let shown: Vec<Line> = lines.into_iter().skip(app.scroll).take(height).collect();
+    let shown: Vec<Line> = lines
+        .iter()
+        .skip(app.scroll)
+        .take(height)
+        .cloned()
+        .collect();
     f.render_widget(
         Paragraph::new(shown),
         Rect {
@@ -887,8 +910,9 @@ fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
     (lines, spots)
 }
 
-fn keys(f: &mut Frame, app: &mut App, area: Rect) {
-    let (lines, spots) = foot(app, area.width);
+/// The foot, as `foot` lays it out, drawn in `area`, and its keys' hints
+/// to be clicked.
+fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spots: Vec<Spot>) {
     f.render_widget(
         Paragraph::new(lines).style(Style::new().bg(app.theme.side)),
         area,

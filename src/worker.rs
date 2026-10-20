@@ -84,8 +84,10 @@ pub struct Reply {
     pub answer: Answer,
 }
 
-fn text(e: anyhow::Error) -> String {
-    format!("{e:#}")
+/// Why something failed, as it is shown: what a server says in it is a
+/// stranger's, and an escape in it would otherwise reach the terminal.
+pub fn text(e: anyhow::Error) -> String {
+    mail::clean_lines(&format!("{e:#}"))
 }
 
 fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
@@ -135,13 +137,18 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
     }
 }
 
-/// Whether `ask` is passed over for one asked after it, still to answer.
+/// Whether `ask` is passed over for one asked after it, still to answer:
+/// a folder counted again, as when the server is slower than the refresh,
+/// is counted once.
 fn superseded(ask: &Ask, after: &VecDeque<Ask>) -> bool {
     match ask {
         Ask::Open { .. } => after.iter().any(|a| matches!(a, Ask::Open { .. })),
         Ask::Page { offset: 0, .. } => after
             .iter()
             .any(|a| matches!(a, Ask::Page { offset: 0, .. })),
+        Ask::Count(folder) => after
+            .iter()
+            .any(|a| matches!(a, Ask::Count(f) if f == folder)),
         _ => false,
     }
 }

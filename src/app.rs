@@ -18,8 +18,9 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
+use ratatui::text::Line;
 use ratatui::widgets::ListState;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -37,6 +38,9 @@ const REFRESH: Duration = Duration::from_secs(120);
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// How often answers are looked for, between keys.
 const POLL: Duration = Duration::from_millis(50);
+/// How many bytes of the messages read before are kept, to show again at
+/// once: the latest read, and as many before it as fit.
+const KEPT: usize = 64 << 20;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Focus {
@@ -231,6 +235,54 @@ enum Due {
     Message,
 }
 
+/// A message, by its account, folder and UID.
+type Key = (usize, String, u32);
+
+/// The messages read before, the oldest let go once they hold more than
+/// `KEPT` bytes.
+#[derive(Default)]
+struct Kept {
+    messages: HashMap<Key, Arc<Message>>,
+    /// The order they were read in, the oldest first.
+    order: VecDeque<Key>,
+    bytes: usize,
+}
+
+impl Kept {
+    fn get(&self, key: &Key) -> Option<Arc<Message>> {
+        self.messages.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: Key, message: Arc<Message>) {
+        self.bytes += bytes(&message);
+        if let Some(old) = self.messages.insert(key.clone(), message) {
+            self.bytes -= bytes(&old);
+            self.order.retain(|k| *k != key);
+        }
+        self.order.push_back(key);
+        while self.bytes > KEPT && self.order.len() > 1 {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(m) = self.messages.remove(&oldest) {
+                self.bytes -= bytes(&m);
+            }
+        }
+    }
+
+    /// Let go of the account's messages.
+    fn forget(&mut self, account: usize) {
+        self.messages.retain(|(a, _, _), _| *a != account);
+        self.order.retain(|(a, _, _)| *a != account);
+        self.bytes = self.messages.values().map(|m| bytes(m)).sum();
+    }
+}
+
+/// About how much of memory a message read takes.
+fn bytes(m: &Message) -> usize {
+    m.raw.len() + m.text.len() + m.html.as_ref().map_or(0, String::len)
+}
+
 pub struct App {
     pub accounts: Vec<Account>,
     pub rows: Vec<Row>,
@@ -253,7 +305,10 @@ pub struct App {
     pub height: usize,
     /// Whether the message read is on the screen beside the list.
     pub side_by_side: bool,
-    read: HashMap<(usize, String, u32), Arc<Message>>,
+    /// The message read as last drawn, its width and colours, and its
+    /// lines: wrapped once, not again each time the screen is drawn.
+    pub drawn: Option<(Arc<Message>, usize, Theme, Vec<Line<'static>>)>,
+    read: Kept,
     pub focus: Focus,
     pub theme: Theme,
     pub status: String,
@@ -349,7 +404,8 @@ impl App {
             lines: 0,
             height: 0,
             side_by_side: true,
-            read: HashMap::new(),
+            drawn: None,
+            read: Kept::default(),
             focus: Focus::List,
             theme: Theme::of(theme::Name::default()),
             status: String::new(),
@@ -790,7 +846,7 @@ impl App {
                     store: Box::new(imap),
                     folders,
                 })
-                .map_err(|e| format!("{e:#}"));
+                .map_err(worker::text);
             let _ = replies.send(Reply {
                 account: usize::MAX,
                 answer: Answer::Added(done),
@@ -856,7 +912,7 @@ impl App {
         };
         self.accounts[a].asks = None;
         self.listed.retain(|(x, _), _| *x != a);
-        self.read.retain(|(x, _, _), _| *x != a);
+        self.read.forget(a);
         if self.listing.as_ref().is_some_and(|l| l.account == a) {
             self.listing = None;
             self.reading = None;
@@ -1054,7 +1110,7 @@ impl App {
         }
         self.scroll = 0;
         let mark = self.mark_read && !seen;
-        let body = match self.read.get(&(a, folder.clone(), uid)).cloned() {
+        let body = match self.read.get(&(a, folder.clone(), uid)) {
             Some(m) => {
                 if mark {
                     self.set(Flag::Seen, true);
@@ -1523,17 +1579,23 @@ impl App {
             self.status = "nothing to open: ⏎ reads the message picked".to_string();
             return;
         };
-        let html = m.html.clone().unwrap_or_else(|| {
+        let body = m.html.clone().unwrap_or_else(|| {
             format!(
                 "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
                 escape(&m.text)
             )
         });
-        let dir = std::env::temp_dir().join("letterbox");
+        // Mail is from strangers: its scripts, plugins and forms are not run
+        // from a file that could reach this machine's other files.
+        let html = format!(
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
+             object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
+        );
+        let dir = cache().join("html");
         let path = dir.join(format!("{}.html", m.uid));
-        let done = std::fs::create_dir_all(&dir)
-            .and_then(|_| std::fs::write(&path, html))
+        let done = private_dir(&dir)
             .map_err(anyhow::Error::from)
+            .and_then(|_| vault::write_private(&path, html.as_bytes()))
             .and_then(|_| open(&path));
         self.status = match done {
             Ok(()) => format!("opened {}", path.display()),
@@ -1557,7 +1619,7 @@ impl App {
         let mut saved = Vec::new();
         for (name, bytes) in files {
             let path = unused(&dir, &safe_name(&name));
-            match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, bytes)) {
+            match std::fs::create_dir_all(&dir).and_then(|_| write_new(&path, &bytes)) {
                 Ok(()) => saved.push(
                     path.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -1610,10 +1672,60 @@ fn downloads() -> PathBuf {
         })
 }
 
+/// `$XDG_CACHE_HOME/letterbox`, else `~/.cache/letterbox`: in your home,
+/// not the temporary folder others on the machine may write in too.
+fn cache() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache")
+        })
+        .join("letterbox")
+}
+
+/// `dir`, made if it is not there, only you may look in, where it is made.
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Write `bytes` to a file not yet at `path`: nothing there is written
+/// over, nor a link there followed.
+fn write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(bytes)
+}
+
 /// An attachment's name as a file's: no folders in it, as a sender might
-/// try, and nothing hidden.
+/// try, nothing hidden, and none of the marks that turn text around, as
+/// `invoice\u{202e}fdp.exe` shown as `invoiceexe.pdf`.
 fn safe_name(name: &str) -> String {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let folders: &[char] = if cfg!(windows) {
+        &['/', '\\', ':']
+    } else {
+        &['/', '\\']
+    };
+    let base = name.rsplit(folders).next().unwrap_or_default();
+    let base: String = base
+        .chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+        })
+        .collect();
     let base = base.trim_start_matches('.').trim();
     if base.is_empty() {
         "attachment".to_string()

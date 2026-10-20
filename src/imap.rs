@@ -247,8 +247,11 @@ fn special(attributes: &[NameAttribute]) -> Option<Role> {
     })
 }
 
-/// `words` as an IMAP quoted string.
+/// `words` as an IMAP quoted string: control characters as spaces, as a
+/// quoted string cannot hold a line's end, which would end the command and
+/// start another.
 fn astring(words: &str) -> String {
+    let words = mail::controls(words);
     format!("\"{}\"", words.replace('\\', "\\\\").replace('"', "\\\""))
 }
 

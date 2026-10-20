@@ -414,9 +414,15 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or_else(|| "letterbox".to_string());
     let matches = Args::command().bin_name(name).get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    // What went wrong is printed as it is: what a server says in it, with
+    // nothing a terminal would take as a command.
+    command(&args).map_err(|e| anyhow::anyhow!("{}", mail::clean_lines(&format!("{e:?}"))))
+}
+
+fn command(args: &Args) -> anyhow::Result<()> {
     match &args.command {
         None => {
-            let mut app = app::App::new(stores_for_tui(&args)?, args.config.clone());
+            let mut app = app::App::new(stores_for_tui(args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();
@@ -426,7 +432,7 @@ pub fn run() -> anyhow::Result<()> {
         Some(Command::Accounts {
             action: Some(action @ AccountAction::Add { .. }),
             ..
-        }) => add_account(&args, action),
+        }) => add_account(args, action),
         Some(Command::Accounts {
             action:
                 Some(AccountAction::Remove {
@@ -469,7 +475,7 @@ pub fn run() -> anyhow::Result<()> {
                     let name = a.name.clone();
                     match imap::Imap::new(a).folders() {
                         Ok(f) => print!(" — signed in, {} folders", f.len()),
-                        Err(e) => print!(" — {name} cannot connect: {e:#}"),
+                        Err(e) => print!(" — {name} cannot connect: {}", worker::text(e)),
                     }
                 }
                 println!();
@@ -477,7 +483,7 @@ pub fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Folders { account, json }) => {
-            let mut store = store(&args, account.as_deref())?;
+            let mut store = store(args, account.as_deref())?;
             let mut folders = store.folders()?;
             for f in folders.iter_mut().filter(|f| f.selectable) {
                 if let Ok((total, unseen)) = store.counts(&f.path) {
@@ -500,13 +506,13 @@ pub fn run() -> anyhow::Result<()> {
                     "  ".repeat(f.depth),
                     f.role.icon(),
                     f.name,
-                    f.path
+                    mail::controls(&f.path)
                 );
             }
             Ok(())
         }
         Some(Command::List { which, limit, json }) => {
-            let mut store = store(&args, which.account.as_deref())?;
+            let mut store = store(args, which.account.as_deref())?;
             let page = store.page(&which.folder, 0, *limit)?;
             print_list(&page.summaries, *json)
         }
@@ -516,7 +522,7 @@ pub fn run() -> anyhow::Result<()> {
             limit,
             json,
         }) => {
-            let mut store = store(&args, which.account.as_deref())?;
+            let mut store = store(args, which.account.as_deref())?;
             let found = store.search(&which.folder, &words.join(" "), *limit)?;
             print_list(&found, *json)
         }
@@ -526,7 +532,7 @@ pub fn run() -> anyhow::Result<()> {
             json,
             raw,
         }) => {
-            let mut store = store(&args, which.account.as_deref())?;
+            let mut store = store(args, which.account.as_deref())?;
             let bytes = store.raw(&which.folder, *uid)?;
             if *raw {
                 use std::io::Write;
@@ -561,7 +567,7 @@ pub fn run() -> anyhow::Result<()> {
             svg,
             keys,
         }) => {
-            let mut app = app::App::new(stores(&args)?, args.config.clone());
+            let mut app = app::App::new(stores(args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();

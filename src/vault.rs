@@ -130,10 +130,19 @@ fn write(v: &Open) -> anyhow::Result<()> {
     std::fs::rename(&tmp, &v.path).with_context(|| format!("cannot write {}", v.path.display()))
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+/// Write `bytes` to a new file at `path`, which only you may read: what
+/// was there is removed first, so that neither its permissions nor a link
+/// put there by someone else are taken on.
+pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("cannot write {}", path.display()));
+        }
+        _ => {}
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

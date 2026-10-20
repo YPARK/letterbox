@@ -12,7 +12,7 @@ pub enum Name {
     Dark,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// The page, behind the messages and the one read.
     pub page: Color,
