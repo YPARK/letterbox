@@ -20,6 +20,9 @@ Rust 1.92 or later:
 cargo install --git https://github.com/YPARK/letterbox
 ```
 
+This installs `letterbox`, and `lbx`, the same program by a shorter name:
+`lbx` for the TUI, `lbx list -n 5`, and so on.
+
 Pure Rust, as paperstack and ohp: nothing in C is compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
 
@@ -114,7 +117,7 @@ With [vterm](https://github.com/akermu/emacs-libvterm):
 ```elisp
 (defun letterbox ()
   (interactive)
-  (let ((vterm-shell "letterbox --theme dark")
+  (let ((vterm-shell "lbx --theme dark")
         (vterm-buffer-name "*letterbox*"))
     (vterm)))
 ```
