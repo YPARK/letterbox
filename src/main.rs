@@ -11,6 +11,7 @@ mod setup;
 mod store;
 mod theme;
 mod ui;
+mod vault;
 mod worker;
 
 use anyhow::bail;
@@ -249,11 +250,12 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
     let keepers = secret::keepers();
     let keeper = match keep {
         Some(k) if keepers.contains(k) => *k,
-        Some(k) => bail!("cannot keep a password in the {} here", k.name()),
-        None => *keepers.first().ok_or_else(|| {
-            anyhow::anyhow!("there is nowhere here to keep a password: give --password-command")
-        })?,
+        Some(k) => bail!("there is no {} here", k.name()),
+        None => keepers[0],
     };
+    if keeper == secret::Keeper::Vault && account.password_command.is_none() {
+        open_vault(true)?;
+    }
     eprintln!("signing in to {}…", account.host);
     let (_, folders) = setup::add(&args.config, account, keeper, secret::store)?;
     println!(
@@ -264,23 +266,19 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The accounts' stores, by name: the demo's, or those set up.
+/// The accounts' stores, by name: the demo's, or those set up, the vault
+/// opened first if any keeps its password there.
 fn stores(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
-    stores_of(args, |_| {})
-}
-
-/// The stores, each account readied by `ready` first.
-fn stores_of(
-    args: &Args,
-    ready: impl Fn(&mut config::Account),
-) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
     if args.demo {
         return Ok(vec![("Demo".to_string(), Box::new(demo::Demo::new()))]);
     }
-    Ok(config::load(&args.config)?
+    let accounts = config::load(&args.config)?;
+    if accounts.iter().any(in_vault) {
+        open_vault(false)?;
+    }
+    Ok(accounts
         .into_iter()
-        .map(|mut a| {
-            ready(&mut a);
+        .map(|a| {
             (
                 a.name.clone(),
                 Box::new(imap::Imap::new(a)) as Box<dyn Store>,
@@ -289,20 +287,68 @@ fn stores_of(
         .collect())
 }
 
-/// Find, before the TUI takes the terminal, the passwords whose command
-/// may ask for a passphrase on it, as gpg's pinentry does; what cannot be
-/// found is said when the account signs in, not asked for again.
-fn unlock(a: &mut config::Account) {
-    let Some(command) = &a.password_command else {
-        return;
-    };
-    if !secret::asks(command) {
-        return;
+fn in_vault(a: &config::Account) -> bool {
+    a.keep == secret::Keeper::Vault && a.password_command.is_none()
+}
+
+/// The stores for the TUI: as `stores`, but the vault left locked if its
+/// passphrase is not given, its accounts saying so; and passwords printed by
+/// a command found before the TUI takes the terminal, as such a command
+/// may ask for a passphrase on it, as `pass` does by gpg's pinentry.
+fn stores_for_tui(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
+    if args.demo {
+        return stores(args);
     }
-    match a.password() {
-        Ok(p) => a.password = Some(p),
-        Err(e) => a.missing = Some(format!("{e:#}")),
+    let mut accounts = config::load(&args.config)?;
+    if accounts.iter().any(in_vault)
+        && let Err(e) = open_vault(false)
+    {
+        eprintln!("letterbox: {e:#}");
     }
+    for a in accounts.iter_mut().filter(|a| a.password_command.is_some()) {
+        match a.password() {
+            Ok(p) => a.password = Some(p),
+            Err(e) => a.missing = Some(format!("{e:#}")),
+        }
+    }
+    Ok(accounts
+        .into_iter()
+        .map(|a| {
+            (
+                a.name.clone(),
+                Box::new(imap::Imap::new(a)) as Box<dyn Store>,
+            )
+        })
+        .collect())
+}
+
+/// Open the vault, asking for its passphrase: three times, at most; or, if
+/// there is none yet and `create`, make one, its passphrase asked for twice.
+fn open_vault(create: bool) -> anyhow::Result<()> {
+    if vault::is_open() {
+        return Ok(());
+    }
+    if !vault::exists() {
+        if !create {
+            return Ok(());
+        }
+        eprintln!(
+            "A new vault, {}: its passphrase is asked for each time letterbox starts.",
+            vault::path().display()
+        );
+        let first = ask_password("New vault passphrase")?;
+        if ask_password("Again")? != first {
+            bail!("the two passphrases differ");
+        }
+        return vault::unlock(&first);
+    }
+    for _ in 0..3 {
+        match vault::unlock(&ask_password("Vault passphrase")?) {
+            Ok(()) => return Ok(()),
+            Err(e) => eprintln!("{e:#}"),
+        }
+    }
+    bail!("the vault stays locked")
 }
 
 /// The store of the account named, or of the first.
@@ -358,7 +404,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     match &args.command {
         None => {
-            let mut app = app::App::new(stores_of(&args, unlock)?, args.config.clone());
+            let mut app = app::App::new(stores_for_tui(&args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();
@@ -377,8 +423,17 @@ fn main() -> anyhow::Result<()> {
                 }),
             ..
         }) => {
-            let a = setup::remove(&args.config, name, *keep_password)?;
+            let account = config::load(&args.config)?
+                .into_iter()
+                .find(|a| a.name.eq_ignore_ascii_case(name));
+            if !keep_password && account.as_ref().is_some_and(in_vault) {
+                open_vault(false)?;
+            }
+            let (a, forgotten) = setup::remove(&args.config, name, *keep_password)?;
             println!("removed {}; its mail stays on {}", a.name, a.host);
+            if !forgotten && !keep_password {
+                println!("its password is still in the vault, which is locked");
+            }
             Ok(())
         }
         Some(Command::Accounts {

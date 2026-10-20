@@ -3,10 +3,13 @@
 //! side where there is room. In a narrow window, as an Emacs buffer split
 //! in two, one of them at a time.
 
-use crate::app::{App, Body, Button, FIELDS, Focus, Form, KEEP, Row, State, Target};
+use crate::app::{
+    AGAIN, App, Body, Button, FIELDS, Focus, Form, KEEP, PASSPHRASE, PASSWORD, Row, State, Target,
+};
 use crate::mail::Message;
-use crate::secret::{Keeper, gpg_dir};
+use crate::secret::Keeper;
 use crate::theme::Theme;
+use crate::vault;
 use jiff::{Timestamp, ToSpan, Zoned};
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
@@ -27,8 +30,7 @@ const MEDIUM: u16 = 70;
 const LABEL: usize = 6;
 /// The most lines the keys take at the foot.
 const FOOT: usize = 2;
-const KEY: usize = 9;
-const PASSWORD_FIELD: usize = 5;
+const KEY: usize = 11;
 
 /// How wide the sidebar, the list and the message read are drawn, on a
 /// screen `width` wide, with `focus` on one of them.
@@ -152,7 +154,9 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
     let room = (width as usize).saturating_sub(4);
     let value_w = room.saturating_sub(KEY + 1);
     let mut lines = vec![Line::raw("")];
-    for (i, name) in FIELDS.iter().enumerate() {
+    let shown = form.shown();
+    for &i in &shown {
+        let name = FIELDS[i];
         let here = i == form.at && !form.checking;
         let label = Span::styled(
             format!("{name:<KEY$}"),
@@ -182,7 +186,7 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
             lines.push(Line::from(spans));
             continue;
         }
-        let value = if i == PASSWORD_FIELD {
+        let value = if [PASSWORD, PASSPHRASE, AGAIN].contains(&i) {
             "•".repeat(form.fields[i].chars().count())
         } else {
             form.fields[i].clone()
@@ -215,22 +219,21 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
                 .map(|l| Line::styled(l, note_style)),
         );
     }
-    let kept = match form.keepers.get(form.keeper) {
-        Some(Keeper::Keychain) => "in the macOS keychain".to_string(),
-        Some(Keeper::Keyring) => "in the system's keyring".to_string(),
-        Some(Keeper::Gpg) => format!("encrypted with gpg to your key, in {}", tilde(&gpg_dir())),
-        None => "nowhere".to_string(),
-    };
+    let mut about = format!(
+        "It signs in before it is added. The password is kept {}, never in the accounts \
+         file.",
+        form.kept().map_or("nowhere", Keeper::about)
+    );
+    if shown.contains(&AGAIN) {
+        about.push_str(&format!(
+            " The vault is new, at {}: its passphrase is asked for each time letterbox starts.",
+            tilde(&vault::path())
+        ));
+    }
     lines.extend(
-        wrap(
-            &format!(
-                "It signs in before it is added. The password is kept {kept}, never in the \
-                 accounts file."
-            ),
-            room,
-        )
-        .into_iter()
-        .map(|l| Line::styled(l, Style::new().fg(t.faint))),
+        wrap(&about, room)
+            .into_iter()
+            .map(|l| Line::styled(l, Style::new().fg(t.faint))),
     );
     lines.push(Line::raw(""));
     let (row, places) = if form.checking {
@@ -254,8 +257,10 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
         Paragraph::new(lines).block(dialog(t, "Add account", foot)),
         area,
     );
-    let mut targets: Targets = (0..FIELDS.len())
-        .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Field(i)))
+    let mut targets: Targets = shown
+        .iter()
+        .enumerate()
+        .map(|(line, &i)| (spot(area, 1 + line, 0, room as u16), Target::Field(i)))
         .collect();
     targets.extend(
         places

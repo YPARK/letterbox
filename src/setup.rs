@@ -10,9 +10,8 @@ use crate::mail::Folder;
 use crate::secret::{self, Keeper};
 use std::path::Path;
 
-/// Keep a password: given where, the host, the user and the password, the
-/// `password_command` that finds it again, if one is needed.
-pub type Keep = fn(Keeper, &str, &str, &str) -> anyhow::Result<Option<String>>;
+/// Keep a password: given where, the host, the user and the password.
+pub type Keep = fn(Keeper, &str, &str, &str) -> anyhow::Result<()>;
 
 /// Sign in as `account`, with the password it was given as typed; if it
 /// can, keep that password in `keeper`, by `keep`, and add the account to
@@ -34,24 +33,21 @@ pub fn add(
     if let Some(password) = account.password.take()
         && account.password_command.is_none()
     {
-        account.password_command = keep(keeper, &account.host, account.user(), &password)?;
+        keep(keeper, &account.host, account.user(), &password)?;
+        account.keep = keeper;
     }
     config::add(path, &account)?;
     Ok((imap, folders))
 }
 
 /// Take the account named `name` out of the file at `path`, and forget
-/// the password letterbox kept for it, unless `keep_password`.
-pub fn remove(path: &Path, name: &str, keep_password: bool) -> anyhow::Result<Account> {
+/// the password letterbox kept for it, unless `keep_password`; the account
+/// as it was, and whether its password is forgotten, which it is not if it
+/// is in a vault still locked.
+pub fn remove(path: &Path, name: &str, keep_password: bool) -> anyhow::Result<(Account, bool)> {
     let account = config::remove(path, name)?;
-    if !keep_password {
-        secret::forget(
-            &account.host,
-            account.user(),
-            account.password_command.as_deref(),
-        );
-    }
-    Ok(account)
+    let forgotten = !keep_password && secret::forget(&account);
+    Ok((account, forgotten))
 }
 
 /// An account from what is typed into the form or asked at the shell:
@@ -72,6 +68,7 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
         user: (!user.is_empty() && user != email).then(|| user.to_string()),
         email,
         security,
+        keep: Keeper::default(),
         password_command: None,
         password: None,
         missing: None,

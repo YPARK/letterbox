@@ -37,14 +37,24 @@ letterbox accounts remove Work             # its mail stays on its server
 The server is filled in from the address, as the large providers have it
 (Gmail, iCloud, Yahoo and Fastmail take an app password, which letterbox
 says), else `imap.` and the domain. An account is added only once it signs
-in, so a mistyped server or password is said at once. Its password is
-kept encrypted, never in the file, and forgotten when the account is
-removed: in the macOS keychain, or on Linux the Secret Service through
-`secret-tool`; or, picked in the form or with `--keep gpg`, in a file
-encrypted with gpg to your own key, in `~/.local/share/letterbox/passwords`,
-as `pass` keeps them. gpg's passphrase, if it asks for it, is asked for
-before the TUI starts. In the TUI, `D` removes the account picked in the
-sidebar, or the one listed, after asking.
+in, so a mistyped server or password is said at once. In the TUI, `D`
+removes the account picked in the sidebar, or the one listed, after asking.
+
+## Passwords
+
+A password is kept encrypted, never in the accounts file, and forgotten
+when its account is removed. letterbox keeps it itself, in Rust, with no
+other program run, in one of two places, picked in the form (`Keep in`)
+or with `--keep`:
+
+| | |
+|---|---|
+| `keyring` | the system's own store, by [keyring-rs](https://github.com/open-source-cooperative/keyring-rs): the keychain on macOS, the Credential Manager on Windows, the Secret Service (GNOME's keyring, KWallet) on Linux. Unlocked as you log in; the default where there is one. |
+| `vault` | one file, `~/.local/share/letterbox/vault.age`, encrypted with a passphrase of yours in the [age](https://age-encryption.org) format, by the age crate. The same on every system, as a server reached over ssh, with no keyring; its passphrase is asked for as letterbox starts, and the file opens with `age -d` or `rage -d` too. |
+
+Or an account gives a `password_command` of yours, as `pass show mail/work`,
+which runs before the TUI takes the terminal, so a passphrase it asks for
+is asked for first.
 
 The accounts are in `~/.config/letterbox/accounts.toml` (`$LETTERBOX_CONFIG`,
 or `--config`), to edit by hand as well; letterbox keeps its comments:
@@ -56,12 +66,11 @@ email = "me@example.com"
 host = "imap.example.com"
 # port = 993, or 143 with security = "starttls"
 # user = "me", if it is not the address
-# password_command = "pass show mail/work"
+# keep = "vault", if its password is in the vault, not the keyring
+# password_command = "pass show mail/work", instead of either
 ```
 
-Without a `password_command`, the password is the keychain's, for the host
-and user. Outlook signed into in the browser, without a password, is to
-come.
+Outlook signed into in the browser, without a password, is to come.
 
 ## Use
 

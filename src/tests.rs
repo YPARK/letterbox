@@ -344,6 +344,7 @@ fn server() -> (Account, Boxes) {
         port: Some(port),
         user: Some("me".to_string()),
         security: Security::None,
+        keep: Keeper::Keyring,
         password_command: Some("echo secret".to_string()),
         password: None,
         missing: None,
@@ -724,15 +725,15 @@ fn long_words_break_after_a_slash_or_a_dot() {
 
 // ---- adding and removing accounts ----
 
-/// Where a test keeps a password: in no keychain, but a command printing it.
-fn keep_in_test(_: Keeper, _: &str, _: &str, password: &str) -> anyhow::Result<Option<String>> {
-    Ok(Some(format!("echo {password}")))
+/// Where a test keeps a password: nowhere, the system's store left alone.
+fn keep_in_test(_: Keeper, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+    Ok(())
 }
 
 fn empty_app(config: PathBuf) -> App {
     let mut app = App::new(Vec::new(), config);
     app.keep = keep_in_test;
-    app.keepers = || vec![Keeper::Keychain, Keeper::Gpg];
+    app.keepers = || vec![Keeper::Keyring, Keeper::Vault];
     app
 }
 
@@ -787,10 +788,7 @@ fn an_account_is_added_from_the_tui_once_it_signs_in_and_removed() {
     assert_eq!(app.shown.len(), 3);
     let file = std::fs::read_to_string(&path).unwrap();
     assert!(file.contains("host = \"127.0.0.1\""), "{file}");
-    assert!(
-        file.contains("password_command = \"echo secret\""),
-        "{file}"
-    );
+    assert!(!file.contains("secret") && !file.contains("keep"), "{file}");
     assert!(file.contains("user = \"me\""), "{file}");
     assert!(file.contains("security = \"none\""), "{file}");
     // As read again, it is the account added.
@@ -857,7 +855,7 @@ fn the_accounts_file_keeps_its_comments_as_accounts_come_and_go() {
         .collect();
     assert_eq!(names, ["Home", "Work"]);
     let removed = crate::setup::remove(&path, "home", true).unwrap();
-    assert_eq!(removed.host, "imap.b.c");
+    assert_eq!(removed.0.host, "imap.b.c");
     let file = std::fs::read_to_string(&path).unwrap();
     assert!(file.starts_with("# my mail\n"), "{file}");
     assert!(
@@ -932,7 +930,13 @@ fn the_forms_fields_and_buttons_are_clicked() {
     assert_eq!(
         app.form.as_ref().unwrap().keeper,
         1,
-        "a second click picks gpg"
+        "a second click picks the vault"
+    );
+    click_at(&mut app, app::Target::Field(6));
+    assert_eq!(
+        app.form.as_ref().unwrap().keeper,
+        0,
+        "and a third the keyring again"
     );
     click_at(&mut app, app::Target::Field(5));
     press(&mut app, &["secret"]);
@@ -985,63 +989,110 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
     assert!(app.message().is_some());
 }
 
-// ---- gpg ----
+// ---- the vault ----
 
-#[cfg(unix)]
 #[test]
-fn a_password_kept_with_gpg_is_encrypted_and_found_again() {
-    if std::process::Command::new("gpg")
-        .arg("--version")
-        .output()
-        .is_err()
+fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let vault_at = dir.path().join("data/vault.age");
+    // SAFETY: tests that read it are this one alone.
+    unsafe { std::env::set_var("LETTERBOX_VAULT", &vault_at) };
+    crate::vault::lock();
+    let path = dir.path().join("accounts.toml");
+    let mut app = App::new(Vec::new(), path.clone());
+    app.keepers = || vec![Keeper::Keyring, Keeper::Vault];
+    let port = account.port.unwrap().to_string();
+    press(
+        &mut app,
+        &[
+            "A",
+            "me@example.com",
+            "<tab>",
+            "<tab>",
+            "<c-u>",
+            "127.0.0.1",
+            "<tab>",
+            "<c-u>",
+        ],
+    );
+    press(
+        &mut app,
+        &[
+            &port, "<tab>", "<c-u>", "me", "<tab>", "secret", "<tab>", "<right>",
+        ],
+    );
+    let form = app.form.as_ref().unwrap();
+    assert_eq!(form.kept(), Some(Keeper::Vault));
+    assert_eq!(
+        form.shown(),
+        [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        "a new vault's passphrase, twice"
+    );
+    press(
+        &mut app,
+        &[
+            "<tab>",
+            "correct horse",
+            "<tab>",
+            "correct house",
+            "<enter>",
+        ],
+    );
+    let form = app.form.as_ref().expect("still open");
+    assert_eq!(form.note.as_deref(), Some("the two passphrases differ"));
+    assert!(!vault_at.exists());
+    press(&mut app, &["<c-u>", "correct horse", "<enter>"]);
+    assert!(
+        app.form.is_none(),
+        "{:?}",
+        app.form.as_ref().and_then(|f| f.note.clone())
+    );
+    assert_eq!(app.shown.len(), 3);
+
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        file.contains("keep = \"vault\"") && !file.contains("secret"),
+        "{file}"
+    );
+    let sealed = std::fs::read(&vault_at).unwrap();
+    assert!(sealed.starts_with(b"age-encryption.org/v1\n"));
+    assert!(!String::from_utf8_lossy(&sealed).contains("secret"));
+    #[cfg(unix)]
     {
-        eprintln!("no gpg here: not tried");
-        return;
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&vault_at).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
-    let home = tempfile::Builder::new()
-        .prefix("lbg")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let data = tempfile::tempdir().unwrap();
-    // SAFETY: tests that read these are this one alone.
-    unsafe {
-        std::env::set_var("GNUPGHOME", home.path());
-        std::env::set_var("XDG_DATA_HOME", data.path());
-    }
-    let made = std::process::Command::new("gpg")
-        .args(["--batch", "--passphrase", "", "--quick-generate-key"])
-        .args([
-            "letterbox test <test@example.com>",
-            "default",
-            "default",
-            "never",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
+
+    // Opened again, as letterbox does as it starts.
+    crate::vault::lock();
+    let e = crate::vault::unlock("correct house").unwrap_err();
+    assert_eq!(e.to_string(), "that is not the vault's passphrase");
+    crate::vault::unlock("correct horse").unwrap();
+    let saved = crate::config::load(&path).unwrap().remove(0);
+    assert_eq!(saved.password().unwrap(), "secret");
+
+    press(&mut app, &["h", "D", "y"]);
+    assert!(crate::config::load(&path).unwrap().is_empty());
+    assert!(crate::vault::get("127.0.0.1", "me").is_err(), "forgotten");
+    crate::vault::lock();
+    unsafe { std::env::remove_var("LETTERBOX_VAULT") };
+}
+
+/// The system's own store, by keyring-rs, written to, read and emptied:
+/// run by hand, as it touches the keychain of whoever runs it.
+#[test]
+#[ignore]
+fn the_systems_store_keeps_a_password() {
+    let (host, user) = ("letterbox.test.invalid", "probe@letterbox.test");
+    crate::secret::store(Keeper::Keyring, host, user, "p'w \"d").unwrap();
+    assert_eq!(
+        crate::secret::find(Keeper::Keyring, host, user).unwrap(),
+        "p'w \"d"
     );
-    let command =
-        crate::secret::store(Keeper::Gpg, "imap.example.com", "me@example.com", "p'w \"d")
-            .unwrap()
-            .expect("a command to decrypt it");
-    let file = data
-        .path()
-        .join("letterbox/passwords/me@example.com@imap.example.com.gpg");
-    let bytes = std::fs::read(&file).unwrap();
-    assert!(
-        !String::from_utf8_lossy(&bytes).contains("p'w"),
-        "encrypted"
-    );
-    let mut account = crate::setup::account("W", "me@example.com", "imap.example.com", 993, "");
-    account.password_command = Some(command.clone());
-    assert_eq!(account.password().unwrap(), "p'w \"d");
-    assert!(crate::secret::asks(&command));
-    crate::secret::forget("imap.example.com", "me@example.com", Some(&command));
-    assert!(!file.exists());
-    let _ = std::process::Command::new("gpgconf")
-        .args(["--kill", "gpg-agent"])
-        .status();
+    let mut a = crate::setup::account("T", user, host, 993, user);
+    a.keep = Keeper::Keyring;
+    assert!(crate::secret::forget(&a));
+    assert!(crate::secret::find(Keeper::Keyring, host, user).is_err());
 }

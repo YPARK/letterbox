@@ -1,6 +1,8 @@
 //! The accounts, in a TOML file of `[[account]]` tables, and their
-//! passwords: from a command given, else, on macOS, from the keychain.
+//! passwords: kept by letterbox, in the system's store or its vault, or
+//! printed by a command of your own.
 
+use crate::secret::{self, Keeper};
 use anyhow::{Context, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -30,7 +32,12 @@ pub struct Account {
     pub user: Option<String>,
     #[serde(default)]
     pub security: Security,
-    /// A shell command that prints the password, as `pass show mail/work`.
+    /// Where letterbox keeps its password: the system's store, unless
+    /// `"vault"`.
+    #[serde(default)]
+    pub keep: Keeper,
+    /// A shell command that prints the password, as `pass show mail/work`,
+    /// instead.
     pub password_command: Option<String>,
     /// The password as typed, while an account is being added: never
     /// written to the file.
@@ -61,8 +68,7 @@ impl Account {
         })
     }
 
-    /// The password: printed by `password_command`, or, on macOS, kept in
-    /// the keychain for the host and user.
+    /// The password: printed by `password_command`, or kept by letterbox.
     pub fn password(&self) -> anyhow::Result<String> {
         if let Some(p) = &self.password {
             return Ok(p.clone());
@@ -70,44 +76,22 @@ impl Account {
         if let Some(why) = &self.missing {
             bail!("{why}");
         }
-        if let Some(command) = &self.password_command {
-            let out = Command::new("sh")
-                .args(["-c", command])
-                .output()
-                .with_context(|| format!("cannot run {command}"))?;
-            if !out.status.success() {
-                bail!(
-                    "{command} gave no password: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
-            return Ok(first_line(&out.stdout));
+        let Some(command) = &self.password_command else {
+            return secret::find(self.keep, &self.host, self.user());
+        };
+        let out = if cfg!(windows) {
+            Command::new("cmd").args(["/C", command]).output()
+        } else {
+            Command::new("sh").args(["-c", command]).output()
         }
-        if cfg!(target_os = "macos") {
-            let out = Command::new("security")
-                .args(["find-internet-password", "-s", &self.host])
-                .args(["-a", self.user(), "-w"])
-                .output();
-            if let Ok(out) = out
-                && out.status.success()
-            {
-                return Ok(first_line(&out.stdout));
-            }
+        .with_context(|| format!("cannot run {command}"))?;
+        if !out.status.success() {
             bail!(
-                "no password for {} at {} in the keychain: add it with\n  \
-                 security add-internet-password -s {} -a {} -w\n\
-                 or give the account a password_command",
-                self.user(),
-                self.host,
-                self.host,
-                self.user()
+                "{command} gave no password: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        bail!(
-            "no password for {} at {}: give the account a password_command",
-            self.user(),
-            self.host
-        )
+        Ok(first_line(&out.stdout))
     }
 }
 
@@ -185,10 +169,6 @@ pub fn guess(email: &str) -> (String, Option<&'static str>) {
             "imap.fastmail.com",
             Some("Fastmail takes an app password, made in its settings"),
         )),
-        "proton.me" | "protonmail.com" => Some((
-            "127.0.0.1",
-            Some("Proton is read through its Bridge: port 1143, security \"starttls\""),
-        )),
         _ => None,
     };
     match known {
@@ -210,6 +190,9 @@ fn table(a: &Account) -> toml_edit::Table {
     }
     if let Some(u) = a.user.as_ref().filter(|u| **u != a.email) {
         t["user"] = toml_edit::value(u);
+    }
+    if a.keep == Keeper::Vault && a.password_command.is_none() {
+        t["keep"] = toml_edit::value("vault");
     }
     match a.security {
         Security::Tls => {}
@@ -321,8 +304,8 @@ host = "imap.example.com"
 # port = 993, or 143 with security = "starttls"
 # user = "me", if it is not the address
 #
-# The password is the macOS keychain's, put there with
-#   security add-internet-password -s imap.example.com -a me@example.com -w
-# or printed by a command:
+# The password is kept by letterbox, as `letterbox accounts add` or A in
+# letterbox keeps it: in the system's store, or with keep = "vault" in its
+# vault. Or it is printed by a command of yours:
 # password_command = "pass show mail/work"
 "#;

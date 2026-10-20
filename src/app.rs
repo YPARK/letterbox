@@ -9,6 +9,7 @@ use crate::setup;
 use crate::store::{Flag, Store};
 use crate::theme::{self, Theme};
 use crate::ui;
+use crate::vault;
 use crate::worker::{self, Added, Answer, Ask, Reply};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
@@ -67,25 +68,37 @@ pub enum Row {
     Add,
 }
 
-/// The fields of the form an account is added with, in their order; the
-/// last, where its password is kept, is picked rather than typed.
-pub const FIELDS: [&str; 7] = [
-    "Email", "Name", "Server", "Port", "User", "Password", "Keep in",
+/// The fields of the form an account is added with, in their order; where
+/// its password is kept is picked rather than typed, and the vault's
+/// passphrase asked for only if it is kept there and the vault is locked,
+/// twice if there is no vault yet.
+pub const FIELDS: [&str; 9] = [
+    "Email",
+    "Name",
+    "Server",
+    "Port",
+    "User",
+    "Password",
+    "Keep in",
+    "Passphrase",
+    "Again",
 ];
 const EMAIL: usize = 0;
 const NAME: usize = 1;
 const SERVER: usize = 2;
 const PORT: usize = 3;
 const USER: usize = 4;
-const PASSWORD: usize = 5;
+pub const PASSWORD: usize = 5;
 pub const KEEP: usize = 6;
+pub const PASSPHRASE: usize = 7;
+pub const AGAIN: usize = 8;
 
 /// An account being added: what is typed, the field typed in, and which
 /// fields were typed rather than filled in from the address.
 pub struct Form {
-    pub fields: [String; 7],
+    pub fields: [String; 9],
     pub at: usize,
-    typed: [bool; 7],
+    typed: [bool; 9],
     /// Where its password may be kept, and where it will be.
     pub keepers: Vec<Keeper>,
     pub keeper: usize,
@@ -98,18 +111,43 @@ pub struct Form {
 
 impl Form {
     fn new(keepers: Vec<Keeper>) -> Self {
-        let mut fields: [String; 7] = Default::default();
+        let mut fields: [String; 9] = Default::default();
         fields[PORT] = "993".to_string();
         Form {
             fields,
             at: EMAIL,
-            typed: [false; 7],
+            typed: [false; 9],
             keepers,
             keeper: 0,
             note: None,
             failed: false,
             checking: false,
         }
+    }
+
+    pub fn kept(&self) -> Option<Keeper> {
+        self.keepers.get(self.keeper).copied()
+    }
+
+    /// The fields shown, by their place: the vault's passphrase only if it
+    /// is to be opened, or made.
+    pub fn shown(&self) -> Vec<usize> {
+        let mut all: Vec<usize> = (EMAIL..=KEEP).collect();
+        if self.kept() == Some(Keeper::Vault) && !vault::is_open() {
+            all.push(PASSPHRASE);
+            if !vault::exists() {
+                all.push(AGAIN);
+            }
+        }
+        all
+    }
+
+    /// Go to the field `by` after the one typed in, among those shown.
+    fn step(&mut self, by: isize) {
+        let shown = self.shown();
+        let at = shown.iter().position(|&i| i == self.at).unwrap_or(0) as isize;
+        let n = shown.len() as isize;
+        self.at = shown[(at + by).rem_euclid(n) as usize];
     }
 
     /// Keep the password in the next place it may be kept, or the one before.
@@ -711,16 +749,30 @@ impl App {
             form.note = Some("the port is a number, as 993".to_string());
             return;
         };
-        let Some(&keeper) = form.keepers.get(form.keeper) else {
-            form.at = KEEP;
-            form.failed = true;
-            form.note = Some(
-                "there is nowhere here to keep a password: install gpg, or add the account \
-                 from the shell with --password-command"
-                    .to_string(),
-            );
+        let Some(keeper) = form.kept() else {
             return;
         };
+        let shown = form.shown();
+        let passphrase = shown
+            .contains(&PASSPHRASE)
+            .then(|| form.fields[PASSPHRASE].clone());
+        if let Some(p) = &passphrase {
+            let problem = if p.is_empty() {
+                Some((PASSPHRASE, "the vault's passphrase is needed"))
+            } else if shown.contains(&AGAIN) && form.fields[AGAIN] != *p {
+                Some((AGAIN, "the two passphrases differ"))
+            } else if shown.contains(&AGAIN) && p.chars().count() < 8 {
+                Some((PASSPHRASE, "a vault's passphrase is 8 characters or more"))
+            } else {
+                None
+            };
+            if let Some((at, why)) = problem {
+                form.at = at;
+                form.failed = true;
+                form.note = Some(why.to_string());
+                return;
+            }
+        }
         let mut account = setup::account(&f[NAME], &f[EMAIL], &f[SERVER], port, &f[USER]);
         account.password = Some(f[PASSWORD].clone());
         form.checking = true;
@@ -730,7 +782,9 @@ impl App {
         self.pending += 1;
         std::thread::spawn(move || {
             let name = account.name.clone();
-            let done = setup::add(&path, account, keeper, keep)
+            let done = passphrase
+                .map_or(Ok(()), |p| vault::unlock(&p))
+                .and_then(|()| setup::add(&path, account, keeper, keep))
                 .map(|(imap, folders)| Added {
                     name,
                     store: Box::new(imap),
@@ -793,10 +847,13 @@ impl App {
     /// and from the screen.
     fn remove(&mut self, a: usize) {
         let name = self.accounts[a].name.clone();
-        if let Err(e) = setup::remove(&self.config, &name, false) {
-            self.status = format!("cannot remove {name}: {e:#}");
-            return;
-        }
+        let forgotten = match setup::remove(&self.config, &name, false) {
+            Ok((_, forgotten)) => forgotten,
+            Err(e) => {
+                self.status = format!("cannot remove {name}: {e:#}");
+                return;
+            }
+        };
         self.accounts[a].asks = None;
         self.listed.retain(|(x, _), _| *x != a);
         self.read.retain(|(x, _, _), _| *x != a);
@@ -811,7 +868,11 @@ impl App {
         if self.listing.is_none() {
             self.open_folder();
         }
-        self.status = format!("removed {name}; its mail stays on its server");
+        self.status = if forgotten {
+            format!("removed {name}; its mail stays on its server")
+        } else {
+            format!("removed {name}; its password stays in the vault, which is locked")
+        };
     }
 
     /// Take a key in the form.
@@ -827,10 +888,10 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.form = None,
-            KeyCode::Tab | KeyCode::Down => form.at = (form.at + 1) % FIELDS.len(),
-            KeyCode::BackTab | KeyCode::Up => form.at = (form.at + FIELDS.len() - 1) % FIELDS.len(),
+            KeyCode::Tab | KeyCode::Down => form.step(1),
+            KeyCode::BackTab | KeyCode::Up => form.step(-1),
             KeyCode::Enter if form.at >= PASSWORD => self.submit(),
-            KeyCode::Enter => form.at += 1,
+            KeyCode::Enter => form.step(1),
             KeyCode::Left if form.at == KEEP => form.turn(-1),
             KeyCode::Right | KeyCode::Char(' ') if form.at == KEEP => form.turn(1),
             _ if form.at == KEEP => {}
@@ -1363,7 +1424,7 @@ impl App {
         }
         if let Some(form) = &mut self.form {
             if !form.checking {
-                form.at = form.at.saturating_add_signed(by).min(FIELDS.len() - 1);
+                form.step(by);
             }
             return;
         }
