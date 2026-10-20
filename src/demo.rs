@@ -1,0 +1,281 @@
+//! `letterbox --demo`: an account of made-up mail, in memory, dated from
+//! now, to try letterbox with before setting up an account.
+
+use crate::mail::{self, Flags, Folder, Role, Summary};
+use crate::store::{Flag, Page, Store};
+use jiff::{ToSpan, Zoned};
+use std::collections::BTreeMap;
+
+struct Letter {
+    uid: u32,
+    flags: Flags,
+    raw: Vec<u8>,
+}
+
+pub struct Demo {
+    /// Each folder's messages, oldest first, as a server numbers them.
+    folders: BTreeMap<String, Vec<Letter>>,
+}
+
+/// A message, `hours` ago.
+fn letter(
+    hours: i64,
+    from: &str,
+    to: &str,
+    subject: &str,
+    head: &str,
+    body: &str,
+) -> (i64, Vec<u8>) {
+    let when = Zoned::now()
+        .checked_sub(hours.hours())
+        .unwrap_or_else(|_| Zoned::now());
+    let date = when.strftime("%a, %d %b %Y %H:%M:%S %z");
+    let raw = format!(
+        "From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: {date}\r\n\
+         Message-ID: <{hours}.{}@demo.letterbox>\r\nMIME-Version: 1.0\r\n{head}\r\n{body}",
+        subject.len()
+    );
+    (
+        hours,
+        raw.replace("\r\n", "\n").replace('\n', "\r\n").into_bytes(),
+    )
+}
+
+const PLAIN: &str = "Content-Type: text/plain; charset=utf-8\r\n";
+
+fn inbox() -> Vec<(i64, Vec<u8>, Flags)> {
+    let unread = Flags::default();
+    let read = Flags {
+        seen: true,
+        ..Flags::default()
+    };
+    vec![
+        {
+            let (h, r) = letter(
+                1,
+                "Ada Lovelace <ada@analytical.example>",
+                "You <you@example.com>",
+                "Notes on the engine, and a table of Bernoulli numbers",
+                PLAIN,
+                "Hello,\n\nI have finished the notes on the engine. Note G sets out how it \
+                 would compute the Bernoulli numbers, step by step, with a table of the \
+                 operations and the variables each one changes.\n\nCould you read it before \
+                 Thursday? The translation itself is done; the notes run to three times its \
+                 length. The draft is at \
+                 https://example.org/papers/lovelace/notes-on-the-analytical-engine-1843.pdf \
+                 if you would rather read it there.\n\nAda\n",
+            );
+            (h, r, unread)
+        },
+        {
+            let (h, r) = letter(
+                3,
+                "Grace Hopper <grace@navy.example>",
+                "You <you@example.com>",
+                "Re: the compiler",
+                PLAIN,
+                "That is the idea: let them write in words, and have the machine \
+                 translate.\n\nIt is much easier to apologise than to get permission.\n\n\
+                 Grace\n\nOn Monday, you wrote:\n> Will anyone trust a program that writes \
+                 programs?\n> Most think a computer can only do arithmetic.\n",
+            );
+            (h, r, unread)
+        },
+        {
+            let (h, r) = letter(
+                26,
+                "=?utf-8?q?Emmy_N=C3=B6ther?= <noether@goettingen.example>",
+                "You <you@example.com>",
+                "=?utf-8?q?Symmetry_and_conservation_=E2=80=94_the_draft?=",
+                "Content-Type: multipart/alternative; boundary=\"b1\"\r\n",
+                "--b1\nContent-Type: text/plain; charset=utf-8\n\nThe theorem, in a \
+                 sentence: every differentiable symmetry of the action has a conserved \
+                 quantity.\n\nTime gives energy; space, momentum; rotation, angular \
+                 momentum.\n\n--b1\nContent-Type: text/html; charset=utf-8\n\n<p>The \
+                 theorem, in a sentence: <b>every differentiable symmetry of the action \
+                 has a conserved quantity</b>.</p><p>Time gives energy; space, momentum; \
+                 rotation, angular momentum.</p>\n--b1--\n",
+            );
+            (h, r, read)
+        },
+        {
+            let (h, r) = letter(
+                50,
+                "Alan Turing <alan@bletchley.example>",
+                "You <you@example.com>",
+                "Computable numbers: the paper, and the figures",
+                "Content-Type: multipart/mixed; boundary=\"m1\"\r\n",
+                "--m1\nContent-Type: text/plain; charset=utf-8\n\nThe paper is attached, \
+                 with the table of the machine's states. Press a to save it to your \
+                 Downloads.\n\nAlan\n\n--m1\nContent-Type: text/plain; name=\"states.txt\"\n\
+                 Content-Disposition: attachment; filename=\"states.txt\"\n\n\
+                 b  None  P0, R   c\nc  None  R       e\ne  None  P1, R   f\n\
+                 f  None  R       b\n--m1--\n",
+            );
+            (
+                h,
+                r,
+                Flags {
+                    seen: true,
+                    flagged: true,
+                    ..Flags::default()
+                },
+            )
+        },
+        {
+            let (h, r) = letter(
+                120,
+                "Rosalind Franklin <rf@kings.example>",
+                "You <you@example.com>",
+                "Photo 51",
+                PLAIN,
+                "The B form, at last: the cross is unmistakable. The spacing gives the \
+                 helix's pitch, 34 Å, and its turns ten bases each.\n\nNot to be shown \
+                 around yet.\n\nRosalind\n",
+            );
+            (
+                h,
+                r,
+                Flags {
+                    seen: true,
+                    answered: true,
+                    ..Flags::default()
+                },
+            )
+        },
+        {
+            let (h, r) = letter(
+                400,
+                "Claude Shannon <shannon@bell.example>",
+                "You <you@example.com>",
+                "A mathematical theory of communication",
+                PLAIN,
+                "The fundamental problem of communication is that of reproducing at one \
+                 point either exactly or approximately a message selected at another \
+                 point.\n\n-- \nClaude\n",
+            );
+            (h, r, read)
+        },
+    ]
+}
+
+impl Demo {
+    pub fn new() -> Self {
+        let mut folders: BTreeMap<String, Vec<Letter>> = BTreeMap::new();
+        let mut uid = 0;
+        let mut file = |folder: &str, mut letters: Vec<(i64, Vec<u8>, Flags)>| {
+            letters.sort_by_key(|l| std::cmp::Reverse(l.0));
+            let list = folders.entry(folder.to_string()).or_default();
+            for (_, raw, flags) in letters {
+                uid += 1;
+                list.push(Letter { uid, flags, raw });
+            }
+        };
+        file("INBOX", inbox());
+        let read = Flags {
+            seen: true,
+            ..Flags::default()
+        };
+        let sent = letter(
+            30,
+            "You <you@example.com>",
+            "Rosalind Franklin <rf@kings.example>",
+            "Re: Photo 51",
+            PLAIN,
+            "Extraordinary. I will not show it to anyone.\n",
+        );
+        file("Sent", vec![(sent.0, sent.1, read)]);
+        let draft = letter(
+            2,
+            "You <you@example.com>",
+            "Ada Lovelace <ada@analytical.example>",
+            "Re: Notes on the engine",
+            PLAIN,
+            "Ada, I read Note G twice: \n",
+        );
+        file("Drafts", vec![(draft.0, draft.1, read)]);
+        for f in ["Archive", "Junk", "Trash", "Projects", "Projects/Grant"] {
+            file(f, Vec::new());
+        }
+        Demo { folders }
+    }
+
+    fn letters(&mut self, folder: &str) -> anyhow::Result<&mut Vec<Letter>> {
+        self.folders
+            .get_mut(folder)
+            .ok_or_else(|| anyhow::anyhow!("no folder {folder}"))
+    }
+}
+
+fn summary(l: &Letter) -> Summary {
+    mail::summary(l.uid, l.flags, l.raw.len() as u32, &l.raw)
+}
+
+impl Store for Demo {
+    fn folders(&mut self) -> anyhow::Result<Vec<Folder>> {
+        let mut folders: Vec<Folder> = self
+            .folders
+            .keys()
+            .map(|f| Folder::new(f, Some("/"), None, true))
+            .collect();
+        mail::arrange(&mut folders);
+        debug_assert!(folders[0].role == Role::Inbox);
+        Ok(folders)
+    }
+
+    fn counts(&mut self, folder: &str) -> anyhow::Result<(u32, u32)> {
+        let letters = self.letters(folder)?;
+        let unseen = letters.iter().filter(|l| !l.flags.seen).count();
+        Ok((letters.len() as u32, unseen as u32))
+    }
+
+    fn page(&mut self, folder: &str, offset: usize, n: usize) -> anyhow::Result<Page> {
+        let letters = self.letters(folder)?;
+        Ok(Page {
+            summaries: letters
+                .iter()
+                .rev()
+                .skip(offset)
+                .take(n)
+                .map(summary)
+                .collect(),
+            total: letters.len() as u32,
+        })
+    }
+
+    fn raw(&mut self, folder: &str, uid: u32) -> anyhow::Result<Vec<u8>> {
+        self.letters(folder)?
+            .iter()
+            .find(|l| l.uid == uid)
+            .map(|l| l.raw.clone())
+            .ok_or_else(|| anyhow::anyhow!("no message {uid} in {folder}"))
+    }
+
+    fn set(&mut self, folder: &str, uid: u32, flag: Flag, on: bool) -> anyhow::Result<()> {
+        let letter = self
+            .letters(folder)?
+            .iter_mut()
+            .find(|l| l.uid == uid)
+            .ok_or_else(|| anyhow::anyhow!("no message {uid} in {folder}"))?;
+        match flag {
+            Flag::Seen => letter.flags.seen = on,
+            Flag::Flagged => letter.flags.flagged = on,
+        }
+        Ok(())
+    }
+
+    fn search(&mut self, folder: &str, words: &str, n: usize) -> anyhow::Result<Vec<Summary>> {
+        let words: Vec<String> = words.split_whitespace().map(str::to_lowercase).collect();
+        Ok(self
+            .letters(folder)?
+            .iter()
+            .rev()
+            .filter(|l| {
+                let text = String::from_utf8_lossy(&l.raw).to_lowercase();
+                words.iter().all(|w| text.contains(w.as_str()))
+            })
+            .take(n)
+            .map(summary)
+            .collect())
+    }
+}
