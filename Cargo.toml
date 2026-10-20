@@ -1,12 +1,12 @@
 [package]
-name = "mailstack"
+name = "letterbox"
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
 authors = ["Yongjin Park"]
 description = "Mail in the terminal: IMAP and Outlook accounts, read as easily by an AI agent as by you"
-repository = "https://github.com/YPARK/mailstack"
+repository = "https://github.com/YPARK/letterbox"
 keywords = ["email", "imap", "outlook", "mcp", "tui"]
 categories = ["command-line-utilities", "email"]
 

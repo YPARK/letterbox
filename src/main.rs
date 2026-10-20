@@ -1,3 +1,3 @@
 fn main() {
-    println!("mailstack {}", env!("CARGO_PKG_VERSION"));
+    println!("letterbox {}", env!("CARGO_PKG_VERSION"));
 }

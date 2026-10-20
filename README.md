@@ -1,4 +1,4 @@
-# mailstack
+# letterbox
 
 Mail in the terminal: IMAP accounts, and Microsoft Outlook signed into in
 the browser, read in a TUI, and served to an AI agent over the Model
