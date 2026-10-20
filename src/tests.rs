@@ -3,6 +3,7 @@ use crate::config::{Account, Security};
 use crate::demo::Demo;
 use crate::imap::Imap;
 use crate::mail::{self, Folder, Role};
+use crate::secret::Keeper;
 use crate::store::{Flag, Store};
 use crate::ui;
 use std::io::{BufRead, BufReader, Write};
@@ -345,6 +346,7 @@ fn server() -> (Account, Boxes) {
         security: Security::None,
         password_command: Some("echo secret".to_string()),
         password: None,
+        missing: None,
     };
     (account, boxes)
 }
@@ -723,13 +725,14 @@ fn long_words_break_after_a_slash_or_a_dot() {
 // ---- adding and removing accounts ----
 
 /// Where a test keeps a password: in no keychain, but a command printing it.
-fn keep_in_test(_: &str, _: &str, password: &str) -> anyhow::Result<Option<String>> {
+fn keep_in_test(_: Keeper, _: &str, _: &str, password: &str) -> anyhow::Result<Option<String>> {
     Ok(Some(format!("echo {password}")))
 }
 
 fn empty_app(config: PathBuf) -> App {
     let mut app = App::new(Vec::new(), config);
     app.keep = keep_in_test;
+    app.keepers = || vec![Keeper::Keychain, Keeper::Gpg];
     app
 }
 
@@ -794,9 +797,9 @@ fn an_account_is_added_from_the_tui_once_it_signs_in_and_removed() {
     let accounts = crate::config::load(&path).unwrap();
     assert_eq!(accounts[0].port, account.port);
 
-    press(&mut app, &["h", "x", "n"]);
+    press(&mut app, &["h", "D", "n"]);
     assert_eq!(crate::config::load(&path).unwrap().len(), 1);
-    press(&mut app, &["x", "y"]);
+    press(&mut app, &["D", "y"]);
     assert!(crate::config::load(&path).unwrap().is_empty());
     assert!(app.listing.is_none());
     assert!(app::screen(&mut app, 120, 30).contains("No accounts yet."));
@@ -880,4 +883,165 @@ fn with_no_accounts_it_says_how_to_add_one() {
     let screen = app::screen(&mut app, 120, 40);
     assert!(screen.contains("No accounts yet."), "{screen}");
     assert!(screen.contains("letterbox --demo"), "{screen}");
+}
+
+// ---- the mouse ----
+
+fn click_at(app: &mut App, target: app::Target) {
+    let _ = app::screen(app, 120, 40);
+    let (rect, _) = *app
+        .targets
+        .iter()
+        .rev()
+        .find(|(_, t)| *t == target)
+        .unwrap_or_else(|| panic!("no {target:?} on the screen"));
+    app.mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x,
+        rect.y,
+    ));
+    app.settle(Duration::from_secs(5));
+}
+
+use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn the_forms_fields_and_buttons_are_clicked() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = empty_app(path.clone());
+    press(&mut app, &["A", "me@example.com"]);
+    click_at(&mut app, app::Target::Field(2));
+    assert_eq!(app.form.as_ref().unwrap().at, 2);
+    press(&mut app, &["<c-u>", "127.0.0.1", "<tab>", "<c-u>"]);
+    press(&mut app, &[&account.port.unwrap().to_string()]);
+    click_at(&mut app, app::Target::Field(4));
+    press(&mut app, &["<c-u>", "me"]);
+    click_at(&mut app, app::Target::Field(6));
+    click_at(&mut app, app::Target::Field(6));
+    assert_eq!(
+        app.form.as_ref().unwrap().keeper,
+        1,
+        "a second click picks gpg"
+    );
+    click_at(&mut app, app::Target::Field(5));
+    press(&mut app, &["secret"]);
+    click_at(&mut app, app::Target::Button(app::Button::Add));
+    assert!(
+        app.form.is_none(),
+        "{:?}",
+        app.form.as_ref().and_then(|f| f.note.clone())
+    );
+    assert_eq!(crate::config::load(&path).unwrap().len(), 1);
+
+    press(&mut app, &["h", "D"]);
+    click_at(&mut app, app::Target::Button(app::Button::Keep));
+    assert!(app.removing.is_none());
+    assert_eq!(crate::config::load(&path).unwrap().len(), 1);
+    press(&mut app, &["D"]);
+    click_at(&mut app, app::Target::Button(app::Button::Remove));
+    assert!(crate::config::load(&path).unwrap().is_empty());
+}
+
+#[test]
+fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
+    let mut app = demo();
+    click_at(&mut app, app::Target::Key(KeyCode::Char('?')));
+    assert!(app.help);
+    let screen = app::screen(&mut app, 60, 12);
+    assert!(screen.contains("j/k or the wheel scroll"), "{screen}");
+    let (rect, _) = *app
+        .targets
+        .iter()
+        .find(|(_, t)| *t == app::Target::Popup)
+        .unwrap();
+    for _ in 0..3 {
+        app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
+    }
+    let _ = app::screen(&mut app, 60, 12);
+    assert_eq!(app.help_scroll, 3);
+    // The wheel does not run it off its end.
+    for _ in 0..100 {
+        app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
+    }
+    let end = app::screen(&mut app, 60, 12);
+    assert!(end.contains("quit"), "{end}");
+    app.key(ratatui::crossterm::event::KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+    assert!(!app.help);
+    click_at(&mut app, app::Target::Key(KeyCode::Enter));
+    assert!(app.message().is_some());
+}
+
+// ---- gpg ----
+
+#[cfg(unix)]
+#[test]
+fn a_password_kept_with_gpg_is_encrypted_and_found_again() {
+    if std::process::Command::new("gpg")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("no gpg here: not tried");
+        return;
+    }
+    let home = tempfile::Builder::new()
+        .prefix("lbg")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // SAFETY: tests that read these are this one alone.
+    unsafe {
+        std::env::set_var("GNUPGHOME", home.path());
+        std::env::set_var("XDG_DATA_HOME", data.path());
+    }
+    let made = std::process::Command::new("gpg")
+        .args(["--batch", "--passphrase", "", "--quick-generate-key"])
+        .args([
+            "letterbox test <test@example.com>",
+            "default",
+            "default",
+            "never",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let command =
+        crate::secret::store(Keeper::Gpg, "imap.example.com", "me@example.com", "p'w \"d")
+            .unwrap()
+            .expect("a command to decrypt it");
+    let file = data
+        .path()
+        .join("letterbox/passwords/me@example.com@imap.example.com.gpg");
+    let bytes = std::fs::read(&file).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("p'w"),
+        "encrypted"
+    );
+    let mut account = crate::setup::account("W", "me@example.com", "imap.example.com", 993, "");
+    account.password_command = Some(command.clone());
+    assert_eq!(account.password().unwrap(), "p'w \"d");
+    assert!(crate::secret::asks(&command));
+    crate::secret::forget("imap.example.com", "me@example.com", Some(&command));
+    assert!(!file.exists());
+    let _ = std::process::Command::new("gpgconf")
+        .args(["--kill", "gpg-agent"])
+        .status();
 }

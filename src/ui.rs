@@ -3,11 +3,13 @@
 //! side where there is room. In a narrow window, as an Emacs buffer split
 //! in two, one of them at a time.
 
-use crate::app::{App, Body, FIELDS, Focus, Form, Row, State, Target};
+use crate::app::{App, Body, Button, FIELDS, Focus, Form, KEEP, Row, State, Target};
 use crate::mail::Message;
+use crate::secret::{Keeper, gpg_dir};
 use crate::theme::Theme;
 use jiff::{Timestamp, ToSpan, Zoned};
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -26,6 +28,7 @@ const LABEL: usize = 6;
 /// The most lines the keys take at the foot.
 const FOOT: usize = 2;
 const KEY: usize = 9;
+const PASSWORD_FIELD: usize = 5;
 
 /// How wide the sidebar, the list and the message read are drawn, on a
 /// screen `width` wide, with `focus` on one of them.
@@ -53,7 +56,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::new().style(Style::new().bg(t.page).fg(t.text)),
         f.area(),
     );
-    let foot_height = foot(app, f.area().width).len() as u16;
+    let foot_height = foot(app, f.area().width).0.len() as u16;
     let [top, main, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
@@ -80,14 +83,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     keys(f, app, foot);
     let popup = if app.help {
-        Some(help(f, &t))
+        let (area, scroll) = help(f, &t, app.help_scroll);
+        app.help_scroll = scroll;
+        Some((area, Vec::new()))
     } else if let Some(form) = &app.form {
         Some(form_dialog(f, &t, form))
     } else {
         app.removing.map(|a| removing(f, &t, &app.accounts[a].name))
     };
-    if let Some(area) = popup {
+    if let Some((area, targets)) = popup {
         app.targets.push((area, Target::Popup));
+        app.targets.extend(targets);
     }
 }
 
@@ -104,17 +110,79 @@ fn dialog<'a>(t: &Theme, title: &'a str, foot: &'a str) -> Block<'a> {
         .style(Style::new().bg(t.page).fg(t.text))
 }
 
+/// A line of buttons, the first lit; and where each is along it.
+fn buttons(t: &Theme, labels: &[(&str, Button)]) -> (Line<'static>, Vec<(u16, u16, Button)>) {
+    let mut spans = Vec::new();
+    let mut at = Vec::new();
+    let mut x = 0u16;
+    for (i, (label, button)) in labels.iter().enumerate() {
+        let text = format!(" {label} ");
+        let w = text.width() as u16;
+        let style = if i == 0 {
+            Style::new().fg(t.page).bg(t.accent).bold()
+        } else {
+            Style::new().fg(t.text).bg(t.focus)
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw("  "));
+        at.push((x, w, *button));
+        x += w + 2;
+    }
+    (Line::from(spans), at)
+}
+
+/// Where what is clicked on in a dialog drawn in `area` is: `line` of
+/// its text, `x` along it, `width` wide.
+fn spot(area: Rect, line: usize, x: u16, width: u16) -> Rect {
+    Rect {
+        x: area.x + 2 + x,
+        y: area.y + 1 + line as u16,
+        width: width.min(area.width.saturating_sub(4 + x)),
+        height: 1,
+    }
+}
+
+type Targets = Vec<(Rect, Target)>;
+
 /// The form an account is added with: each field on a line, the one typed
-/// in lit; the password shown as dots; what to know, or what went wrong,
-/// below.
-fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> Rect {
+/// in lit; the password shown as dots; where it is kept, picked; what to
+/// know, or what went wrong, below; and its buttons.
+fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
     let width = f.area().width.min(72);
     let room = (width as usize).saturating_sub(4);
     let value_w = room.saturating_sub(KEY + 1);
     let mut lines = vec![Line::raw("")];
     for (i, name) in FIELDS.iter().enumerate() {
         let here = i == form.at && !form.checking;
-        let value = if *name == "Password" {
+        let label = Span::styled(
+            format!("{name:<KEY$}"),
+            if here {
+                Style::new().fg(t.title).bold()
+            } else {
+                Style::new().fg(t.dim)
+            },
+        );
+        if i == KEEP {
+            let mut spans = vec![label, Span::raw(" ")];
+            for (k, keeper) in form.keepers.iter().enumerate() {
+                let style = if k == form.keeper {
+                    Style::new()
+                        .fg(t.title)
+                        .bg(if here { t.focus } else { t.row })
+                        .bold()
+                } else {
+                    Style::new().fg(t.dim)
+                };
+                spans.push(Span::styled(format!(" {} ", keeper.name()), style));
+                spans.push(Span::raw(" "));
+            }
+            if form.keepers.is_empty() {
+                spans.push(Span::styled("nowhere here", Style::new().fg(t.error)));
+            }
+            lines.push(Line::from(spans));
+            continue;
+        }
+        let value = if i == PASSWORD_FIELD {
             "•".repeat(form.fields[i].chars().count())
         } else {
             form.fields[i].clone()
@@ -125,14 +193,7 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> Rect {
         }
         let pad = value_w.saturating_sub(value.width());
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{name:<KEY$}"),
-                if here {
-                    Style::new().fg(t.title).bold()
-                } else {
-                    Style::new().fg(t.dim)
-                },
-            ),
+            label,
             Span::styled(
                 format!(" {value}{}", " ".repeat(pad)),
                 Style::new()
@@ -154,23 +215,38 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> Rect {
                 .map(|l| Line::styled(l, note_style)),
         );
     }
-    let keeper = if cfg!(target_os = "macos") {
-        "the keychain"
-    } else {
-        "the system's keyring"
+    let kept = match form.keepers.get(form.keeper) {
+        Some(Keeper::Keychain) => "in the macOS keychain".to_string(),
+        Some(Keeper::Keyring) => "in the system's keyring".to_string(),
+        Some(Keeper::Gpg) => format!("encrypted with gpg to your key, in {}", tilde(&gpg_dir())),
+        None => "nowhere".to_string(),
     };
     lines.extend(
         wrap(
-            &format!("It signs in before it is added. The password is kept in {keeper}, not in the accounts file."),
+            &format!(
+                "It signs in before it is added. The password is kept {kept}, never in the \
+                 accounts file."
+            ),
             room,
         )
         .into_iter()
         .map(|l| Line::styled(l, Style::new().fg(t.faint))),
     );
-    let foot = if form.checking {
-        "signing in… · esc closes"
+    lines.push(Line::raw(""));
+    let (row, places) = if form.checking {
+        buttons(t, &[("Cancel", Button::Cancel)])
     } else {
-        "tab next · ⏎ on the password signs in and adds · esc cancel"
+        buttons(
+            t,
+            &[("Sign in and add", Button::Add), ("Cancel", Button::Cancel)],
+        )
+    };
+    let buttons_at = lines.len();
+    lines.push(row);
+    let foot = if form.checking {
+        "signing in…"
+    } else {
+        "tab next field · ←→ pick · ⏎ on the last two adds · esc cancel"
     };
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
@@ -178,10 +254,18 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> Rect {
         Paragraph::new(lines).block(dialog(t, "Add account", foot)),
         area,
     );
-    area
+    let mut targets: Targets = (0..FIELDS.len())
+        .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Field(i)))
+        .collect();
+    targets.extend(
+        places
+            .into_iter()
+            .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b))),
+    );
+    (area, targets)
 }
 
-fn removing(f: &mut Frame, t: &Theme, name: &str) -> Rect {
+fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
     let width = f.area().width.min(64);
     let room = (width as usize).saturating_sub(4);
     let mut lines = vec![Line::raw("")];
@@ -196,6 +280,10 @@ fn removing(f: &mut Frame, t: &Theme, name: &str) -> Rect {
         .into_iter()
         .map(Line::raw),
     );
+    lines.push(Line::raw(""));
+    let (row, places) = buttons(t, &[("Remove", Button::Remove), ("Keep", Button::Keep)]);
+    let buttons_at = lines.len();
+    lines.push(row);
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
@@ -206,7 +294,11 @@ fn removing(f: &mut Frame, t: &Theme, name: &str) -> Rect {
         )),
         area,
     );
-    area
+    let targets = places
+        .into_iter()
+        .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b)))
+        .collect();
+    (area, targets)
 }
 
 fn search(f: &mut Frame, app: &mut App, area: Rect) {
@@ -724,13 +816,49 @@ fn size(bytes: usize) -> String {
     }
 }
 
+/// Where a key's hint is at the foot: its line, how far along, how wide.
+type Spot = (usize, u16, u16, KeyCode);
+
+/// The key a hint stands for, to press it when it is clicked: none for
+/// those that stand for two, as `j/k`.
+fn code(key: &str) -> Option<KeyCode> {
+    match key {
+        "⏎" => Some(KeyCode::Enter),
+        "␣" => Some(KeyCode::Char(' ')),
+        "esc" => Some(KeyCode::Esc),
+        k => {
+            let mut c = k.chars();
+            match (c.next(), c.next()) {
+                (Some(c), None) => Some(KeyCode::Char(c)),
+                _ => None,
+            }
+        }
+    }
+}
+
 /// The foot: what happened, at the right of the keys where there is room,
-/// else on a line of its own above them; and the keys.
-fn foot(app: &App, width: u16) -> Vec<Line<'static>> {
+/// else on a line of its own above them; the keys; and where each key's
+/// hint is, by its line, how far along and how wide, to be clicked.
+fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
     let t = app.theme;
-    let mut lines = hints(app, width);
+    let mut lines = Vec::new();
+    let mut spots = Vec::new();
+    for (y, items) in hints(app, width).into_iter().enumerate() {
+        let mut spans = Vec::new();
+        let mut x = 0u16;
+        for (k, what) in items {
+            let w = (k.width() + what.width()) as u16;
+            if let Some(code) = code(k.trim()) {
+                spots.push((y, x, w, code));
+            }
+            x += w;
+            spans.push(Span::styled(k, Style::new().fg(t.soft).bold()));
+            spans.push(Span::styled(what, Style::new().fg(t.dim)));
+        }
+        lines.push(Line::from(spans));
+    }
     if app.status.is_empty() {
-        return lines;
+        return (lines, spots);
     }
     let status = Span::styled(format!("{} ", app.status), Style::new().fg(t.text).bold());
     let last = lines.last_mut().expect("a line of keys");
@@ -739,35 +867,50 @@ fn foot(app: &App, width: u16) -> Vec<Line<'static>> {
         last.spans.push(Span::raw(" ".repeat(gap)));
         last.spans.push(status);
     } else {
-        let room = width as usize;
-        let text = clip(status.content.trim_end(), room.saturating_sub(1));
+        let text = clip(
+            status.content.trim_end(),
+            (width as usize).saturating_sub(1),
+        );
         lines.insert(
             0,
             Line::from(Span::styled(format!(" {text}"), status.style)),
         );
+        for spot in &mut spots {
+            spot.0 += 1;
+        }
     }
-    lines
+    (lines, spots)
 }
 
-fn keys(f: &mut Frame, app: &App, area: Rect) {
-    let lines = foot(app, area.width);
+fn keys(f: &mut Frame, app: &mut App, area: Rect) {
+    let (lines, spots) = foot(app, area.width);
     f.render_widget(
         Paragraph::new(lines).style(Style::new().bg(app.theme.side)),
         area,
     );
+    for (y, x, w, code) in spots {
+        let at = Rect {
+            x: area.x + x,
+            y: area.y + y as u16,
+            width: w.min(area.width.saturating_sub(x)),
+            height: 1,
+        };
+        if at.y < area.bottom() {
+            app.targets.push((at, Target::Key(code)));
+        }
+    }
 }
 
 /// The keys of the pane with the focus, as many lines of them as the
 /// foot takes on a screen `width` wide: hints left out to fit, but help and
 /// quit.
-fn hints(app: &App, width: u16) -> Vec<Line<'static>> {
-    let t = app.theme;
+fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let mut list: Vec<(&str, &str)> = match app.focus {
         Focus::Side => vec![
             ("⏎", "open"),
             ("j/k", "move"),
             ("A", "add account"),
-            ("x", "remove"),
+            ("D", "remove"),
             ("r", "refresh"),
         ],
         Focus::List => vec![
@@ -809,24 +952,9 @@ fn hints(app: &App, width: u16) -> Vec<Line<'static>> {
         lines = lay(&list);
     }
     lines
-        .into_iter()
-        .map(|items| {
-            Line::from(
-                items
-                    .into_iter()
-                    .flat_map(|(k, what)| {
-                        [
-                            Span::styled(k, Style::new().fg(t.soft).bold()),
-                            Span::styled(what, Style::new().fg(t.dim)),
-                        ]
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect()
 }
 
-fn help(f: &mut Frame, t: &Theme) -> Rect {
+fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
     let rows = [
         ("j k ↑ ↓", "move; in a message, scroll"),
         (
@@ -851,7 +979,10 @@ fn help(f: &mut Frame, t: &Theme) -> Rect {
             "look for new mail now; it is looked for every two minutes",
         ),
         ("A", "add an account: its address and password"),
-        ("x", "remove the account picked in the sidebar"),
+        (
+            "D",
+            "remove an account: the one picked in the sidebar, else the one listed",
+        ),
         ("click", "pick; the wheel scrolls"),
         ("q", "quit"),
     ];
@@ -870,14 +1001,24 @@ fn help(f: &mut Frame, t: &Theme) -> Rect {
     }
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
+    // Taller than the screen, it scrolls.
+    let shows = area.height.saturating_sub(2) as usize;
+    let scroll = scroll.min(lines.len().saturating_sub(shows));
+    let foot = if lines.len() > shows {
+        " j/k or the wheel scroll · any other key closes "
+    } else {
+        " any key closes "
+    };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.dim))
         .title(Span::styled(" Keys ", Style::new().fg(t.title).bold()))
+        .title_bottom(Line::styled(foot, Style::new().fg(t.dim)))
         .padding(Padding::horizontal(1))
         .style(Style::new().bg(t.page).fg(t.text));
+    let lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
-    area
+    (area, scroll)
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

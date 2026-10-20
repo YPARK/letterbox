@@ -4,6 +4,7 @@
 
 use crate::config;
 use crate::mail::{self, Folder, Message, Summary};
+use crate::secret::Keeper;
 use crate::setup;
 use crate::store::{Flag, Store};
 use crate::theme::{self, Theme};
@@ -66,21 +67,28 @@ pub enum Row {
     Add,
 }
 
-/// The fields of the form an account is added with, in their order.
-pub const FIELDS: [&str; 6] = ["Email", "Name", "Server", "Port", "User", "Password"];
+/// The fields of the form an account is added with, in their order; the
+/// last, where its password is kept, is picked rather than typed.
+pub const FIELDS: [&str; 7] = [
+    "Email", "Name", "Server", "Port", "User", "Password", "Keep in",
+];
 const EMAIL: usize = 0;
 const NAME: usize = 1;
 const SERVER: usize = 2;
 const PORT: usize = 3;
 const USER: usize = 4;
 const PASSWORD: usize = 5;
+pub const KEEP: usize = 6;
 
 /// An account being added: what is typed, the field typed in, and which
 /// fields were typed rather than filled in from the address.
 pub struct Form {
-    pub fields: [String; 6],
+    pub fields: [String; 7],
     pub at: usize,
-    typed: [bool; 6],
+    typed: [bool; 7],
+    /// Where its password may be kept, and where it will be.
+    pub keepers: Vec<Keeper>,
+    pub keeper: usize,
     /// What to know of the provider, or why signing in failed.
     pub note: Option<String>,
     pub failed: bool,
@@ -89,17 +97,25 @@ pub struct Form {
 }
 
 impl Form {
-    fn new() -> Self {
-        let mut fields: [String; 6] = Default::default();
+    fn new(keepers: Vec<Keeper>) -> Self {
+        let mut fields: [String; 7] = Default::default();
         fields[PORT] = "993".to_string();
         Form {
             fields,
             at: EMAIL,
-            typed: [false; 6],
+            typed: [false; 7],
+            keepers,
+            keeper: 0,
             note: None,
             failed: false,
             checking: false,
         }
+    }
+
+    /// Keep the password in the next place it may be kept, or the one before.
+    fn turn(&mut self, by: isize) {
+        let n = self.keepers.len().max(1) as isize;
+        self.keeper = (self.keeper as isize + by).rem_euclid(n) as usize;
     }
 
     /// Fill in what the address tells, where nothing was typed.
@@ -155,6 +171,19 @@ pub enum Target {
     Message(usize),
     Reader,
     Popup,
+    /// A field of the form, by its place.
+    Field(usize),
+    Button(Button),
+    /// A key's hint at the foot: clicked, as if it were pressed.
+    Key(KeyCode),
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Button {
+    Add,
+    Cancel,
+    Remove,
+    Keep,
 }
 
 /// What waits for a pause in moving through a list.
@@ -191,6 +220,8 @@ pub struct App {
     pub theme: Theme,
     pub status: String,
     pub help: bool,
+    /// How far the keys' help is scrolled.
+    pub help_scroll: usize,
     pub targets: Vec<(Rect, Target)>,
     /// Whether to mark a message read when it is shown.
     pub mark_read: bool,
@@ -198,7 +229,8 @@ pub struct App {
     pub config: PathBuf,
     /// Whether accounts may be added and removed: not the demo's.
     pub editable: bool,
-    /// Where an account's password is kept, once it signs in.
+    /// Where an account's password may be kept, and how, once it signs in.
+    pub keepers: fn() -> Vec<Keeper>,
     pub keep: setup::Keep,
     /// An account being added, or one about to be removed.
     pub form: Option<Box<Form>>,
@@ -284,10 +316,12 @@ impl App {
             theme: Theme::of(theme::Name::default()),
             status: String::new(),
             help: false,
+            help_scroll: 0,
             targets: Vec::new(),
             mark_read: true,
             config,
             editable: true,
+            keepers: crate::secret::keepers,
             keep: crate::secret::store,
             form: None,
             removing: None,
@@ -652,7 +686,8 @@ impl App {
             return;
         }
         self.searching = false;
-        self.form = Some(Box::new(Form::new()));
+        let keepers = (self.keepers)();
+        self.form = Some(Box::new(Form::new(keepers)));
     }
 
     /// Sign in with what the form holds, on a thread of its own; the
@@ -676,6 +711,16 @@ impl App {
             form.note = Some("the port is a number, as 993".to_string());
             return;
         };
+        let Some(&keeper) = form.keepers.get(form.keeper) else {
+            form.at = KEEP;
+            form.failed = true;
+            form.note = Some(
+                "there is nowhere here to keep a password: install gpg, or add the account \
+                 from the shell with --password-command"
+                    .to_string(),
+            );
+            return;
+        };
         let mut account = setup::account(&f[NAME], &f[EMAIL], &f[SERVER], port, &f[USER]);
         account.password = Some(f[PASSWORD].clone());
         form.checking = true;
@@ -685,7 +730,7 @@ impl App {
         self.pending += 1;
         std::thread::spawn(move || {
             let name = account.name.clone();
-            let done = setup::add(&path, account, keep)
+            let done = setup::add(&path, account, keeper, keep)
                 .map(|(imap, folders)| Added {
                     name,
                     store: Box::new(imap),
@@ -784,8 +829,11 @@ impl App {
             KeyCode::Esc => self.form = None,
             KeyCode::Tab | KeyCode::Down => form.at = (form.at + 1) % FIELDS.len(),
             KeyCode::BackTab | KeyCode::Up => form.at = (form.at + FIELDS.len() - 1) % FIELDS.len(),
-            KeyCode::Enter if form.at == PASSWORD => self.submit(),
+            KeyCode::Enter if form.at >= PASSWORD => self.submit(),
             KeyCode::Enter => form.at += 1,
+            KeyCode::Left if form.at == KEEP => form.turn(-1),
+            KeyCode::Right | KeyCode::Char(' ') if form.at == KEEP => form.turn(1),
+            _ if form.at == KEEP => {}
             KeyCode::Backspace => {
                 form.fields[form.at].pop();
                 form.typed[form.at] = true;
@@ -1039,7 +1087,14 @@ impl App {
             return;
         }
         if self.help {
-            self.help = false;
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
+                }
+                KeyCode::Char(' ') | KeyCode::PageDown => self.help_scroll += 10,
+                _ => self.help = false,
+            }
             return;
         }
         if self.form.is_some() {
@@ -1085,7 +1140,10 @@ impl App {
         let page = self.height.saturating_sub(2).max(1) as isize;
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('?') => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
             KeyCode::Char('/') => {
                 self.searching = true;
                 if self.focus == Focus::Side {
@@ -1166,18 +1224,24 @@ impl App {
             KeyCode::Char('o') => self.open_in_browser(),
             KeyCode::Char('a') => self.save_attachments(),
             KeyCode::Char('A') => self.open_form(),
-            KeyCode::Char('x') if self.focus == Focus::Side => {
-                let a = match self.rows.get(self.row) {
-                    Some(&Row::Account(a) | &Row::Folder(a, _)) => a,
-                    _ => return,
-                };
-                if self.editable {
-                    self.removing = Some(a);
-                } else {
-                    self.open_form();
-                }
-            }
+            KeyCode::Char('D') => self.ask_to_remove(),
             _ => {}
+        }
+    }
+
+    /// Ask whether to remove the account picked in the sidebar, or, with
+    /// the focus elsewhere, the account listed.
+    fn ask_to_remove(&mut self) {
+        let a = match (self.focus, self.rows.get(self.row)) {
+            (Focus::Side, Some(&Row::Account(a) | &Row::Folder(a, _))) => Some(a),
+            (Focus::Side, _) => None,
+            _ => self.listing.as_ref().map(|l| l.account),
+        };
+        let Some(a) = a else { return };
+        if self.editable {
+            self.removing = Some(a);
+        } else {
+            self.status = "the demo's account is made up: it cannot be removed".to_string();
         }
     }
 
@@ -1293,6 +1357,16 @@ impl App {
             MouseEventKind::ScrollUp => -1,
             _ => return,
         };
+        if self.help {
+            self.help_scroll = self.help_scroll.saturating_add_signed(by);
+            return;
+        }
+        if let Some(form) = &mut self.form {
+            if !form.checking {
+                form.at = form.at.saturating_add_signed(by).min(FIELDS.len() - 1);
+            }
+            return;
+        }
         match at {
             Some(Target::Side | Target::Row(_)) => {
                 let before = self.focus;
@@ -1308,14 +1382,44 @@ impl App {
 
     fn click(&mut self, at: Option<Target>) {
         if self.help {
-            self.help = false;
+            if at != Some(Target::Popup) {
+                self.help = false;
+            }
             return;
         }
-        if self.form.is_some() || self.removing.is_some() {
+        if let Some(form) = &mut self.form {
+            match at {
+                Some(Target::Field(i)) if !form.checking => {
+                    if i == KEEP && form.at == KEEP {
+                        form.turn(1);
+                    }
+                    form.at = i;
+                }
+                Some(Target::Button(Button::Add)) if !form.checking => self.submit(),
+                Some(Target::Button(Button::Cancel)) => {
+                    self.form_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(a) = self.removing {
+            match at {
+                Some(Target::Button(Button::Remove)) => {
+                    self.removing = None;
+                    self.remove(a);
+                }
+                Some(Target::Button(Button::Keep)) => {
+                    self.removing = None;
+                    self.status = format!("kept {}", self.accounts[a].name);
+                }
+                _ => {}
+            }
             return;
         }
         self.searching = false;
         match at {
+            Some(Target::Key(code)) => self.key(KeyEvent::new(code, KeyModifiers::NONE)),
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
             Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {

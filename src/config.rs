@@ -36,6 +36,10 @@ pub struct Account {
     /// written to the file.
     #[serde(skip)]
     pub password: Option<String>,
+    /// Why the password could not be found before the TUI started, not to
+    /// be asked for again while it has the terminal.
+    #[serde(skip)]
+    pub missing: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -62,6 +66,9 @@ impl Account {
     pub fn password(&self) -> anyhow::Result<String> {
         if let Some(p) = &self.password {
             return Ok(p.clone());
+        }
+        if let Some(why) = &self.missing {
+            bail!("{why}");
         }
         if let Some(command) = &self.password_command {
             let out = Command::new("sh")

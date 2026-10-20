@@ -38,9 +38,13 @@ The server is filled in from the address, as the large providers have it
 (Gmail, iCloud, Yahoo and Fastmail take an app password, which letterbox
 says), else `imap.` and the domain. An account is added only once it signs
 in, so a mistyped server or password is said at once. Its password is
-kept in the macOS keychain, or on Linux the Secret Service through
-`secret-tool`, never in the file; removing the account forgets it. In the
-TUI, `x` on an account in the sidebar removes it, after asking.
+kept encrypted, never in the file, and forgotten when the account is
+removed: in the macOS keychain, or on Linux the Secret Service through
+`secret-tool`; or, picked in the form or with `--keep gpg`, in a file
+encrypted with gpg to your own key, in `~/.local/share/letterbox/passwords`,
+as `pass` keeps them. gpg's passphrase, if it asks for it, is asked for
+before the TUI starts. In the TUI, `D` removes the account picked in the
+sidebar, or the one listed, after asking.
 
 The accounts are in `~/.config/letterbox/accounts.toml` (`$LETTERBOX_CONFIG`,
 or `--config`), to edit by hand as well; letterbox keeps its comments:
@@ -84,13 +88,14 @@ letterbox search grant report --account Work
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
 | `r` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
-| `x` | in the sidebar, remove the account picked |
+| `D` | remove the account picked in the sidebar, or the one listed |
 | `?` | all the keys |
 | `q` | quit |
 
 Moving through the list, the message picked is shown beside it, and marked
 read, once you pause on it, as a mail app does. The mouse picks and
-scrolls. Each account is asked from a thread of its own, so the screen
+scrolls, and presses the keys shown at the foot and the forms' fields and
+buttons. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
 ## In Emacs

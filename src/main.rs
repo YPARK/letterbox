@@ -132,8 +132,12 @@ enum AccountAction {
         #[arg(long)]
         user: Option<String>,
         /// A command that prints the password, instead of keeping it
-        #[arg(long)]
+        #[arg(long, conflicts_with = "keep")]
         password_command: Option<String>,
+        /// Where to keep the password: the keychain on macOS, the keyring
+        /// elsewhere, unless gpg is asked for
+        #[arg(long, value_enum)]
+        keep: Option<secret::Keeper>,
     },
     /// Remove an account; its mail stays on its server
     Remove {
@@ -206,6 +210,7 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         port,
         user,
         password_command,
+        keep,
     } = action
     else {
         unreachable!("only adding")
@@ -241,8 +246,16 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         }
         account.password = Some(ask_password("Password")?);
     }
+    let keepers = secret::keepers();
+    let keeper = match keep {
+        Some(k) if keepers.contains(k) => *k,
+        Some(k) => bail!("cannot keep a password in the {} here", k.name()),
+        None => *keepers.first().ok_or_else(|| {
+            anyhow::anyhow!("there is nowhere here to keep a password: give --password-command")
+        })?,
+    };
     eprintln!("signing in to {}…", account.host);
-    let (_, folders) = setup::add(&args.config, account, secret::store)?;
+    let (_, folders) = setup::add(&args.config, account, keeper, secret::store)?;
     println!(
         "added {name}: {} folders, in {}",
         folders.len(),
@@ -253,18 +266,43 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
 
 /// The accounts' stores, by name: the demo's, or those set up.
 fn stores(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
+    stores_of(args, |_| {})
+}
+
+/// The stores, each account readied by `ready` first.
+fn stores_of(
+    args: &Args,
+    ready: impl Fn(&mut config::Account),
+) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
     if args.demo {
         return Ok(vec![("Demo".to_string(), Box::new(demo::Demo::new()))]);
     }
     Ok(config::load(&args.config)?
         .into_iter()
-        .map(|a| {
+        .map(|mut a| {
+            ready(&mut a);
             (
                 a.name.clone(),
                 Box::new(imap::Imap::new(a)) as Box<dyn Store>,
             )
         })
         .collect())
+}
+
+/// Find, before the TUI takes the terminal, the passwords whose command
+/// may ask for a passphrase on it, as gpg's pinentry does; what cannot be
+/// found is said when the account signs in, not asked for again.
+fn unlock(a: &mut config::Account) {
+    let Some(command) = &a.password_command else {
+        return;
+    };
+    if !secret::asks(command) {
+        return;
+    }
+    match a.password() {
+        Ok(p) => a.password = Some(p),
+        Err(e) => a.missing = Some(format!("{e:#}")),
+    }
 }
 
 /// The store of the account named, or of the first.
@@ -320,7 +358,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     match &args.command {
         None => {
-            let mut app = app::App::new(stores(&args)?, args.config.clone());
+            let mut app = app::App::new(stores_of(&args, unlock)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();
