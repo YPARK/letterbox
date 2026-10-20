@@ -278,6 +278,8 @@ pub enum Target {
     Button(Button),
     /// A key's hint at the foot: clicked, as if it were pressed.
     Key(KeyCode),
+    /// An attachment or link in the list of them, by its place.
+    Item(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -286,6 +288,48 @@ pub enum Button {
     Cancel,
     Remove,
     Keep,
+}
+
+/// What the message read has to open: an attachment, by its place among
+/// its attachments, or a link.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Item {
+    File {
+        at: usize,
+        name: String,
+        mime: String,
+        size: usize,
+    },
+    Link(String),
+}
+
+/// The message's attachments and links, listed to open, the one picked,
+/// and what came of the last opened.
+pub struct Files {
+    pub items: Vec<Item>,
+    pub at: usize,
+    pub note: Option<String>,
+}
+
+/// What the terminal is given over to, or the system asked to do, once
+/// the screen is drawn: a document presented by ohp, which takes the
+/// terminal until it quits; a file opened by the system; a page in the
+/// browser; an address put on the clipboard, by the terminal.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Launch {
+    Ohp(PathBuf),
+    Open(PathBuf),
+    Browse(String),
+    Copy(String),
+}
+
+/// Whether ohp presents a file of this name: PDFs, and markdown and R
+/// Markdown, which it typesets.
+pub fn ohp_reads(name: &str) -> bool {
+    let name = name.to_lowercase();
+    [".pdf", ".md", ".markdown", ".rmd"]
+        .iter()
+        .any(|e| name.ends_with(e))
 }
 
 /// What waits for a pause in moving through a list.
@@ -390,6 +434,10 @@ pub struct App {
     /// An account being added, or one about to be removed.
     pub form: Option<Box<Form>>,
     pub removing: Option<usize>,
+    /// The message's attachments and links, listed to open.
+    pub files: Option<Files>,
+    /// What to do outside the screen, once it is drawn.
+    pub launch: Option<Launch>,
     replies: Receiver<Reply>,
     replies_to: Sender<Reply>,
     /// Asks not yet answered.
@@ -407,6 +455,12 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
         while !app.quit {
             if stale {
                 terminal.draw(|f| ui::draw(f, app))?;
+            }
+            if let Some(launch) = app.launch.take() {
+                app.status = carry_out(launch, &mut terminal);
+                terminal.clear()?;
+                stale = true;
+                continue;
             }
             stale = app.pump() | app.tick();
             if !event::poll(POLL)? {
@@ -431,6 +485,45 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
     })();
     give_back();
     result
+}
+
+/// Do what `launch` asks, outside the screen; what to say of it.
+fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
+    match launch {
+        Launch::Ohp(path) => {
+            give_back();
+            let ran = std::process::Command::new("ohp").arg(&path).status();
+            *terminal = take();
+            match ran {
+                Ok(s) if s.success() => String::new(),
+                Ok(s) => format!("ohp: {s}"),
+                Err(_) => match open(&path) {
+                    Ok(()) => {
+                        "ohp is not installed (cargo install ohp): opened by the system".to_string()
+                    }
+                    Err(e) => format!("cannot open {}: {e:#}", path.display()),
+                },
+            }
+        }
+        Launch::Open(path) => match open(&path) {
+            Ok(()) => format!("opened {}", tilde(&path)),
+            Err(e) => format!("cannot open {}: {e:#}", path.display()),
+        },
+        Launch::Browse(url) => {
+            oauth::browse(&url);
+            "opened in the browser".to_string()
+        }
+        Launch::Copy(text) => {
+            // OSC 52: the terminal puts it on the clipboard, here or over ssh.
+            use base64::Engine;
+            let code = base64::engine::general_purpose::STANDARD.encode(&text);
+            let _ = std::io::Write::write_all(
+                &mut std::io::stdout(),
+                format!("\x1b]52;c;{code}\x07").as_bytes(),
+            );
+            "copied the address".to_string()
+        }
+    }
 }
 
 /// The terminal, as ratatui takes it, with the mouse's clicks and wheel.
@@ -482,6 +575,8 @@ impl App {
             browse: oauth::browse,
             form: None,
             removing: None,
+            files: None,
+            launch: None,
             replies,
             replies_to,
             pending: 0,
@@ -601,6 +696,21 @@ impl App {
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
         }
+        if let Answer::Fetched(got) = reply.answer {
+            match got {
+                Ok(path) => {
+                    if let Some(files) = &mut self.files {
+                        files.note = None;
+                    }
+                    self.launch = Some(Launch::Ohp(path));
+                }
+                Err(e) => match &mut self.files {
+                    Some(files) => files.note = Some(e),
+                    None => self.status = first_line(&e).to_string(),
+                },
+            }
+            return;
+        }
         if let Answer::Realm { email, microsoft } = reply.answer {
             if let Some(form) = &mut self.form
                 && microsoft
@@ -659,6 +769,7 @@ impl App {
             | Answer::Skipped
             | Answer::Added(_)
             | Answer::Waiting(_)
+            | Answer::Fetched(_)
             | Answer::Realm { .. } => {}
             Answer::Page {
                 folder,
@@ -1362,6 +1473,9 @@ impl App {
         if self.form.is_some() {
             return self.form_key(key);
         }
+        if self.files.is_some() {
+            return self.files_key(key);
+        }
         if let Some(a) = self.removing.take() {
             if key.code == KeyCode::Char('y') {
                 self.remove(a);
@@ -1485,6 +1599,7 @@ impl App {
             }
             KeyCode::Char('o') => self.open_in_browser(),
             KeyCode::Char('a') => self.save_attachments(),
+            KeyCode::Char('f') => self.list_files(),
             KeyCode::Char('A') => self.open_form(),
             KeyCode::Char('D') => self.ask_to_remove(),
             _ => {}
@@ -1623,6 +1738,13 @@ impl App {
             self.help_scroll = self.help_scroll.saturating_add_signed(by);
             return;
         }
+        if let Some(files) = &mut self.files {
+            files.at = files
+                .at
+                .saturating_add_signed(by)
+                .min(files.items.len().saturating_sub(1));
+            return;
+        }
         if let Some(form) = &mut self.form {
             if !form.checking {
                 form.step(by);
@@ -1646,6 +1768,17 @@ impl App {
         if self.help {
             if at != Some(Target::Popup) {
                 self.help = false;
+            }
+            return;
+        }
+        if let Some(files) = &mut self.files {
+            match at {
+                Some(Target::Item(i)) => {
+                    files.at = i;
+                    self.open_item();
+                }
+                Some(Target::Popup) => {}
+                _ => self.files = None,
             }
             return;
         }
@@ -1757,6 +1890,115 @@ impl App {
 
     /// Save the message's attachments to the downloads folder, each under
     /// a name not yet taken there.
+    /// List the attachments and links of the message read, to open.
+    fn list_files(&mut self) {
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to list: ⏎ reads the message picked".to_string();
+            return;
+        };
+        let mut items: Vec<Item> = m
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(at, a)| Item::File {
+                at,
+                name: a.name.clone(),
+                mime: a.mime.clone(),
+                size: a.size,
+            })
+            .collect();
+        items.extend(m.links.iter().cloned().map(Item::Link));
+        if items.is_empty() {
+            self.status = "no attachments or links".to_string();
+            return;
+        }
+        self.files = Some(Files {
+            items,
+            at: 0,
+            note: None,
+        });
+    }
+
+    fn files_key(&mut self, key: KeyEvent) {
+        let Some(files) = &mut self.files else { return };
+        let last = files.items.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => files.at = (files.at + 1).min(last),
+            KeyCode::Char('k') | KeyCode::Up => files.at = files.at.saturating_sub(1),
+            KeyCode::Enter | KeyCode::Char('o') => self.open_item(),
+            KeyCode::Char('s') => self.save_item(),
+            KeyCode::Char('y') => {
+                if let Some(Item::Link(url)) = files.items.get(files.at) {
+                    self.launch = Some(Launch::Copy(url.clone()));
+                }
+            }
+            _ => self.files = None,
+        }
+    }
+
+    /// Open the attachment or link picked: in ohp, a PDF or markdown, a
+    /// linked PDF downloaded first; else by the system, or in the browser.
+    fn open_item(&mut self) {
+        let m = self.message().cloned();
+        let (Some(files), Some(m)) = (&mut self.files, m) else {
+            return;
+        };
+        match files.items.get(files.at).cloned() {
+            Some(Item::File { at, name, .. }) => {
+                let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
+                    return;
+                };
+                match keep_file(m.uid, &name, &bytes) {
+                    Ok(path) if ohp_reads(&name) => self.launch = Some(Launch::Ohp(path)),
+                    Ok(path) => self.launch = Some(Launch::Open(path)),
+                    Err(e) => files.note = Some(format!("cannot keep {name}: {e:#}")),
+                }
+            }
+            Some(Item::Link(url)) => match crate::net::pdf_of(&url) {
+                Some(pdf) => {
+                    files.note = Some(format!("downloading {pdf}…"));
+                    let (replies, uid) = (self.replies_to.clone(), m.uid);
+                    self.pending += 1;
+                    std::thread::spawn(move || {
+                        let got = crate::net::pdf(&pdf)
+                            .and_then(|(name, bytes)| keep_file(uid, &name, &bytes))
+                            .map_err(worker::text);
+                        let _ = replies.send(Reply {
+                            account: usize::MAX,
+                            answer: Answer::Fetched(got),
+                        });
+                    });
+                }
+                None => self.launch = Some(Launch::Browse(url)),
+            },
+            None => {}
+        }
+    }
+
+    /// Save the attachment picked to the downloads folder, under a name not
+    /// yet taken there.
+    fn save_item(&mut self) {
+        let m = self.message().cloned();
+        let (Some(files), Some(m)) = (&mut self.files, m) else {
+            return;
+        };
+        let Some(Item::File { at, name, .. }) = files.items.get(files.at).cloned() else {
+            files.note = Some("a link is opened, not saved: ⏎".to_string());
+            return;
+        };
+        let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
+            return;
+        };
+        let dir = downloads();
+        let path = unused(&dir, &safe_name(&name));
+        files.note = Some(
+            match std::fs::create_dir_all(&dir).and_then(|_| write_new(&path, &bytes)) {
+                Ok(()) => format!("saved {}", tilde(&path)),
+                Err(e) => format!("cannot save {name}: {e}"),
+            },
+        );
+    }
+
     fn save_attachments(&mut self) {
         let Some(m) = self.message().cloned() else {
             self.status = "nothing to save: ⏎ reads the message picked".to_string();
@@ -1812,6 +2054,16 @@ fn open(path: &std::path::Path) -> anyhow::Result<()> {
         anyhow::bail!("{program}: {status}");
     }
     Ok(())
+}
+
+/// Keep `bytes`, an attachment or a document downloaded, of the message
+/// `uid`, in a private folder of the cache, to be opened from there.
+fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
+    let dir = cache().join("files");
+    private_dir(&dir)?;
+    let path = dir.join(format!("{uid}-{}", safe_name(name)));
+    vault::write_private(&path, bytes)?;
+    Ok(path)
 }
 
 /// `$LETTERBOX_DOWNLOADS`, else `~/Downloads`.

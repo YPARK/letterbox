@@ -78,6 +78,8 @@ pub enum Answer {
         email: String,
         microsoft: bool,
     },
+    /// A linked document downloaded, and where it is kept.
+    Fetched(Result<std::path::PathBuf, String>),
 }
 
 pub struct Added {

@@ -47,16 +47,7 @@ fn endpoint(tenant: &str, what: &str) -> String {
     format!("{}/{tenant}/oauth2/v2.0/{what}", login())
 }
 
-fn agent() -> ureq::Agent {
-    // Once a process; again, it is already the provider.
-    let _ = rustls_rustcrypto::provider().install_default();
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .user_agent(concat!("letterbox/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
-}
+use crate::net::agent;
 
 fn post(url: &str, form: &[(&str, &str)]) -> anyhow::Result<Value> {
     let mut resp = agent()

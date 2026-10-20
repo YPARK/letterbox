@@ -116,6 +116,7 @@ letterbox search grant report --account Work
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
 | `o` | open the message in the browser, as its HTML |
+| `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
 | `r` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
@@ -161,7 +162,7 @@ have your shell's `PATH`.
 | `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread | reads |
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
-| `read_message` | a message's headers, attachments and text, 20,000 characters at a time; not marked read | reads |
+| `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
 
 The first four are marked read-only, so a program may let the agent use

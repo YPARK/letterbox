@@ -692,6 +692,97 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         "{}",
         app.status
     );
+    assert!(dir.path().join("computable-numbers (2).pdf").is_file());
+
+    // One of them, from the list of its files and links.
+    let cache = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    press(&mut app, &["f"]);
+    let files = app.files.as_ref().expect("listed");
+    assert_eq!(files.items.len(), 2, "two attachments, no links");
+    press(&mut app, &["j", "s"]);
+    assert!(dir.path().join("computable-numbers (3).pdf").is_file());
+
+    // ⏎ hands a PDF to ohp, and another file to the system; the mouse too.
+    press(&mut app, &["<enter>"]);
+    let Some(app::Launch::Ohp(pdf)) = app.launch.take() else {
+        panic!("not for ohp: {:?}", app.launch);
+    };
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    assert!(pdf.starts_with(cache.path()));
+    click_at(&mut app, app::Target::Item(0));
+    let Some(app::Launch::Open(text)) = app.launch.take() else {
+        panic!("not for the system: {:?}", app.launch);
+    };
+    assert_eq!(text.file_name().unwrap(), "3-states.txt");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&text).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "only yours");
+    }
+    press(&mut app, &["<esc>"]);
+    assert!(app.files.is_none());
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn links_are_found_in_text_and_html() {
+    let text = "See https://arxiv.org/abs/2412.08821, and (https://example.org/a?b=1&c=2).\n\
+                Again https://arxiv.org/abs/2412.08821 or mailto:x@y.z";
+    let html =
+        "<a href=\"https://example.org/x.pdf\">x</a> <a href='https://example.org/a?b=1&amp;c=2'>";
+    assert_eq!(
+        mail::links(text, Some(html)),
+        [
+            "https://arxiv.org/abs/2412.08821",
+            "https://example.org/a?b=1&c=2",
+            "https://example.org/x.pdf",
+        ]
+    );
+    use crate::net::pdf_of;
+    assert_eq!(
+        pdf_of("https://arxiv.org/abs/2412.08821v2").as_deref(),
+        Some("https://arxiv.org/pdf/2412.08821v2")
+    );
+    assert_eq!(
+        pdf_of("https://example.org/paper.PDF?dl=1").as_deref(),
+        Some("https://example.org/paper.PDF?dl=1")
+    );
+    assert_eq!(pdf_of("https://example.org/page"), None);
+}
+
+#[test]
+fn a_linked_pdf_is_downloaded_and_a_page_is_not_taken_for_one() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        for mut tcp in listener.incoming().flatten() {
+            let mut first = String::new();
+            BufReader::new(tcp.try_clone().unwrap())
+                .read_line(&mut first)
+                .unwrap();
+            let body: &[u8] = if first.contains("/paper.pdf") {
+                b"%PDF-1.4 a paper"
+            } else {
+                b"<html>sign in first</html>"
+            };
+            let _ = write!(
+                tcp,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = tcp.write_all(body);
+        }
+    });
+    let (name, bytes) = crate::net::pdf(&format!("{at}/papers/paper.pdf")).unwrap();
+    assert_eq!(
+        (name.as_str(), &bytes[..8]),
+        ("paper.pdf", &b"%PDF-1.4"[..])
+    );
+    let e = crate::net::pdf(&format!("{at}/login")).unwrap_err();
+    assert!(e.to_string().contains("gave no PDF"), "{e}");
+    assert!(crate::net::pdf("file:///etc/passwd").is_err());
 }
 
 #[test]

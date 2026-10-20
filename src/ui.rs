@@ -4,8 +4,8 @@
 //! in two, one of them at a time.
 
 use crate::app::{
-    AGAIN, App, Body, Button, FIELDS, Focus, Form, KEEP, PASSPHRASE, PASSWORD, Row, SIGN_IN, State,
-    Target,
+    AGAIN, App, Body, Button, FIELDS, Files, Focus, Form, Item, KEEP, PASSPHRASE, PASSWORD, Row,
+    SIGN_IN, State, Target, ohp_reads,
 };
 use crate::config::Auth;
 use crate::mail::Message;
@@ -93,6 +93,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Some((area, Vec::new()))
     } else if let Some(form) = &app.form {
         Some(form_dialog(f, &t, form))
+    } else if let Some(files) = &app.files {
+        Some(files_dialog(f, &t, files))
     } else {
         app.removing.map(|a| removing(f, &t, &app.accounts[a].name))
     };
@@ -323,6 +325,83 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
             .into_iter()
             .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b))),
     );
+    (area, targets)
+}
+
+/// The message's attachments and links: each on a line, the one picked
+/// lit, with what ⏎ does with it.
+fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
+    let width = f.area().width.min(96);
+    let room = (width as usize).saturating_sub(4);
+    let side = 22.min(room / 3);
+    let mut lines = vec![Line::raw("")];
+    for (i, item) in files.items.iter().enumerate() {
+        let (icon, name, what) = match item {
+            Item::File {
+                name,
+                mime,
+                size: bytes,
+                ..
+            } => {
+                let kind = mime.rsplit('/').next().unwrap_or(mime).to_uppercase();
+                let how = if ohp_reads(name) { "ohp" } else { "open" };
+                (
+                    "▤",
+                    name.clone(),
+                    format!("{kind} · {} · {how}", size(*bytes)),
+                )
+            }
+            Item::Link(url) => {
+                let what = match crate::net::pdf_of(url) {
+                    Some(_) => "PDF · ohp",
+                    None => "browser",
+                };
+                ("↗", url.clone(), what.to_string())
+            }
+        };
+        let here = i == files.at;
+        let name_room = room.saturating_sub(side + 4);
+        let name = clip(&name, name_room);
+        let pad = name_room.saturating_sub(name.width());
+        let style = if here {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        lines.push(
+            Line::from(vec![
+                Span::styled(format!(" {icon} "), Style::new().fg(t.dim)),
+                Span::styled(name, Style::new().fg(t.text)),
+                Span::raw(" ".repeat(pad + 1)),
+                Span::styled(
+                    format!("{:>side$}", clip(&what, side)),
+                    Style::new().fg(t.dim),
+                ),
+            ])
+            .style(style),
+        );
+    }
+    if let Some(note) = &files.note {
+        lines.push(Line::raw(""));
+        lines.extend(
+            wrap(note, room)
+                .into_iter()
+                .map(|l| Line::styled(l, Style::new().fg(t.soft))),
+        );
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            "Files and links",
+            "⏎ open · s save · y copy address · esc close",
+        )),
+        area,
+    );
+    let targets = (0..files.items.len())
+        .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
+        .collect();
     (area, targets)
 }
 
@@ -1009,6 +1088,7 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
             ("n/p", "next/previous"),
             ("u", "unread"),
             ("s", "flag"),
+            ("f", "files & links"),
             ("o", "browser"),
             ("a", "save files"),
             ("esc", "back"),
@@ -1057,6 +1137,10 @@ fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
         ("u", "mark read, or unread"),
         ("s", "flag, or unflag"),
         ("o", "open the message in the browser, as its HTML"),
+        (
+            "f",
+            "its files and links: PDFs and markdown in ohp, a linked PDF downloaded first",
+        ),
         ("a", "save its attachments to Downloads"),
         (
             "r",

@@ -41,6 +41,21 @@ fn letter(
     )
 }
 
+/// The paper Turing attaches: a page of it, as a PDF, to read in ohp.
+const PAPER: &str = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq\
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq\
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIg\
+NzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4g\
+Pj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNDIgPj4Kc3RyZWFtCkJUIC9GMSAyMCBU\
+ZiA3MiA3MjAgVGQgKE9uIGNvbXB1dGFibGUgbnVtYmVycykgVGogRVQKQlQgL0YxIDEyIFRmIDcy\
+IDY5MCBUZCAoYiBOb25lIFAwLCBSIGMgICBjIE5vbmUgUiBlICAgZSBOb25lIFAxLCBSIGYgICBm\
+IE5vbmUgUiBiKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQg\
+L1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgow\
+MDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBu\
+IAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQzMyAwMDAw\
+MCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjUwMwolJUVP\
+Rgo=";
+
 const PLAIN: &str = "Content-Type: text/plain; charset=utf-8\r\n";
 
 fn inbox() -> Vec<(i64, Vec<u8>, Flags)> {
@@ -105,12 +120,17 @@ fn inbox() -> Vec<(i64, Vec<u8>, Flags)> {
                 "You <you@example.com>",
                 "Computable numbers: the paper, and the figures",
                 "Content-Type: multipart/mixed; boundary=\"m1\"\r\n",
-                "--m1\nContent-Type: text/plain; charset=utf-8\n\nThe paper is attached, \
-                 with the table of the machine's states. Press a to save it to your \
-                 Downloads.\n\nAlan\n\n--m1\nContent-Type: text/plain; name=\"states.txt\"\n\
+                &format!(
+                    "--m1\nContent-Type: text/plain; charset=utf-8\n\nThe paper is attached, \
+                 with the table of the machine's states. Press f to read it in ohp, or a to \
+                 save them to your Downloads.\n\nAlan\n\n--m1\nContent-Type: text/plain; name=\"states.txt\"\n\
                  Content-Disposition: attachment; filename=\"states.txt\"\n\n\
                  b  None  P0, R   c\nc  None  R       e\ne  None  P1, R   f\n\
-                 f  None  R       b\n--m1--\n",
+                 f  None  R       b\n--m1\nContent-Type: application/pdf; \
+                 name=\"computable-numbers.pdf\"\nContent-Disposition: attachment; \
+                 filename=\"computable-numbers.pdf\"\nContent-Transfer-Encoding: base64\n\n\
+                 {PAPER}\n--m1--\n"
+                ),
             );
             (
                 h,

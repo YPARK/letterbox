@@ -8,6 +8,7 @@ mod demo;
 mod imap;
 mod mail;
 mod mcp;
+mod net;
 mod oauth;
 mod secret;
 mod setup;

@@ -310,6 +310,9 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
     pub attachments: Vec<Attachment>,
+    /// The web addresses it links to, in its text or its HTML, in order,
+    /// each once.
+    pub links: Vec<String>,
     #[serde(skip)]
     pub raw: Vec<u8>,
 }
@@ -343,6 +346,7 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
         })
         .collect();
     let text = m.body_text(0).map(|t| body(&t)).unwrap_or_default();
+    let links = links(&text, html.as_deref());
     let message = Message {
         uid,
         subject: m.subject().map(clean).unwrap_or_default(),
@@ -355,9 +359,66 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
         text,
         html,
         attachments,
+        links,
         raw: Vec::new(),
     };
     Ok(Message { raw, ..message })
+}
+
+/// The most links a message is taken to have.
+const LINKS: usize = 200;
+
+/// The web addresses in `text`, and in `html`'s links, in order, each once:
+/// without the punctuation that ends a sentence after one, or the brackets
+/// around it.
+pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut add = |url: &str| {
+        let url = url
+            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
+            .replace("&amp;", "&");
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        if web && url.len() > 10 && !found.contains(&url) && found.len() < LINKS {
+            found.push(clean(&url));
+        }
+    };
+    let words = |s: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = s;
+        while let Some(at) = rest.find("http") {
+            let from = &rest[at..];
+            if from.starts_with("https://") || from.starts_with("http://") {
+                let end = from
+                    .find(|c: char| c.is_whitespace() || "<>\"'`".contains(c))
+                    .unwrap_or(from.len());
+                out.push(from[..end].to_string());
+                rest = &from[end..];
+            } else {
+                rest = &from[4..];
+            }
+        }
+        out
+    };
+    for w in words(text) {
+        add(&w);
+    }
+    if let Some(h) = html {
+        let mut rest = h;
+        while let Some(at) = rest.find("href=") {
+            let from = &rest[at + 5..];
+            let quote = from.chars().next().filter(|c| *c == '"' || *c == '\'');
+            let value = match quote {
+                Some(q) => from[1..].split(q).next().unwrap_or_default(),
+                None => from
+                    .split(|c: char| c.is_whitespace() || c == '>')
+                    .next()
+                    .unwrap_or_default(),
+            };
+            add(value.trim());
+            rest = from;
+        }
+    }
+    found
 }
 
 /// The attachments of a message, by name, and what they hold.
