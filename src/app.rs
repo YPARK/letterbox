@@ -2,11 +2,13 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+use crate::config;
 use crate::mail::{self, Folder, Message, Summary};
+use crate::setup;
 use crate::store::{Flag, Store};
 use crate::theme::{self, Theme};
 use crate::ui;
-use crate::worker::{self, Answer, Ask, Reply};
+use crate::worker::{self, Added, Answer, Ask, Reply};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -51,14 +53,72 @@ pub struct Account {
     pub name: String,
     pub folders: Vec<Folder>,
     pub state: State,
-    asks: Sender<Ask>,
+    /// To ask its store; none once it is removed, and its thread ends.
+    asks: Option<Sender<Ask>>,
 }
 
-/// What the sidebar lists: each account, and its folders under it.
+/// What the sidebar lists: each account, and its folders under it; and a
+/// row to add another.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Row {
     Account(usize),
     Folder(usize, usize),
+    Add,
+}
+
+/// The fields of the form an account is added with, in their order.
+pub const FIELDS: [&str; 6] = ["Email", "Name", "Server", "Port", "User", "Password"];
+const EMAIL: usize = 0;
+const NAME: usize = 1;
+const SERVER: usize = 2;
+const PORT: usize = 3;
+const USER: usize = 4;
+const PASSWORD: usize = 5;
+
+/// An account being added: what is typed, the field typed in, and which
+/// fields were typed rather than filled in from the address.
+pub struct Form {
+    pub fields: [String; 6],
+    pub at: usize,
+    typed: [bool; 6],
+    /// What to know of the provider, or why signing in failed.
+    pub note: Option<String>,
+    pub failed: bool,
+    /// Whether it is signing in, to be added if it can.
+    pub checking: bool,
+}
+
+impl Form {
+    fn new() -> Self {
+        let mut fields: [String; 6] = Default::default();
+        fields[PORT] = "993".to_string();
+        Form {
+            fields,
+            at: EMAIL,
+            typed: [false; 6],
+            note: None,
+            failed: false,
+            checking: false,
+        }
+    }
+
+    /// Fill in what the address tells, where nothing was typed.
+    fn fill(&mut self) {
+        let email = self.fields[EMAIL].trim().to_string();
+        let (host, note) = config::guess(&email);
+        if !self.typed[NAME] {
+            self.fields[NAME] = setup::name_for(&email);
+        }
+        if !self.typed[SERVER] {
+            self.fields[SERVER] = host;
+        }
+        if !self.typed[USER] {
+            self.fields[USER] = email;
+        }
+        if !self.failed {
+            self.note = note.map(str::to_string);
+        }
+    }
 }
 
 /// The messages of the folder shown.
@@ -136,6 +196,13 @@ pub struct App {
     pub mark_read: bool,
     /// Where the accounts are set up, to say so where there are none.
     pub config: PathBuf,
+    /// Whether accounts may be added and removed: not the demo's.
+    pub editable: bool,
+    /// Where an account's password is kept, once it signs in.
+    pub keep: setup::Keep,
+    /// An account being added, or one about to be removed.
+    pub form: Option<Box<Form>>,
+    pub removing: Option<usize>,
     replies: Receiver<Reply>,
     replies_to: Sender<Reply>,
     /// Asks not yet answered.
@@ -220,6 +287,10 @@ impl App {
             targets: Vec::new(),
             mark_read: true,
             config,
+            editable: true,
+            keep: crate::secret::store,
+            form: None,
+            removing: None,
             replies,
             replies_to,
             pending: 0,
@@ -228,24 +299,47 @@ impl App {
             clicked: None,
             quit: false,
         };
-        for (i, (name, store)) in stores.into_iter().enumerate() {
-            let asks = worker::spawn(i, store, app.replies_to.clone());
-            app.accounts.push(Account {
-                name,
-                folders: Vec::new(),
-                state: State::Connecting,
-                asks,
-            });
-            app.ask(i, Ask::Folders);
+        for (name, store) in stores {
+            let a = app.join(name, store);
+            app.ask(a, Ask::Folders);
         }
         app.rebuild();
         app
     }
 
+    /// Keep the accounts as they are, none added or removed: the demo's.
+    pub fn fix_accounts(&mut self) {
+        self.editable = false;
+        self.rebuild();
+    }
+
+    /// Take on an account, its store asked from a thread of its own; its
+    /// place among the accounts.
+    fn join(&mut self, name: String, store: Box<dyn Store>) -> usize {
+        let a = self.accounts.len();
+        let asks = worker::spawn(a, store, self.replies_to.clone());
+        self.accounts.push(Account {
+            name,
+            folders: Vec::new(),
+            state: State::Connecting,
+            asks: Some(asks),
+        });
+        a
+    }
+
     fn ask(&mut self, account: usize, ask: Ask) {
-        if self.accounts[account].asks.send(ask).is_ok() {
+        let sent = self.accounts[account]
+            .asks
+            .as_ref()
+            .is_some_and(|s| s.send(ask).is_ok());
+        if sent {
             self.pending += 1;
         }
+    }
+
+    /// The accounts not removed, by their place.
+    pub fn live(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.accounts.len()).filter(|&a| self.accounts[a].asks.is_some())
     }
 
     /// Take what the stores have answered; whether anything was.
@@ -305,6 +399,12 @@ impl App {
     fn take_reply(&mut self, reply: Reply) {
         self.pending = self.pending.saturating_sub(1);
         let a = reply.account;
+        if let Answer::Added(added) = reply.answer {
+            return self.added(added);
+        }
+        if self.accounts.get(a).is_none_or(|x| x.asks.is_none()) {
+            return;
+        }
         match reply.answer {
             Answer::Folders(Ok(folders)) => {
                 let first = self.accounts.iter().all(|x| x.folders.is_empty());
@@ -346,7 +446,7 @@ impl App {
                     f.unseen = Some(unseen);
                 }
             }
-            Answer::Count { counts: Err(_), .. } | Answer::Skipped => {}
+            Answer::Count { counts: Err(_), .. } | Answer::Skipped | Answer::Added(_) => {}
             Answer::Page {
                 folder,
                 offset,
@@ -529,14 +629,184 @@ impl App {
     fn rebuild(&mut self) {
         let picked = self.rows.get(self.row).copied();
         self.rows.clear();
-        for (a, account) in self.accounts.iter().enumerate() {
+        for a in self.live().collect::<Vec<_>>() {
             self.rows.push(Row::Account(a));
             self.rows
-                .extend((0..account.folders.len()).map(|i| Row::Folder(a, i)));
+                .extend((0..self.accounts[a].folders.len()).map(|i| Row::Folder(a, i)));
+        }
+        if self.editable {
+            self.rows.push(Row::Add);
         }
         self.row = picked
             .and_then(|p| self.rows.iter().position(|r| *r == p))
+            .or_else(|| self.rows.iter().position(|r| matches!(r, Row::Folder(..))))
             .unwrap_or(0);
+    }
+
+    /// Open the form to add an account.
+    fn open_form(&mut self) {
+        if !self.editable {
+            self.status =
+                "the demo's account is made up: run letterbox without --demo to add yours"
+                    .to_string();
+            return;
+        }
+        self.searching = false;
+        self.form = Some(Box::new(Form::new()));
+    }
+
+    /// Sign in with what the form holds, on a thread of its own; the
+    /// account is added if it can.
+    fn submit(&mut self) {
+        let Some(form) = &mut self.form else { return };
+        let f = &form.fields;
+        let missing = [EMAIL, NAME, SERVER, PASSWORD]
+            .into_iter()
+            .find(|&i| f[i].trim().is_empty());
+        let port = f[PORT].trim().parse::<u16>();
+        if let Some(i) = missing {
+            form.at = i;
+            form.failed = true;
+            form.note = Some(format!("{} is needed", FIELDS[i]));
+            return;
+        }
+        let Ok(port) = port else {
+            form.at = PORT;
+            form.failed = true;
+            form.note = Some("the port is a number, as 993".to_string());
+            return;
+        };
+        let mut account = setup::account(&f[NAME], &f[EMAIL], &f[SERVER], port, &f[USER]);
+        account.password = Some(f[PASSWORD].clone());
+        form.checking = true;
+        form.failed = false;
+        form.note = Some(format!("signing in to {}…", account.host));
+        let (path, keep, replies) = (self.config.clone(), self.keep, self.replies_to.clone());
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let name = account.name.clone();
+            let done = setup::add(&path, account, keep)
+                .map(|(imap, folders)| Added {
+                    name,
+                    store: Box::new(imap),
+                    folders,
+                })
+                .map_err(|e| format!("{e:#}"));
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Added(done),
+            });
+        });
+    }
+
+    /// Take on the account the form added, and list its inbox; or say in
+    /// the form why it could not be.
+    fn added(&mut self, done: Result<Added, String>) {
+        match done {
+            Ok(Added {
+                name,
+                store,
+                folders,
+            }) => {
+                self.form = None;
+                let a = self.join(name.clone(), store);
+                self.accounts[a].folders = folders;
+                self.accounts[a].state = State::Ready;
+                self.rebuild();
+                if let Some(row) = self
+                    .rows
+                    .iter()
+                    .position(|r| matches!(r, Row::Folder(x, _) if *x == a))
+                {
+                    self.row = row;
+                    self.open_folder();
+                    self.focus = Focus::List;
+                }
+                let paths: Vec<String> = self.accounts[a]
+                    .folders
+                    .iter()
+                    .filter(|f| f.selectable)
+                    .map(|f| f.path.clone())
+                    .collect();
+                for p in paths {
+                    self.ask(a, Ask::Count(p));
+                }
+                self.status = format!("added {name}");
+            }
+            Err(e) => match &mut self.form {
+                Some(form) => {
+                    form.checking = false;
+                    form.failed = true;
+                    form.note = Some(e);
+                }
+                None => self.status = format!("cannot add the account: {}", first_line(&e)),
+            },
+        }
+    }
+
+    /// Remove the account at `a`: from the file, its password forgotten,
+    /// and from the screen.
+    fn remove(&mut self, a: usize) {
+        let name = self.accounts[a].name.clone();
+        if let Err(e) = setup::remove(&self.config, &name, false) {
+            self.status = format!("cannot remove {name}: {e:#}");
+            return;
+        }
+        self.accounts[a].asks = None;
+        self.listed.retain(|(x, _), _| *x != a);
+        self.read.retain(|(x, _, _), _| *x != a);
+        if self.listing.as_ref().is_some_and(|l| l.account == a) {
+            self.listing = None;
+            self.reading = None;
+            self.shown.clear();
+            self.query.clear();
+            self.found = None;
+        }
+        self.rebuild();
+        if self.listing.is_none() {
+            self.open_folder();
+        }
+        self.status = format!("removed {name}; its mail stays on its server");
+    }
+
+    /// Take a key in the form.
+    fn form_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(form) = &mut self.form else { return };
+        if form.checking {
+            if key.code == KeyCode::Esc {
+                self.form = None;
+                self.status = "the account is still signing in; it is added if it can".into();
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.form = None,
+            KeyCode::Tab | KeyCode::Down => form.at = (form.at + 1) % FIELDS.len(),
+            KeyCode::BackTab | KeyCode::Up => form.at = (form.at + FIELDS.len() - 1) % FIELDS.len(),
+            KeyCode::Enter if form.at == PASSWORD => self.submit(),
+            KeyCode::Enter => form.at += 1,
+            KeyCode::Backspace => {
+                form.fields[form.at].pop();
+                form.typed[form.at] = true;
+            }
+            KeyCode::Char('u') if ctrl => {
+                form.fields[form.at].clear();
+                form.typed[form.at] = true;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                form.fields[form.at].push(c);
+                form.typed[form.at] = true;
+            }
+            _ => {}
+        }
+        if let Some(form) = &mut self.form
+            && form.at == EMAIL
+            && !form.checking
+        {
+            form.failed = false;
+            form.fill();
+        }
     }
 
     pub fn current(&self) -> Option<&Summary> {
@@ -607,7 +877,7 @@ impl App {
                 },
             );
         }
-        for a in 0..self.accounts.len() {
+        for a in self.live().collect::<Vec<_>>() {
             if matches!(self.accounts[a].state, State::Failed(_)) {
                 self.accounts[a].state = State::Connecting;
                 self.ask(a, Ask::Folders);
@@ -772,6 +1042,17 @@ impl App {
             self.help = false;
             return;
         }
+        if self.form.is_some() {
+            return self.form_key(key);
+        }
+        if let Some(a) = self.removing.take() {
+            if key.code == KeyCode::Char('y') {
+                self.remove(a);
+            } else {
+                self.status = format!("kept {}", self.accounts[a].name);
+            }
+            return;
+        }
         if self.searching {
             match key.code {
                 KeyCode::Esc => {
@@ -850,6 +1131,7 @@ impl App {
                 }
             },
             KeyCode::Enter => match self.focus {
+                Focus::Side if self.rows.get(self.row) == Some(&Row::Add) => self.open_form(),
                 Focus::Side => {
                     self.due = None;
                     self.open_folder();
@@ -883,6 +1165,18 @@ impl App {
             }
             KeyCode::Char('o') => self.open_in_browser(),
             KeyCode::Char('a') => self.save_attachments(),
+            KeyCode::Char('A') => self.open_form(),
+            KeyCode::Char('x') if self.focus == Focus::Side => {
+                let a = match self.rows.get(self.row) {
+                    Some(&Row::Account(a) | &Row::Folder(a, _)) => a,
+                    _ => return,
+                };
+                if self.editable {
+                    self.removing = Some(a);
+                } else {
+                    self.open_form();
+                }
+            }
             _ => {}
         }
     }
@@ -916,7 +1210,7 @@ impl App {
                         break;
                     }
                     at = next;
-                    if matches!(self.rows[at], Row::Folder(..)) {
+                    if matches!(self.rows[at], Row::Folder(..) | Row::Add) {
                         self.row = at;
                         break;
                     }
@@ -1017,10 +1311,17 @@ impl App {
             self.help = false;
             return;
         }
+        if self.form.is_some() || self.removing.is_some() {
+            return;
+        }
         self.searching = false;
         match at {
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
+            Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {
+                self.row = i;
+                self.open_form();
+            }
             Some(Target::Row(i)) => {
                 self.focus = Focus::Side;
                 if matches!(self.rows.get(i), Some(Row::Folder(..))) {

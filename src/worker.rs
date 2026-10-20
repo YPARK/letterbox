@@ -68,6 +68,15 @@ pub enum Answer {
     },
     /// Asked, and passed over for what was asked after it.
     Skipped,
+    /// An account added, signed in, with its folders; not a store's
+    /// answer, but the form's.
+    Added(Result<Added, String>),
+}
+
+pub struct Added {
+    pub name: String,
+    pub store: Box<dyn Store>,
+    pub folders: Vec<Folder>,
 }
 
 pub struct Reply {

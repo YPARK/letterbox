@@ -32,6 +32,10 @@ pub struct Account {
     pub security: Security,
     /// A shell command that prints the password, as `pass show mail/work`.
     pub password_command: Option<String>,
+    /// The password as typed, while an account is being added: never
+    /// written to the file.
+    #[serde(skip)]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -56,6 +60,9 @@ impl Account {
     /// The password: printed by `password_command`, or, on macOS, kept in
     /// the keychain for the host and user.
     pub fn password(&self) -> anyhow::Result<String> {
+        if let Some(p) = &self.password {
+            return Ok(p.clone());
+        }
         if let Some(command) = &self.password_command {
             let out = Command::new("sh")
                 .args(["-c", command])
@@ -141,6 +148,162 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Account>> {
 
 fn local(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// The IMAP server of an address, as the large providers have it, else
+/// `imap.` and its domain; and what to know to sign in there.
+pub fn guess(email: &str) -> (String, Option<&'static str>) {
+    let domain = email
+        .rsplit_once('@')
+        .map(|(_, d)| d.trim().to_lowercase())
+        .unwrap_or_default();
+    let known: Option<(&str, Option<&'static str>)> = match domain.as_str() {
+        "gmail.com" | "googlemail.com" => Some((
+            "imap.gmail.com",
+            Some("Gmail takes an app password, made at myaccount.google.com/apppasswords"),
+        )),
+        "icloud.com" | "me.com" | "mac.com" => Some((
+            "imap.mail.me.com",
+            Some("iCloud takes an app-specific password, made at account.apple.com"),
+        )),
+        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => Some((
+            "outlook.office365.com",
+            Some("Outlook signs in through the browser, which letterbox cannot do yet"),
+        )),
+        "yahoo.com" | "ymail.com" => Some((
+            "imap.mail.yahoo.com",
+            Some("Yahoo takes an app password, made in its account security settings"),
+        )),
+        "fastmail.com" | "fastmail.fm" => Some((
+            "imap.fastmail.com",
+            Some("Fastmail takes an app password, made in its settings"),
+        )),
+        "proton.me" | "protonmail.com" => Some((
+            "127.0.0.1",
+            Some("Proton is read through its Bridge: port 1143, security \"starttls\""),
+        )),
+        _ => None,
+    };
+    match known {
+        Some((host, note)) => (host.to_string(), note),
+        None if domain.is_empty() => (String::new(), None),
+        None => (format!("imap.{domain}"), None),
+    }
+}
+
+/// `account` as a table of the file, what is as it would be without
+/// saying left out.
+fn table(a: &Account) -> toml_edit::Table {
+    let mut t = toml_edit::Table::new();
+    t["name"] = toml_edit::value(&a.name);
+    t["email"] = toml_edit::value(&a.email);
+    t["host"] = toml_edit::value(&a.host);
+    if let Some(p) = a.port {
+        t["port"] = toml_edit::value(i64::from(p));
+    }
+    if let Some(u) = a.user.as_ref().filter(|u| **u != a.email) {
+        t["user"] = toml_edit::value(u);
+    }
+    match a.security {
+        Security::Tls => {}
+        Security::Starttls => t["security"] = toml_edit::value("starttls"),
+        Security::None => t["security"] = toml_edit::value("none"),
+    }
+    if let Some(c) = &a.password_command {
+        t["password_command"] = toml_edit::value(c);
+    }
+    t
+}
+
+fn read_doc(path: &Path) -> anyhow::Result<toml_edit::DocumentMut> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text
+            .parse()
+            .with_context(|| format!("cannot read {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
+}
+
+/// Write `doc` to `path` whole, or not at all: to a file beside it first.
+fn write_doc(path: &Path, doc: &toml_edit::DocumentMut) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("toml.new");
+    std::fs::write(&tmp, doc.to_string())
+        .with_context(|| format!("cannot write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("cannot write {}", path.display()))
+}
+
+/// Add `account` to the file at `path`, made if there is none, its other
+/// accounts and comments kept as they are.
+pub fn add(path: &Path, account: &Account) -> anyhow::Result<()> {
+    if account.name.trim().is_empty() {
+        bail!("an account needs a name");
+    }
+    if load(path)?
+        .iter()
+        .any(|a| a.name.eq_ignore_ascii_case(&account.name))
+    {
+        bail!("there is an account named {} already", account.name);
+    }
+    let mut doc = read_doc(path)?;
+    let accounts = doc
+        .entry("account")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(Default::default()))
+        .as_array_of_tables_mut()
+        .context("`account` in the file is not a list of [[account]] tables")?;
+    accounts.push(table(account));
+    write_doc(path, &doc)
+}
+
+/// Take the account named `name` out of the file at `path`; the account,
+/// as it was.
+pub fn remove(path: &Path, name: &str) -> anyhow::Result<Account> {
+    let account = load(path)?
+        .into_iter()
+        .find(|a| a.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| anyhow::anyhow!("no account named {name}"))?;
+    let mut doc = read_doc(path)?;
+    let named = |t: &toml_edit::Table| {
+        t.get("name")
+            .and_then(toml_edit::Item::as_str)
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    };
+    let mut header = None;
+    if let Some(accounts) = doc
+        .get_mut("account")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        // The comments above the first account are the file's, as its
+        // heading: they stay, above the account after it, or at the end.
+        if accounts.get(0).is_some_and(named) {
+            header = accounts
+                .get(0)
+                .and_then(|t| t.decor().prefix())
+                .and_then(|p| p.as_str())
+                .map(str::to_string);
+        }
+        accounts.retain(|t| !named(t));
+        if let Some(h) = &header
+            && let Some(first) = accounts.get_mut(0)
+        {
+            let own = first
+                .decor()
+                .prefix()
+                .and_then(|p| p.as_str())
+                .unwrap_or_default()
+                .to_string();
+            first.decor_mut().set_prefix(format!("{h}{own}"));
+            header = None;
+        }
+    }
+    if let Some(h) = header {
+        doc.set_trailing(h);
+    }
+    write_doc(path, &doc)?;
+    Ok(account)
 }
 
 /// What `letterbox accounts` shows with none set up.

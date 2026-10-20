@@ -344,6 +344,7 @@ fn server() -> (Account, Boxes) {
         user: Some("me".to_string()),
         security: Security::None,
         password_command: Some("echo secret".to_string()),
+        password: None,
     };
     (account, boxes)
 }
@@ -717,6 +718,160 @@ fn long_words_break_after_a_slash_or_a_dot() {
     for l in &lines {
         assert!(unicode_width::UnicodeWidthStr::width(l.as_str()) <= 24);
     }
+}
+
+// ---- adding and removing accounts ----
+
+/// Where a test keeps a password: in no keychain, but a command printing it.
+fn keep_in_test(_: &str, _: &str, password: &str) -> anyhow::Result<Option<String>> {
+    Ok(Some(format!("echo {password}")))
+}
+
+fn empty_app(config: PathBuf) -> App {
+    let mut app = App::new(Vec::new(), config);
+    app.keep = keep_in_test;
+    app
+}
+
+/// The form filled in for the fake server, `password` typed last.
+fn fill_form(app: &mut App, port: u16, password: &str) {
+    let port = port.to_string();
+    press(
+        app,
+        &[
+            "A",
+            "me@example.com",
+            "<tab>",
+            "<tab>",
+            "<c-u>",
+            "127.0.0.1",
+            "<tab>",
+            "<c-u>",
+            &port,
+            "<tab>",
+            "<c-u>",
+            "me",
+            "<tab>",
+            password,
+            "<enter>",
+        ],
+    );
+}
+
+#[test]
+fn an_account_is_added_from_the_tui_once_it_signs_in_and_removed() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("letterbox/accounts.toml");
+    let mut app = empty_app(path.clone());
+    assert!(app::screen(&mut app, 120, 30).contains("Press A to add one"));
+    press(&mut app, &["A", "me@example.com"]);
+    let form = app.form.as_ref().unwrap();
+    assert_eq!(form.fields[1], "example.com");
+    assert_eq!(form.fields[2], "imap.example.com");
+    assert_eq!(form.fields[4], "me@example.com");
+    press(&mut app, &["<esc>"]);
+    assert!(app.form.is_none());
+
+    fill_form(&mut app, account.port.unwrap(), "secret");
+    assert!(
+        app.form.is_none(),
+        "{:?}",
+        app.form.as_ref().and_then(|f| f.note.clone())
+    );
+    assert_eq!(app.status, "added example.com");
+    assert_eq!(app.folder_name(), "Inbox");
+    assert_eq!(app.shown.len(), 3);
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(file.contains("host = \"127.0.0.1\""), "{file}");
+    assert!(
+        file.contains("password_command = \"echo secret\""),
+        "{file}"
+    );
+    assert!(file.contains("user = \"me\""), "{file}");
+    assert!(file.contains("security = \"none\""), "{file}");
+    // As read again, it is the account added.
+    let accounts = crate::config::load(&path).unwrap();
+    assert_eq!(accounts[0].port, account.port);
+
+    press(&mut app, &["h", "x", "n"]);
+    assert_eq!(crate::config::load(&path).unwrap().len(), 1);
+    press(&mut app, &["x", "y"]);
+    assert!(crate::config::load(&path).unwrap().is_empty());
+    assert!(app.listing.is_none());
+    assert!(app::screen(&mut app, 120, 30).contains("No accounts yet."));
+}
+
+#[test]
+fn an_account_that_cannot_sign_in_is_not_added() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = empty_app(path.clone());
+    fill_form(&mut app, account.port.unwrap(), "wrong");
+    let form = app.form.as_ref().expect("the form stays open");
+    assert!(form.failed);
+    assert!(
+        form.note.as_ref().unwrap().contains("cannot sign in"),
+        "{:?}",
+        form.note
+    );
+    assert!(!path.exists());
+    let screen = app::screen(&mut app, 100, 30);
+    assert!(
+        screen.contains("Add account") && screen.contains("•••••▏"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_demos_account_is_not_changed() {
+    let mut app = demo();
+    app.fix_accounts();
+    press(&mut app, &["A"]);
+    assert!(app.form.is_none());
+    assert!(app.status.contains("without --demo"));
+    assert!(!app.rows.contains(&app::Row::Add));
+}
+
+#[test]
+fn the_accounts_file_keeps_its_comments_as_accounts_come_and_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "# my mail\n[[account]]\nname = \"Home\" # the old one\nemail = \"a@b.c\"\nhost = \"imap.b.c\"\n",
+    )
+    .unwrap();
+    let mut work = crate::setup::account("Work", "me@ubc.ca", "imap.ubc.ca", 993, "me@ubc.ca");
+    work.password_command = Some("pass mail".to_string());
+    crate::config::add(&path, &work).unwrap();
+    assert!(crate::config::add(&path, &work).is_err(), "a name twice");
+    let names: Vec<String> = crate::config::load(&path)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, ["Home", "Work"]);
+    let removed = crate::setup::remove(&path, "home", true).unwrap();
+    assert_eq!(removed.host, "imap.b.c");
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(file.starts_with("# my mail\n"), "{file}");
+    assert!(
+        !file.contains("Home") && file.contains("name = \"Work\""),
+        "{file}"
+    );
+    assert!(!file.contains("port") && !file.contains("user"), "{file}");
+    assert!(crate::setup::remove(&path, "Home", true).is_err());
+}
+
+#[test]
+fn providers_servers_are_guessed_from_the_address() {
+    use crate::config::guess;
+    assert_eq!(guess("x@gmail.com").0, "imap.gmail.com");
+    assert!(guess("x@gmail.com").1.unwrap().contains("app password"));
+    assert_eq!(guess("x@ubc.ca"), ("imap.ubc.ca".to_string(), None));
+    assert_eq!(guess("nothing").0, "");
 }
 
 #[test]

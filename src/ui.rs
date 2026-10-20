@@ -3,8 +3,7 @@
 //! side where there is room. In a narrow window, as an Emacs buffer split
 //! in two, one of them at a time.
 
-use crate::app::{App, Body, Focus, Row, State, Target};
-use crate::config;
+use crate::app::{App, Body, FIELDS, Focus, Form, Row, State, Target};
 use crate::mail::Message;
 use crate::theme::Theme;
 use jiff::{Timestamp, ToSpan, Zoned};
@@ -80,10 +79,134 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         reader(f, app, read);
     }
     keys(f, app, foot);
-    if app.help {
-        let area = help(f, &t);
+    let popup = if app.help {
+        Some(help(f, &t))
+    } else if let Some(form) = &app.form {
+        Some(form_dialog(f, &t, form))
+    } else {
+        app.removing.map(|a| removing(f, &t, &app.accounts[a].name))
+    };
+    if let Some(area) = popup {
         app.targets.push((area, Target::Popup));
     }
+}
+
+fn dialog<'a>(t: &Theme, title: &'a str, foot: &'a str) -> Block<'a> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.dim))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::new().fg(t.title).bold(),
+        ))
+        .title_bottom(Line::styled(format!(" {foot} "), Style::new().fg(t.dim)))
+        .padding(Padding::horizontal(1))
+        .style(Style::new().bg(t.page).fg(t.text))
+}
+
+/// The form an account is added with: each field on a line, the one typed
+/// in lit; the password shown as dots; what to know, or what went wrong,
+/// below.
+fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> Rect {
+    let width = f.area().width.min(72);
+    let room = (width as usize).saturating_sub(4);
+    let value_w = room.saturating_sub(KEY + 1);
+    let mut lines = vec![Line::raw("")];
+    for (i, name) in FIELDS.iter().enumerate() {
+        let here = i == form.at && !form.checking;
+        let value = if *name == "Password" {
+            "•".repeat(form.fields[i].chars().count())
+        } else {
+            form.fields[i].clone()
+        };
+        let mut value = tail(&value, value_w.saturating_sub(1));
+        if here {
+            value.push('▏');
+        }
+        let pad = value_w.saturating_sub(value.width());
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{name:<KEY$}"),
+                if here {
+                    Style::new().fg(t.title).bold()
+                } else {
+                    Style::new().fg(t.dim)
+                },
+            ),
+            Span::styled(
+                format!(" {value}{}", " ".repeat(pad)),
+                Style::new()
+                    .fg(t.text)
+                    .bg(if here { t.field } else { t.page }),
+            ),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    let note_style = if form.failed {
+        Style::new().fg(t.error)
+    } else {
+        Style::new().fg(t.soft)
+    };
+    if let Some(note) = &form.note {
+        lines.extend(
+            wrap(note, room)
+                .into_iter()
+                .map(|l| Line::styled(l, note_style)),
+        );
+    }
+    let keeper = if cfg!(target_os = "macos") {
+        "the keychain"
+    } else {
+        "the system's keyring"
+    };
+    lines.extend(
+        wrap(
+            &format!("It signs in before it is added. The password is kept in {keeper}, not in the accounts file."),
+            room,
+        )
+        .into_iter()
+        .map(|l| Line::styled(l, Style::new().fg(t.faint))),
+    );
+    let foot = if form.checking {
+        "signing in… · esc closes"
+    } else {
+        "tab next · ⏎ on the password signs in and adds · esc cancel"
+    };
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, "Add account", foot)),
+        area,
+    );
+    area
+}
+
+fn removing(f: &mut Frame, t: &Theme, name: &str) -> Rect {
+    let width = f.area().width.min(64);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![Line::raw("")];
+    lines.extend(
+        wrap(
+            &format!(
+                "Remove {name} from letterbox? Its mail stays on its server; the password \
+                 letterbox kept for it is forgotten."
+            ),
+            room,
+        )
+        .into_iter()
+        .map(Line::raw),
+    );
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            "Remove account",
+            "y removes · any other key keeps it",
+        )),
+        area,
+    );
+    area
 }
 
 fn search(f: &mut Frame, app: &mut App, area: Rect) {
@@ -224,6 +347,13 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(count, Style::new().fg(t.dim).bold()),
                 ]))
             }
+            Row::Add => ListItem::new(vec![
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("  + ", Style::new().fg(t.accent)),
+                    Span::styled("Add account", Style::new().fg(t.dim)),
+                ]),
+            ]),
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(app.row));
@@ -243,7 +373,13 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let heights: Vec<u16> = app
         .rows
         .iter()
-        .map(|r| if matches!(r, Row::Account(_)) { 2 } else { 1 })
+        .map(|r| {
+            if matches!(r, Row::Account(_) | Row::Add) {
+                2
+            } else {
+                1
+            }
+        })
         .collect();
     for (i, row) in rows(area, state.offset(), &heights) {
         app.targets.push((row, Target::Row(i)));
@@ -364,23 +500,26 @@ fn empty(f: &mut Frame, app: &App, area: Rect) {
     let dim = Style::new().fg(t.dim);
     let title = Style::new().fg(t.title).bold();
     let mut lines = vec![Line::raw("")];
-    if app.accounts.is_empty() {
+    if app.live().next().is_none() {
         lines.push(Line::styled("  No accounts yet.", title));
         lines.push(Line::raw(""));
-        lines.push(Line::styled(
-            format!("  Add one to {}:", tilde(&app.config)),
-            Style::new().fg(t.text),
-        ));
-        lines.push(Line::raw(""));
-        lines.extend(
-            config::EXAMPLE
-                .lines()
-                .map(|l| Line::styled(format!("    {l}"), dim)),
-        );
-        lines.push(Line::raw(""));
         lines.push(Line::from(vec![
-            Span::styled("  Or try ", Style::new().fg(t.text)),
-            Span::styled("letterbox --demo", title),
+            Span::styled("  Press ", Style::new().fg(t.text)),
+            Span::styled("A", title),
+            Span::styled(
+                " to add one: your address and password.",
+                Style::new().fg(t.text),
+            ),
+        ]));
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!("  They are kept in {}.", tilde(&app.config)),
+            dim,
+        ));
+        lines.push(Line::from(vec![
+            Span::styled("  Or try ", dim),
+            Span::styled("letterbox --demo", Style::new().fg(t.soft).bold()),
+            Span::styled(" first.", dim),
         ]));
     } else if let Some(l) = &app.listing {
         if let Some(e) = &l.error {
@@ -627,7 +766,8 @@ fn hints(app: &App, width: u16) -> Vec<Line<'static>> {
         Focus::Side => vec![
             ("⏎", "open"),
             ("j/k", "move"),
-            ("/", "search"),
+            ("A", "add account"),
+            ("x", "remove"),
             ("r", "refresh"),
         ],
         Focus::List => vec![
@@ -710,6 +850,8 @@ fn help(f: &mut Frame, t: &Theme) -> Rect {
             "r",
             "look for new mail now; it is looked for every two minutes",
         ),
+        ("A", "add an account: its address and password"),
+        ("x", "remove the account picked in the sidebar"),
         ("click", "pick; the wheel scrolls"),
         ("q", "quit"),
     ];

@@ -25,8 +25,25 @@ with RustCrypto's algorithms, which are not yet audited.
 
 ## Accounts
 
-In `~/.config/letterbox/accounts.toml` (`$LETTERBOX_CONFIG`, or
-`--config`):
+Press `A` in letterbox, or, from the shell:
+
+```sh
+letterbox accounts add                     # asks for the address and password
+letterbox accounts add --email me@example.com --host imap.example.com
+letterbox accounts                         # those set up; --check signs in to each
+letterbox accounts remove Work             # its mail stays on its server
+```
+
+The server is filled in from the address, as the large providers have it
+(Gmail, iCloud, Yahoo and Fastmail take an app password, which letterbox
+says), else `imap.` and the domain. An account is added only once it signs
+in, so a mistyped server or password is said at once. Its password is
+kept in the macOS keychain, or on Linux the Secret Service through
+`secret-tool`, never in the file; removing the account forgets it. In the
+TUI, `x` on an account in the sidebar removes it, after asking.
+
+The accounts are in `~/.config/letterbox/accounts.toml` (`$LETTERBOX_CONFIG`,
+or `--config`), to edit by hand as well; letterbox keeps its comments:
 
 ```toml
 [[account]]
@@ -38,15 +55,9 @@ host = "imap.example.com"
 # password_command = "pass show mail/work"
 ```
 
-The password is printed by `password_command`, or, without one, on macOS,
-kept in the keychain:
-
-```sh
-security add-internet-password -s imap.example.com -a me@example.com -w
-```
-
-`letterbox accounts --check` signs in to each, and says what went wrong.
-Outlook signed into in the browser, without a password, is to come.
+Without a `password_command`, the password is the keychain's, for the host
+and user. Outlook signed into in the browser, without a password, is to
+come.
 
 ## Use
 
@@ -72,6 +83,8 @@ letterbox search grant report --account Work
 | `o` | open the message in the browser, as its HTML |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
 | `r` | look for new mail now; it is looked for every two minutes |
+| `A` | add an account |
+| `x` | in the sidebar, remove the account picked |
 | `?` | all the keys |
 | `q` | quit |
 

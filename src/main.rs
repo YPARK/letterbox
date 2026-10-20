@@ -6,6 +6,8 @@ mod config;
 mod demo;
 mod imap;
 mod mail;
+mod secret;
+mod setup;
 mod store;
 mod theme;
 mod ui;
@@ -51,8 +53,11 @@ struct Which {
 
 #[derive(Subcommand)]
 enum Command {
-    /// The accounts set up, and where; with --check, sign in to each
+    /// The accounts set up, and where; add and remove them
     Accounts {
+        #[command(subcommand)]
+        action: Option<AccountAction>,
+        /// Sign in to each, and say what went wrong
         #[arg(long)]
         check: bool,
     },
@@ -106,6 +111,144 @@ enum Command {
         svg: bool,
         keys: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum AccountAction {
+    /// Add an account, asking for what is not given; it signs in first, and
+    /// its password is kept in the keychain, not the file
+    Add {
+        #[arg(long)]
+        email: Option<String>,
+        /// What it is called here; its address's domain, else
+        #[arg(long)]
+        name: Option<String>,
+        /// The IMAP server; the provider's, or imap. and the domain, else
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long, default_value_t = 993)]
+        port: u16,
+        /// The name signed in with, if not the address
+        #[arg(long)]
+        user: Option<String>,
+        /// A command that prints the password, instead of keeping it
+        #[arg(long)]
+        password_command: Option<String>,
+    },
+    /// Remove an account; its mail stays on its server
+    Remove {
+        name: String,
+        /// Keep the password letterbox kept for it
+        #[arg(long)]
+        keep_password: bool,
+    },
+}
+
+/// Ask on the terminal, with `default` taken for nothing typed.
+fn ask(question: &str, default: &str) -> anyhow::Result<String> {
+    use std::io::Write;
+    if default.is_empty() {
+        eprint!("{question}: ");
+    } else {
+        eprint!("{question} [{default}]: ");
+    }
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let line = line.trim();
+    Ok(if line.is_empty() { default } else { line }.to_string())
+}
+
+/// Ask for a password on the terminal, not shown as it is typed; read
+/// from the input as a line where it is not a terminal.
+fn ask_password(question: &str) -> anyhow::Result<String> {
+    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use ratatui::crossterm::terminal;
+    use std::io::{IsTerminal, Write};
+    eprint!("{question}: ");
+    std::io::stderr().flush()?;
+    if !std::io::stdin().is_terminal() {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        eprintln!();
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    terminal::enable_raw_mode()?;
+    let mut password = String::new();
+    let done = loop {
+        match event::read() {
+            Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
+                KeyCode::Enter => break Ok(()),
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    break Err(anyhow::anyhow!("stopped"));
+                }
+                KeyCode::Esc => break Err(anyhow::anyhow!("stopped")),
+                KeyCode::Backspace => {
+                    password.pop();
+                }
+                KeyCode::Char(c) => password.push(c),
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(e) => break Err(e.into()),
+        }
+    };
+    terminal::disable_raw_mode()?;
+    eprintln!();
+    done.map(|()| password)
+}
+
+fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
+    let AccountAction::Add {
+        email,
+        name,
+        host,
+        port,
+        user,
+        password_command,
+    } = action
+    else {
+        unreachable!("only adding")
+    };
+    let email = match email {
+        Some(e) => e.clone(),
+        None => ask("Email", "")?,
+    };
+    if !email.contains('@') {
+        bail!("{email} is not an address");
+    }
+    let (guessed, note) = config::guess(&email);
+    let name = match name {
+        Some(n) => n.clone(),
+        None => ask("Name", &setup::name_for(&email))?,
+    };
+    let host = match host {
+        Some(h) => h.clone(),
+        None => ask("IMAP server", &guessed)?,
+    };
+    let mut account = setup::account(
+        &name,
+        &email,
+        &host,
+        *port,
+        user.as_deref().unwrap_or(&email),
+    );
+    if let Some(c) = password_command {
+        account.password_command = Some(c.clone());
+    } else {
+        if let Some(note) = note {
+            eprintln!("{note}");
+        }
+        account.password = Some(ask_password("Password")?);
+    }
+    eprintln!("signing in to {}…", account.host);
+    let (_, folders) = setup::add(&args.config, account, secret::store)?;
+    println!(
+        "added {name}: {} folders, in {}",
+        folders.len(),
+        args.config.display()
+    );
+    Ok(())
 }
 
 /// The accounts' stores, by name: the demo's, or those set up.
@@ -179,13 +322,36 @@ fn main() -> anyhow::Result<()> {
         None => {
             let mut app = app::App::new(stores(&args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
+            if args.demo {
+                app.fix_accounts();
+            }
             app::run(&mut app)
         }
-        Some(Command::Accounts { check }) => {
+        Some(Command::Accounts {
+            action: Some(action @ AccountAction::Add { .. }),
+            ..
+        }) => add_account(&args, action),
+        Some(Command::Accounts {
+            action:
+                Some(AccountAction::Remove {
+                    name,
+                    keep_password,
+                }),
+            ..
+        }) => {
+            let a = setup::remove(&args.config, name, *keep_password)?;
+            println!("removed {}; its mail stays on {}", a.name, a.host);
+            Ok(())
+        }
+        Some(Command::Accounts {
+            action: None,
+            check,
+        }) => {
             let accounts = config::load(&args.config)?;
             if accounts.is_empty() {
                 println!(
-                    "no accounts yet: add them to {}, as\n\n{}",
+                    "no accounts yet: `letterbox accounts add` adds one, or press A in \
+                     letterbox; or write them in {}, as\n\n{}",
                     args.config.display(),
                     config::EXAMPLE
                 );
@@ -292,6 +458,9 @@ fn main() -> anyhow::Result<()> {
         }) => {
             let mut app = app::App::new(stores(&args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
+            if args.demo {
+                app.fix_accounts();
+            }
             app.settle(Duration::from_secs(30));
             for key in keys.iter().flat_map(|k| app::keys(k)) {
                 // Drawn first, as a terminal would be, so that what a key
