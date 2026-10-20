@@ -434,7 +434,8 @@ fn imap_says_when_it_cannot_sign_in() {
 #[test]
 fn a_password_command_that_fails_is_said() {
     let (mut account, _) = server();
-    account.password_command = Some("echo no such entry >&2; exit 1".to_string());
+    // As sh and Windows's cmd both read it.
+    account.password_command = Some("echo no such entry 1>&2 && exit 1".to_string());
     let e = format!("{:#}", Imap::new(account).folders().unwrap_err());
     assert!(e.contains("no such entry"), "{e}");
 }
