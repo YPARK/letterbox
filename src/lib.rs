@@ -7,6 +7,7 @@ mod config;
 mod demo;
 mod imap;
 mod mail;
+mod mcp;
 mod oauth;
 mod secret;
 mod setup;
@@ -102,6 +103,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
+    /// program, as Cursor or Claude Code, runs `letterbox mcp`
+    Mcp,
     /// The TUI's screen after the keys given, as text: `j <enter>`
     #[command(hide = true)]
     Screen {
@@ -604,6 +608,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             println!("\n{}", m.text);
             Ok(())
         }
+        Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
         Some(Command::Screen {
             width,
             height,

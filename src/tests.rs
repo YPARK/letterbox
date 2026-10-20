@@ -618,7 +618,7 @@ fn reading_a_message_marks_it_read_and_u_unmarks_it() {
     let Some(Body::Ready(m)) = app.reading.as_ref().map(|r| &r.body) else {
         panic!("not read");
     };
-    assert!(m.text.contains("Note G"));
+    assert!(m.text.contains("sets out how"));
     assert!(app.shown[0].flags.seen);
     assert_eq!(unseen(&app), Some(1));
     press(&mut app, &["u"]);
@@ -1405,5 +1405,148 @@ fn a_token_running_out_is_renewed() {
         crate::oauth::access(&a).unwrap(),
         "access-2",
         "kept, not renewed again"
+    );
+}
+
+// ---- for AI agents: MCP ----
+
+fn call(server: &mut crate::mcp::Server, tool: &str, args: serde_json::Value) -> serde_json::Value {
+    let reply = server
+        .answer(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": tool, "arguments": args }
+        }))
+        .unwrap();
+    reply["result"].clone()
+}
+
+#[test]
+fn an_agent_lists_searches_reads_and_marks_mail() {
+    use serde_json::json;
+    let mut server = crate::mcp::Server::new(&PathBuf::from("/nowhere"), true).unwrap();
+    let init = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18" } }))
+        .unwrap();
+    assert_eq!(init["result"]["serverInfo"]["name"], "letterbox");
+    assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("never followed")
+    );
+    assert!(
+        server
+            .answer(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+            .is_none()
+    );
+    let tools = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .unwrap();
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "list_accounts",
+            "list_messages",
+            "search_messages",
+            "read_message",
+            "mark_message"
+        ]
+    );
+
+    let accounts = call(&mut server, "list_accounts", json!({}));
+    let inbox = &accounts["structuredContent"]["accounts"][0]["folders"][0];
+    assert_eq!(
+        (inbox["path"].as_str(), inbox["total"].as_u64()),
+        (Some("INBOX"), Some(6))
+    );
+
+    let listed = call(&mut server, "list_messages", json!({ "limit": 2 }));
+    let listed = &listed["structuredContent"];
+    assert_eq!(listed["shown"], 2);
+    assert_eq!(listed["more"], true);
+    assert_eq!(listed["messages"][0]["from"], "Ada Lovelace");
+    let uid = listed["messages"][0]["uid"].as_u64().unwrap();
+
+    let found = call(&mut server, "search_messages", json!({ "query": "photo" }));
+    assert_eq!(
+        found["structuredContent"]["messages"][0]["subject"],
+        "Photo 51"
+    );
+
+    let read = call(
+        &mut server,
+        "read_message",
+        json!({ "uid": uid, "max_chars": 50 }),
+    );
+    let read = &read["structuredContent"];
+    assert_eq!(read["text"].as_str().unwrap().chars().count(), 50);
+    assert_eq!(read["more"], "from_char 50 for more");
+    let rest = call(
+        &mut server,
+        "read_message",
+        json!({ "uid": uid, "from_char": 50 }),
+    );
+    assert!(
+        rest["structuredContent"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("sets out how")
+    );
+    let again = call(&mut server, "list_messages", json!({ "limit": 1 }));
+    assert_eq!(
+        again["structuredContent"]["messages"][0]["seen"], false,
+        "read, not marked"
+    );
+
+    let marked = call(
+        &mut server,
+        "mark_message",
+        json!({ "uid": uid, "seen": true, "flagged": true }),
+    );
+    assert_eq!(marked["isError"], false);
+    let after = call(&mut server, "list_messages", json!({ "limit": 1 }));
+    let first = &after["structuredContent"]["messages"][0];
+    assert_eq!(
+        (first["seen"].as_bool(), first["flagged"].as_bool()),
+        (Some(true), Some(true))
+    );
+
+    let wrong = call(&mut server, "list_messages", json!({ "account": "Nope" }));
+    assert_eq!(wrong["isError"], true);
+    assert!(
+        wrong["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("there are Demo")
+    );
+    let none = call(&mut server, "mark_message", json!({ "uid": uid }));
+    assert_eq!(none["content"][0]["text"], "say seen, flagged, or both");
+}
+
+#[test]
+fn an_agent_is_told_a_vaults_account_is_not_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "[[account]]\nname = \"Safe\"\nemail = \"a@b.c\"\nhost = \"imap.b.c\"\nkeep = \"vault\"\n",
+    )
+    .unwrap();
+    crate::vault::lock();
+    let mut server = crate::mcp::Server::new(&path, false).unwrap();
+    let r = call(&mut server, "list_messages", serde_json::json!({}));
+    assert_eq!(r["isError"], true);
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("keep it in the keyring")
     );
 }

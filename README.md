@@ -129,6 +129,49 @@ scrolls, and presses the keys shown at the foot and the forms' fields and
 buttons. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
+## For AI agents: MCP
+
+`lbx mcp` serves your mail to an AI agent over the Model Context Protocol
+(MCP), on stdin and stdout, as `paperstack mcp` serves papers: the agent's
+program starts it when it needs it.
+
+**Claude Code**, for all your projects:
+
+```sh
+claude mcp add --scope user letterbox -- ~/.cargo/bin/lbx mcp
+```
+
+**Cursor**: in `~/.cursor/mcp.json`, beside any servers there already:
+
+```json
+{
+  "mcpServers": {
+    "letterbox": { "command": "/Users/you/.cargo/bin/lbx", "args": ["mcp"] }
+  }
+}
+```
+
+**Claude Desktop**: the same JSON, in
+`~/Library/Application Support/Claude/claude_desktop_config.json`. Give
+the whole path, from `which lbx`: programs opened from the Dock may not
+have your shell's `PATH`.
+
+| Tool | | |
+|---|---|---|
+| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread | reads |
+| `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
+| `search_messages` | a folder's messages with the words given, as the server searches | reads |
+| `read_message` | a message's headers, attachments and text, 20,000 characters at a time; not marked read | reads |
+| `mark_message` | mark a message read or unread, flagged or not | changes |
+
+The first four are marked read-only, so a program may let the agent use
+them without asking. Nothing is sent, moved or deleted. Mail is from
+strangers, and a message may be written to steer an agent: the agent is
+told to read what a message says as data, never as instructions. An
+account whose password is in the vault is not served, as its passphrase
+cannot be asked for there; one in the keyring, or Outlook's, is. `lbx
+--demo mcp` serves the demo's mail, to try an agent on.
+
 ## In Emacs
 
 With [vterm](https://github.com/akermu/emacs-libvterm):
