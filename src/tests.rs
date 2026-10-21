@@ -4,9 +4,9 @@ use crate::demo::Demo;
 use crate::imap::Imap;
 use crate::mail::{self, Folder, Role};
 use crate::secret::Keeper;
-use crate::store::{Flag, Store};
+use crate::store::{Flag, Removal, Store};
 use crate::ui;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,7 @@ use std::time::Duration;
 
 // ---- an IMAP server, just enough of one, on this machine ----
 
+#[derive(Clone)]
 struct Letter {
     uid: u32,
     flags: Vec<&'static str>,
@@ -21,7 +22,7 @@ struct Letter {
 }
 
 struct Mailbox {
-    name: &'static str,
+    name: String,
     attributes: &'static str,
     letters: Vec<Letter>,
 }
@@ -29,9 +30,15 @@ struct Mailbox {
 type Boxes = Arc<Mutex<Vec<Mailbox>>>;
 
 fn raw(from: &str, subject: &str, extra: &str, body: &str) -> Vec<u8> {
+    let id: String = subject
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(40)
+        .collect();
     format!(
         "From: {from}\r\nTo: me@example.com\r\nSubject: {subject}\r\n\
-         Date: Tue, 20 Oct 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n{extra}\r\n{body}"
+         Date: Tue, 20 Oct 2026 10:00:00 +0000\r\nMessage-ID: <{id}@example>\r\n\
+         MIME-Version: 1.0\r\n{extra}\r\n{body}"
     )
     .into_bytes()
 }
@@ -75,37 +82,37 @@ fn boxes() -> Boxes {
     ];
     Arc::new(Mutex::new(vec![
         Mailbox {
-            name: "INBOX",
+            name: "INBOX".to_string(),
             attributes: "\\HasNoChildren",
             letters: inbox,
         },
         Mailbox {
-            name: "Projects",
+            name: "Projects".to_string(),
             attributes: "\\HasChildren",
             letters: Vec::new(),
         },
         Mailbox {
-            name: "Projects/Grant",
+            name: "Projects/Grant".to_string(),
             attributes: "\\HasNoChildren",
             letters: Vec::new(),
         },
         Mailbox {
-            name: "Deleted Items",
+            name: "Deleted Items".to_string(),
             attributes: "\\HasNoChildren",
             letters: Vec::new(),
         },
         Mailbox {
-            name: "Sent Items",
+            name: "Sent Items".to_string(),
             attributes: "\\HasNoChildren \\Sent",
             letters: Vec::new(),
         },
         Mailbox {
-            name: "Entw&APw-rfe",
+            name: "Entw&APw-rfe".to_string(),
             attributes: "\\HasNoChildren",
             letters: Vec::new(),
         },
         Mailbox {
-            name: "Drafts",
+            name: "Drafts".to_string(),
             attributes: "\\HasNoChildren \\Drafts",
             letters: Vec::new(),
         },
@@ -143,6 +150,22 @@ fn words(s: &str) -> Vec<String> {
         }
     }
     out
+}
+
+fn next_uid(boxes: &[Mailbox]) -> u32 {
+    boxes
+        .iter()
+        .flat_map(|b| b.letters.iter().map(|l| l.uid))
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+/// The byte count of an IMAP literal, as `{310}` at the end of a command.
+fn literal_size(args: &str) -> usize {
+    args.rsplit_once('{')
+        .and_then(|(_, n)| n.trim_end_matches('}').parse().ok())
+        .unwrap_or(0)
 }
 
 /// The numbers in an IMAP set, as `1:3,7`.
@@ -190,7 +213,7 @@ fn fetched(seq: usize, l: &Letter, items: &str) -> Vec<u8> {
     out
 }
 
-fn serve(tcp: TcpStream, boxes: Boxes) {
+fn serve(tcp: TcpStream, shared: Boxes) {
     let mut out = tcp.try_clone().unwrap();
     let mut lines = BufReader::new(tcp);
     let mut selected: Option<usize> = None;
@@ -206,7 +229,7 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
         let (tag, rest) = line.split_once(' ').unwrap_or((line, ""));
         let (command, args) = rest.split_once(' ').unwrap_or((rest, ""));
         let mut reply: Vec<u8> = Vec::new();
-        let mut boxes = boxes.lock().unwrap();
+        let mut boxes = shared.lock().unwrap();
         let mut done = format!("{tag} OK done\r\n");
         match command.to_uppercase().as_str() {
             "LOGIN" => {
@@ -223,7 +246,7 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
             }
             "SELECT" | "EXAMINE" => {
                 let name = &words(args)[0];
-                match boxes.iter().position(|b| b.name == name) {
+                match boxes.iter().position(|b| b.name == *name) {
                     Some(i) => {
                         selected = Some(i);
                         reply.extend(
@@ -241,7 +264,7 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
             }
             "STATUS" => {
                 let name = &words(args)[0];
-                let b = boxes.iter().find(|b| b.name == name).unwrap();
+                let b = boxes.iter().find(|b| b.name == *name).unwrap();
                 let unseen = b
                     .letters
                     .iter()
@@ -267,9 +290,10 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
             }
             "UID" => {
                 let (sub, args) = args.split_once(' ').unwrap();
-                let b = &mut boxes[selected.unwrap()];
-                match sub.to_uppercase().as_str() {
+                let sub = sub.to_uppercase();
+                match sub.as_str() {
                     "FETCH" => {
+                        let b = &boxes[selected.unwrap()];
                         let (uids, items) = args.split_once(' ').unwrap();
                         let uids = set(uids);
                         for (i, l) in b.letters.iter().enumerate() {
@@ -279,27 +303,40 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
                         }
                     }
                     "STORE" => {
+                        let b = &mut boxes[selected.unwrap()];
                         let w = words(args);
                         let (uid, how, flag) = (w[0].parse::<u32>().unwrap(), &w[1], &w[2]);
                         let flag: &'static str = if flag.contains("Seen") {
                             "\\Seen"
-                        } else {
+                        } else if flag.contains("Flagged") {
                             "\\Flagged"
+                        } else if flag.contains("Deleted") {
+                            "\\Deleted"
+                        } else if flag.contains("Answered") {
+                            "\\Answered"
+                        } else {
+                            "\\Seen"
                         };
-                        let l = b.letters.iter_mut().find(|l| l.uid == uid).unwrap();
-                        l.flags.retain(|f| *f != flag);
-                        if how.starts_with('+') {
-                            l.flags.push(flag);
+                        if let Some(l) = b.letters.iter_mut().find(|l| l.uid == uid) {
+                            l.flags.retain(|f| *f != flag);
+                            if how.starts_with('+') {
+                                l.flags.push(flag);
+                            }
                         }
                     }
                     "SEARCH" => {
+                        let b = &boxes[selected.unwrap()];
                         let w = words(args);
+                        let all = w.iter().any(|x| x.eq_ignore_ascii_case("ALL"))
+                            && !w.iter().any(|x| {
+                                x.eq_ignore_ascii_case("TEXT") || x.eq_ignore_ascii_case("HEADER")
+                            });
                         let wanted = w.last().unwrap().to_lowercase();
                         let uids: Vec<String> = b
                             .letters
                             .iter()
                             .filter(|l| {
-                                String::from_utf8_lossy(&l.raw)
+                                all || String::from_utf8_lossy(&l.raw)
                                     .to_lowercase()
                                     .contains(&wanted)
                             })
@@ -307,7 +344,92 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
                             .collect();
                         reply.extend(format!("* SEARCH {}\r\n", uids.join(" ")).bytes());
                     }
+                    "COPY" | "MOVE" => {
+                        let w = words(args);
+                        let uid: u32 = w[0].parse().unwrap_or(0);
+                        let dest = w.get(1).cloned().unwrap_or_default();
+                        let src = selected.unwrap();
+                        if !boxes.iter().any(|b| b.name == dest) {
+                            done = format!("{tag} NO no such folder\r\n");
+                        } else if !boxes[src].letters.iter().any(|l| l.uid == uid) {
+                            done = format!("{tag} NO no such message\r\n");
+                        } else {
+                            let i = boxes[src]
+                                .letters
+                                .iter()
+                                .position(|l| l.uid == uid)
+                                .unwrap();
+                            let letter = if sub == "MOVE" {
+                                boxes[src].letters.remove(i)
+                            } else {
+                                boxes[src].letters[i].clone()
+                            };
+                            let new_uid = next_uid(&boxes);
+                            let at = boxes.iter().position(|b| b.name == dest).unwrap();
+                            boxes[at].letters.push(Letter {
+                                uid: new_uid,
+                                flags: letter.flags,
+                                raw: letter.raw,
+                            });
+                            done = format!("{tag} OK [COPYUID 7 {uid} {new_uid}] moved\r\n");
+                        }
+                    }
+                    "EXPUNGE" => {
+                        let b = &mut boxes[selected.unwrap()];
+                        let uids = set(words(args).first().map(String::as_str).unwrap_or(""));
+                        let mut seqs = Vec::new();
+                        for (i, letter) in b.letters.iter().enumerate() {
+                            if uids.contains(&letter.uid) && letter.flags.contains(&"\\Deleted") {
+                                seqs.push(i + 1);
+                            }
+                        }
+                        b.letters
+                            .retain(|l| !(uids.contains(&l.uid) && l.flags.contains(&"\\Deleted")));
+                        for seq in seqs.iter().rev() {
+                            reply.extend(format!("* {seq} EXPUNGE\r\n").bytes());
+                        }
+                    }
                     _ => done = format!("{tag} BAD unknown\r\n"),
+                }
+            }
+            "CREATE" => {
+                let name = words(args).into_iter().next().unwrap_or_default();
+                if boxes.iter().any(|b| b.name == name) {
+                    done = format!("{tag} NO exists\r\n");
+                } else {
+                    boxes.push(Mailbox {
+                        name,
+                        attributes: "\\HasNoChildren",
+                        letters: Vec::new(),
+                    });
+                }
+            }
+            "APPEND" => {
+                let size = literal_size(args);
+                let name = words(args).into_iter().next().unwrap_or_default();
+                out.write_all(b"+ go\r\n").unwrap();
+                let mut body = vec![0u8; size];
+                if lines.get_mut().read_exact(&mut body).is_err() {
+                    return;
+                }
+                let mut tail = [0u8; 2];
+                let _ = lines.get_mut().read_exact(&mut tail);
+                let new_uid = next_uid(&boxes);
+                let flags: Vec<&'static str> = if args.contains("\\Seen") {
+                    vec!["\\Seen"]
+                } else {
+                    Vec::new()
+                };
+                match boxes.iter_mut().find(|b| b.name == name) {
+                    Some(b) => b.letters.push(Letter {
+                        uid: new_uid,
+                        flags,
+                        raw: body,
+                    }),
+                    None => done = format!("{tag} NO no such folder\r\n"),
+                }
+                if !done.starts_with(&format!("{tag} NO")) {
+                    done = format!("{tag} OK appended\r\n");
                 }
             }
             "LOGOUT" => {
@@ -335,7 +457,10 @@ fn serve(tcp: TcpStream, boxes: Boxes) {
                 out.write_all(done.as_bytes()).unwrap();
                 continue;
             }
-            "NOOP" | "CAPABILITY" => {}
+            "CAPABILITY" => {
+                reply.extend(b"* CAPABILITY IMAP4rev1 MOVE UIDPLUS\r\n");
+            }
+            "NOOP" => {}
             _ => done = format!("{tag} BAD unknown\r\n"),
         }
         drop(boxes);
@@ -372,6 +497,9 @@ fn server() -> (Account, Boxes) {
         password_command: Some("echo secret".to_string()),
         password: None,
         missing: None,
+        smtp_host: None,
+        smtp_port: None,
+        trash: None,
     };
     (account, boxes)
 }
@@ -583,8 +711,19 @@ fn demo() -> App {
         vec![("Demo".to_string(), Box::new(Demo::new()) as Box<dyn Store>)],
         PathBuf::from("/nowhere/accounts.toml"),
     );
+    // A ledger of this test's own, not the one letterbox keeps for itself.
+    app.ledger = scratch_ledger();
     app.settle(Duration::from_secs(5));
     app
+}
+
+fn scratch_ledger() -> crate::trash::Ledger {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("letterbox-trash-{}-{n}.toml", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    crate::trash::Ledger::open(path)
 }
 
 fn press(app: &mut App, keys: &[&str]) {
@@ -1001,6 +1140,12 @@ fn providers_servers_are_guessed_from_the_address() {
     assert!(guess("x@gmail.com").1.unwrap().contains("app password"));
     assert_eq!(guess("x@ubc.ca"), ("imap.ubc.ca".to_string(), None));
     assert_eq!(guess("nothing").0, "");
+    assert_eq!(crate::config::guess_smtp("x@gmail.com"), "smtp.gmail.com");
+    assert_eq!(
+        crate::config::guess_smtp("x@outlook.com"),
+        "smtp.office365.com"
+    );
+    assert_eq!(crate::config::guess_smtp("x@ubc.ca"), "smtp.ubc.ca");
 }
 
 #[test]
@@ -1640,4 +1785,422 @@ fn an_agent_is_told_a_vaults_account_is_not_for_it() {
             .unwrap()
             .contains("keep it in the keyring")
     );
+}
+
+#[test]
+fn deleting_moves_to_trash_and_back() {
+    let mut app = demo();
+    assert_eq!(app.shown[0].from, "Ada Lovelace");
+    press(&mut app, &["d"]);
+    assert!(
+        app.shown.iter().all(|s| s.from != "Ada Lovelace"),
+        "{}",
+        app.status
+    );
+    assert!(app.status.contains("7 days"), "{}", app.status);
+    press(&mut app, &["h", "j", "j", "j", "j", "j"]);
+    assert_eq!(app.folder_name(), "Trash", "{}", app.status);
+    assert_eq!(app.shown[0].from, "Ada Lovelace");
+    press(&mut app, &["d"]);
+    assert!(app.status.contains("Inbox"), "{}", app.status);
+    assert!(app.shown.iter().all(|s| s.from != "Ada Lovelace"));
+    press(&mut app, &["h", "k", "k", "k", "k", "k"]);
+    assert_eq!(app.folder_name(), "Inbox");
+    assert_eq!(app.shown[0].from, "Ada Lovelace");
+}
+
+#[test]
+fn a_folder_is_chosen_as_trash_when_the_server_names_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "[[account]]\nname = \"Demo\"\nemail = \"you@example.com\"\nhost = \"imap.example.com\"\n",
+    )
+    .unwrap();
+    let mut app = demo();
+    app.config = path.clone();
+    // A server that marks nothing as Trash: the folder of that name is
+    // only a name, until one is chosen.
+    for folder in &mut app.accounts[0].folders {
+        if folder.role == Role::Trash {
+            folder.role = Role::Other;
+        }
+    }
+    press(&mut app, &["d", "<esc>"]);
+    assert!(app.picking.is_none());
+    assert!(app.status.contains("not moved"), "{}", app.status);
+    assert!(app.shown.iter().any(|s| s.from == "Ada Lovelace"));
+
+    press(&mut app, &["d"]);
+    let screen = app::screen(&mut app, 100, 40);
+    assert!(
+        screen.contains("Which of these folders") && screen.contains("Archive"),
+        "{screen}"
+    );
+    let at = app
+        .picking
+        .as_ref()
+        .unwrap()
+        .folders
+        .iter()
+        .position(|(_, name)| name == "Archive")
+        .unwrap();
+    app.picking.as_mut().unwrap().at = at;
+    press(&mut app, &["<enter>"]);
+    assert!(app.picking.is_none(), "{}", app.status);
+    assert!(app.status.contains("moved to Archive"), "{}", app.status);
+    assert!(app.shown.iter().all(|s| s.from != "Ada Lovelace"));
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(file.contains("trash = \"Archive\""), "{file}");
+    assert!(file.contains("host = \"imap.example.com\""), "{file}");
+
+    press(&mut app, &["h", "j", "j", "j"]);
+    assert_eq!(app.folder_name(), "Archive", "{}", app.status);
+    assert!(app.shown.iter().any(|s| s.from == "Ada Lovelace"));
+    press(&mut app, &["d"]);
+    assert!(app.status.contains("put back in Inbox"), "{}", app.status);
+}
+
+#[test]
+fn a_trash_record_that_cannot_be_read_is_left_as_it_is() {
+    let path = std::env::temp_dir().join(format!(
+        "letterbox-trash-broken-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let text = "this is not a ledger\n";
+    std::fs::write(&path, text).unwrap();
+    let mut ledger = crate::trash::Ledger::open(path.clone());
+    assert!(ledger.fault().is_some());
+    assert!(ledger.due("a@b.c", i64::MAX).is_empty());
+    let err = ledger
+        .record(crate::trash::Entry {
+            account: "a@b.c".into(),
+            message_id: "<x@x>".into(),
+            folder: "Trash".into(),
+            uid: 1,
+            origin: "INBOX".into(),
+            at: 0,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("cannot read"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_message_trashed_for_eight_days_is_removed() {
+    let mut ledger = scratch_ledger();
+    let now = jiff::Timestamp::now().as_second();
+    let entry = |uid, days| crate::trash::Entry {
+        account: "a@b.c".into(),
+        message_id: format!("<{uid}@x>"),
+        folder: "Trash".into(),
+        uid,
+        origin: "INBOX".into(),
+        at: now - i64::from(days) * 24 * 60 * 60,
+    };
+    ledger.record(entry(3, 6)).unwrap();
+    ledger.record(entry(4, 8)).unwrap();
+    let due: Vec<u32> = ledger
+        .due("a@b.c", now)
+        .into_iter()
+        .map(|e| e.uid)
+        .collect();
+    assert_eq!(due, [4]);
+
+    let mut app = demo();
+    press(&mut app, &["d"]);
+    app.ledger
+        .backdate(jiff::Timestamp::now().as_second() - 8 * 24 * 60 * 60);
+    press(&mut app, &["h", "j", "j", "j", "j", "j"]);
+    assert_eq!(app.folder_name(), "Trash");
+    assert!(
+        app.shown.iter().all(|s| s.from != "Ada Lovelace"),
+        "{:?}",
+        app.shown
+            .iter()
+            .map(|s| s.from.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn emacs_keys_kill_and_yank() {
+    use crate::edit::{self, Buffer, Done};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut buffer = Buffer::from_text("hello");
+    let mut prefix = false;
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    assert_eq!(
+        edit::handle(&mut buffer, &mut prefix, ctrl('e')),
+        Done::Stay
+    );
+    assert_eq!(buffer.col(), 5);
+    edit::handle(&mut buffer, &mut prefix, ctrl('a'));
+    assert_eq!(buffer.col(), 0);
+    edit::handle(&mut buffer, &mut prefix, ctrl('k'));
+    assert_eq!(buffer.text(), "\n");
+    edit::handle(&mut buffer, &mut prefix, ctrl('y'));
+    assert_eq!(buffer.text(), "hello\n");
+}
+
+#[test]
+fn a_reply_is_addressed_to_the_sender() {
+    let raw = b"From: Ada Lovelace <ada@analytical.example>\r\n\
+        To: You <you@example.com>\r\nSubject: Notes on the engine\r\n\
+        Message-ID: <1@demo>\r\nReferences: <0@demo>\r\n\
+        \r\nHello\r\n"
+        .to_vec();
+    let message = mail::message(1, raw).unwrap();
+    let (text, row) = crate::compose::reply(&message);
+    assert!(
+        text.starts_with("To: Ada Lovelace <ada@analytical.example>\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nSubject: Re: Notes on the engine\n"),
+        "{text}"
+    );
+    assert!(text.contains("> Hello\n"), "{text}");
+    assert_eq!(row, 4);
+    assert_eq!(crate::compose::reply_subject("éé"), "Re: éé");
+    assert_eq!(crate::compose::reply_subject("😀 notes"), "Re: 😀 notes");
+    assert_eq!(crate::compose::reply_subject("Re: éé"), "Re: éé");
+    let subject = format!("{}é{}", "a".repeat(44), "b".repeat(10));
+    let draft = crate::compose::Draft {
+        to: vec!["a@b.c".into()],
+        cc: Vec::new(),
+        subject: subject.clone(),
+        body: "hi".into(),
+    };
+    let raw = crate::compose::bytes("me@example.com", &draft, None, None);
+    assert_eq!(mail::message(1, raw).unwrap().subject, subject);
+    let (id, refs) = crate::compose::thread(&message);
+    assert_eq!(id.as_deref(), Some("<1@demo>"));
+    assert!(refs.unwrap().contains("<0@demo>"));
+}
+
+#[test]
+fn replying_opens_the_message_and_the_demo_keeps_what_is_sent() {
+    let mut app = demo();
+    press(&mut app, &["R"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(
+        text.contains("To: Ada Lovelace <ada@analytical.example>"),
+        "{text}"
+    );
+    assert!(text.contains("Subject: Re: Notes on the engine"), "{text}");
+    press(&mut app, &["<c-g>"]);
+    assert!(app.compose.is_none());
+    assert!(app.status.contains("not sent"), "{}", app.status);
+
+    press(
+        &mut app,
+        &[
+            "c",
+            "ada@analytical.example",
+            "<c-n>",
+            "<c-n>",
+            "Hello",
+            "<c-n>",
+            "<c-n>",
+            "Hi",
+            "<c-c>",
+            "<c-c>",
+        ],
+    );
+    assert!(app.compose.is_none(), "{}", app.status);
+    assert!(app.status.contains("not delivered"), "{}", app.status);
+    press(&mut app, &["h", "j", "j"]);
+    assert_eq!(app.folder_name(), "Sent");
+    assert!(
+        app.shown.iter().any(|s| s.subject == "Hello"),
+        "{:?}",
+        app.shown
+            .iter()
+            .map(|s| s.subject.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn imap_moves_appends_and_expunges() {
+    let (account, _) = server();
+    let mut imap = Imap::new(account);
+    let page = imap.page("INBOX", 0, 10).unwrap();
+    let summary = page
+        .summaries
+        .iter()
+        .find(|s| s.from.contains("Rosalind"))
+        .unwrap();
+    let uid = summary.uid;
+    let new_uid = imap
+        .relocate("INBOX", uid, "Deleted Items", &summary.message_id)
+        .unwrap();
+    assert!(
+        imap.page("INBOX", 0, 10)
+            .unwrap()
+            .summaries
+            .iter()
+            .all(|s| s.uid != uid)
+    );
+    let trash = imap.page("Deleted Items", 0, 10).unwrap();
+    assert!(trash.summaries.iter().any(|s| s.uid == new_uid));
+    assert_eq!(
+        imap.expunge("Deleted Items", new_uid).unwrap(),
+        Removal::Gone
+    );
+    assert_eq!(
+        imap.expunge("Deleted Items", new_uid).unwrap(),
+        Removal::Missing
+    );
+    assert!(
+        imap.page("Deleted Items", 0, 10)
+            .unwrap()
+            .summaries
+            .is_empty()
+    );
+    imap.append(
+        "INBOX",
+        b"From: me@example.com\r\nSubject: no id\r\n\r\nhi\r\n",
+        true,
+    )
+    .unwrap();
+    let bare = imap
+        .page("INBOX", 0, 20)
+        .unwrap()
+        .summaries
+        .into_iter()
+        .find(|s| s.subject == "no id")
+        .unwrap();
+    let err = imap
+        .relocate("INBOX", bare.uid, "Deleted Items", "")
+        .unwrap_err();
+    assert!(err.to_string().contains("no Message-ID"), "{err}");
+    assert!(
+        imap.page("INBOX", 0, 20)
+            .unwrap()
+            .summaries
+            .iter()
+            .any(|s| s.uid == bare.uid)
+    );
+    imap.append("Sent Items", b"From: me@example.com\r\n\r\nhi\r\n", true)
+        .unwrap();
+    assert_eq!(imap.page("Sent Items", 0, 10).unwrap().total, 1);
+    imap.create("Later").unwrap();
+    assert!(imap.folders().unwrap().iter().any(|f| f.path == "Later"));
+}
+
+struct SmtpLog {
+    auth: String,
+    data: Vec<u8>,
+}
+
+fn smtp_server() -> (u16, Arc<Mutex<SmtpLog>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let log = Arc::new(Mutex::new(SmtpLog {
+        auth: String::new(),
+        data: Vec::new(),
+    }));
+    let shared = log.clone();
+    std::thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        let mut tcp = tcp.try_clone().unwrap();
+        let mut lines = BufReader::new(tcp.try_clone().unwrap());
+        tcp.write_all(b"220 ready\r\n").unwrap();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if lines.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let command = line.trim();
+            let upper = command.to_ascii_uppercase();
+            if upper.starts_with("EHLO") {
+                tcp.write_all(b"250-ready\r\n250-8BITMIME\r\n250 AUTH PLAIN\r\n")
+                    .unwrap();
+            } else if upper.starts_with("AUTH PLAIN") {
+                shared.lock().unwrap().auth = command.to_string();
+                tcp.write_all(b"235 ok\r\n").unwrap();
+            } else if upper.starts_with("MAIL FROM") || upper.starts_with("RCPT TO") {
+                tcp.write_all(b"250 ok\r\n").unwrap();
+            } else if upper == "DATA" {
+                tcp.write_all(b"354 go\r\n").unwrap();
+                let mut data = Vec::new();
+                let mut data_line = String::new();
+                loop {
+                    data_line.clear();
+                    if lines.read_line(&mut data_line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    if data_line.trim_end() == "." {
+                        break;
+                    }
+                    let mut stored = data_line.as_str();
+                    if let Some(rest) = stored.strip_prefix("..") {
+                        data.extend(b".");
+                        stored = rest;
+                    }
+                    data.extend(stored.as_bytes());
+                }
+                shared.lock().unwrap().data = data;
+                tcp.write_all(b"250 ok\r\n").unwrap();
+            } else if upper.starts_with("QUIT") {
+                tcp.write_all(b"221 bye\r\n").unwrap();
+                return;
+            } else {
+                tcp.write_all(b"500 no\r\n").unwrap();
+            }
+        }
+    });
+    (port, log)
+}
+
+#[test]
+fn smtp_sends_what_was_written_and_keeps_it_in_sent() {
+    let (port, log) = smtp_server();
+    let (mut account, boxes) = server();
+    account.smtp_host = Some("127.0.0.1".into());
+    account.smtp_port = Some(port);
+    let mut imap = Imap::new(account);
+    let raw = b"From: me@example.com\r\nTo: ada@example.com\r\nSubject: hi\r\n\
+        Date: Tue, 20 Oct 2026 10:00:00 +0000\r\nMessage-ID: <1@example>\r\n\
+        MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\
+        Content-Transfer-Encoding: 8bit\r\n\r\nHello\r\n.dot\r\n";
+    assert_eq!(imap.send(raw).unwrap(), "sent");
+    let got = log.lock().unwrap();
+    assert!(got.auth.contains("PLAIN"), "{}", got.auth);
+    let text = String::from_utf8_lossy(&got.data);
+    assert!(text.contains(".dot"), "{text}");
+    assert!(!text.contains("..dot"), "{text}");
+    drop(got);
+    let boxes = boxes.lock().unwrap();
+    let sent = boxes.iter().find(|b| b.name == "Sent Items").unwrap();
+    assert_eq!(sent.letters.len(), 1);
+    assert!(String::from_utf8_lossy(&sent.letters[0].raw).contains(".dot"));
+}
+
+#[test]
+fn mail_is_not_sent_in_the_clear_off_this_machine() {
+    let (mut account, _) = server();
+    account.smtp_host = Some("smtp.example.com".into());
+    account.security = Security::None;
+    let err = crate::smtp::submit(&account, b"From: me@example.com\r\n\r\n\r\n").unwrap_err();
+    assert!(err.to_string().contains("unencrypted"), "{err}");
+}
+
+#[test]
+fn a_body_that_is_not_ascii_is_quoted_when_the_server_cannot_take_it() {
+    let raw = b"Content-Transfer-Encoding: 8bit\r\n\r\nCaf\xc3\xa9\r\n";
+    let quoted = crate::smtp::for_transfer(raw, false);
+    let text = String::from_utf8_lossy(&quoted);
+    assert!(text.contains("quoted-printable"), "{text}");
+    assert!(text.contains("=C3=A9"), "{text}");
+    assert_eq!(crate::smtp::for_transfer(raw, true), raw);
 }

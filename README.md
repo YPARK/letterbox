@@ -117,6 +117,9 @@ letterbox search grant report --account Work
 | `/` | search the messages listed as you type; `enter` searches the server |
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
+| `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
+| `c` | write a message |
+| `R` | reply to the message |
 | `o` | open the message in the browser, as its HTML |
 | `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
@@ -125,6 +128,44 @@ letterbox search grant report --account Work
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `?` | all the keys |
 | `q` | quit |
+
+`c` opens a message to write, and `R` a reply, in a pane edited as Emacs
+edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
+by character and line, `C-k` kills to the end of the line and `C-y` puts it
+back, `M-f` `M-b` `M-d` by word. `C-c C-c` sends it, `C-g` or `C-c C-k`
+leaves it. Outside that pane `C-c` still quits. The arrows do the same as
+the movement keys.
+
+`d` moves the message to the account's Trash folder. In Trash, `d` puts
+it back where it was, or to the inbox if something else had put it there.
+After 7 days letterbox removes what it itself moved, and nothing that was
+already in Trash. When the server marks no folder as Trash, letterbox asks
+which existing folder to use, and remembers it on the account:
+
+```toml
+trash = "Deleted Items"
+```
+
+## Sending
+
+A message is sent by SMTP submission, on port 587, over TLS once the server
+is asked for it. The server is the provider's, as the IMAP server is guessed
+from the address (Gmail `smtp.gmail.com`, Microsoft `smtp.office365.com`,
+and so on), else `smtp.` and the domain. An account may name another:
+
+```toml
+smtp_host = "smtp.example.com"
+# smtp_port = 465
+```
+
+Port 465 is TLS from the start. The same password signs in, or, for an
+account signed in on Microsoft's page, the same token. Sending needs
+Microsoft's permission to send, which a token saved before letterbox asked
+for it does not have: sign in again, and the status line says so when the
+server refuses it. Gmail files the copy itself; other accounts have it
+added to Sent.
+
+`--demo` writes the message into Sent and does not send it.
 
 Moving through the list, the message picked is shown beside it, and marked
 read, once you pause on it, as a mail app does. The mouse picks and

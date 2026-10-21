@@ -5,7 +5,7 @@
 use crate::config::{Account, Auth, Security};
 use crate::mail::{self, Folder, Role, Summary};
 use crate::oauth;
-use crate::store::{Flag, Page, Store};
+use crate::store::{Flag, Page, Removal, Store};
 use anyhow::{Context, bail};
 use imap_proto::NameAttribute;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -54,7 +54,7 @@ impl Write for Stream {
 }
 
 /// `tcp`, over TLS to `host`.
-fn tls(host: &str, tcp: TcpStream) -> anyhow::Result<Stream> {
+pub(crate) fn tls(host: &str, tcp: TcpStream) -> anyhow::Result<Stream> {
     // Once a process; again, it is already the provider.
     let _ = rustls_rustcrypto::provider().install_default();
     let roots = rustls::RootCertStore {
@@ -69,7 +69,7 @@ fn tls(host: &str, tcp: TcpStream) -> anyhow::Result<Stream> {
     Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
 }
 
-fn dial(host: &str, port: u16) -> anyhow::Result<TcpStream> {
+pub(crate) fn dial(host: &str, port: u16) -> anyhow::Result<TcpStream> {
     let mut last = None;
     for addr in (host, port)
         .to_socket_addrs()
@@ -121,6 +121,9 @@ pub struct Imap {
     session: Option<Session>,
     /// The folder selected, and how many messages it held then.
     selected: Option<(String, u32)>,
+    /// Whether this connection can `MOVE`. Asked once, and asked again
+    /// after the connection is lost.
+    can_move: Option<bool>,
 }
 
 impl Imap {
@@ -129,6 +132,7 @@ impl Imap {
             account,
             session: None,
             selected: None,
+            can_move: None,
         }
     }
 
@@ -188,10 +192,12 @@ impl Imap {
                     if attempt == 0 =>
                 {
                     self.session = None;
+                    self.can_move = None;
                 }
                 Err(e) => {
                     if matches!(e, imap::Error::Io(_) | imap::Error::ConnectionLost) {
                         self.session = None;
+                        self.can_move = None;
                     }
                     return Err(e).with_context(|| self.account.host.clone());
                 }
@@ -360,6 +366,206 @@ impl Store for Imap {
             Ok(found)
         })
     }
+
+    fn relocate(
+        &mut self,
+        from: &str,
+        uid: u32,
+        to: &str,
+        message_id: &str,
+    ) -> anyhow::Result<u32> {
+        // The new UID comes from the server's COPYUID when it sends one.
+        // Otherwise it is found by Message-ID. Guessing the highest UID in
+        // the destination would name some other message, and a later
+        // expunge would remove that one.
+        let known = self.can_move;
+        let mut learned = None;
+        let found = self.run(|s, selected| {
+            select(s, selected, from, false)?;
+            let id = if message_id.is_empty() {
+                message_id_of(s, uid)?
+            } else {
+                Some(message_id.to_string())
+            };
+            let Some(id) = id.filter(|s| !s.is_empty()) else {
+                return Ok(Found::NoId);
+            };
+            // MOVE is one step. Without it, copy and then delete, which a
+            // server that stops halfway can leave in both folders.
+            let movable = match known.or(learned) {
+                Some(movable) => movable,
+                None => match s.capabilities() {
+                    Ok(caps) => {
+                        let movable = caps.has_str("MOVE");
+                        learned = Some(movable);
+                        movable
+                    }
+                    Err(_) => false,
+                },
+            };
+            let copied = if movable {
+                transferred(s, "MOVE", uid, to)?
+            } else {
+                let copied = transferred(s, "COPY", uid, to)?;
+                s.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")?;
+                s.uid_expunge(uid.to_string())?;
+                copied
+            };
+            // The source lost a message, so its cached count no longer holds.
+            *selected = None;
+            if let Some(uid) = copied {
+                return Ok(Found::Uid(uid));
+            }
+            select(s, selected, to, true)?;
+            let found = s.uid_search(format!("HEADER Message-ID {}", astring(&id)))?;
+            Ok(match found.into_iter().max() {
+                Some(uid) => Found::Uid(uid),
+                None => Found::Lost,
+            })
+        });
+        if self.session.is_some() && self.can_move.is_none() {
+            self.can_move = learned;
+        }
+        match found? {
+            Found::Uid(uid) => Ok(uid),
+            Found::NoId => bail!("it has no Message-ID, so it was left where it is"),
+            Found::Lost => {
+                bail!("it was moved, but its new place could not be told, so it was not recorded")
+            }
+        }
+    }
+
+    fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal> {
+        self.run(|s, selected| {
+            select(s, selected, folder, false)?;
+            s.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")?;
+            let gone = s.uid_expunge(uid.to_string())?;
+            if gone.is_empty() {
+                return Ok(Removal::Missing);
+            }
+            // The folder stays selected. Its count drops by what this
+            // expunge removed, so the next one does not select again.
+            if let Some((name, n)) = selected.as_mut()
+                && name == folder
+            {
+                let removed = (&gone).into_iter().count() as u32;
+                *n = n.saturating_sub(removed);
+            }
+            Ok(Removal::Gone)
+        })
+    }
+
+    fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
+        self.run(|s, selected| {
+            let mut cmd = s.append(folder, raw);
+            if seen {
+                cmd.flag(imap::types::Flag::Seen);
+            }
+            cmd.finish()?;
+            if selected.as_ref().is_some_and(|(name, _)| name == folder) {
+                *selected = None;
+            }
+            Ok(())
+        })
+    }
+
+    fn create(&mut self, path: &str) -> anyhow::Result<()> {
+        self.run(|s, _| {
+            s.create(path)?;
+            Ok(())
+        })
+    }
+
+    fn address(&self) -> &str {
+        &self.account.email
+    }
+
+    fn trash(&self) -> Option<&str> {
+        self.account.trash.as_deref()
+    }
+
+    fn send(&mut self, raw: &[u8]) -> anyhow::Result<String> {
+        let sent = crate::smtp::submit(&self.account, raw)?;
+        let (host, _) = self.account.submission();
+        if crate::smtp::files_sent(&host) || gmail(&self.account.host) {
+            return Ok("sent".to_string());
+        }
+        let folder = match self.sent_folder() {
+            Ok(folder) => folder,
+            Err(e) => return Ok(format!("sent, and not saved in Sent: {e:#}")),
+        };
+        if let Err(e) = self.append(&folder, &sent, true) {
+            return Ok(format!("sent, and not saved in Sent: {e:#}"));
+        }
+        Ok("sent".to_string())
+    }
+}
+
+impl Imap {
+    /// The Sent folder, made if the server has none.
+    fn sent_folder(&mut self) -> anyhow::Result<String> {
+        let folders = self.folders()?;
+        if let Some(folder) = folders
+            .into_iter()
+            .find(|f| f.role == Role::Sent && f.selectable)
+        {
+            return Ok(folder.path);
+        }
+        self.create("Sent")?;
+        Ok("Sent".to_string())
+    }
+}
+
+fn gmail(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "imap.gmail.com" | "imap.googlemail.com"
+    )
+}
+
+/// Where a moved message was found again, or why it was not.
+enum Found {
+    Uid(u32),
+    /// It has no `Message-ID`, and was left unmoved.
+    NoId,
+    /// It was moved, and the search did not find it.
+    Lost,
+}
+
+/// The one UID `COPYUID` names as the copy, when the response has one.
+fn copied_uid(response: &[u8]) -> Option<u32> {
+    let text = String::from_utf8_lossy(response);
+    let rest = text.split("[COPYUID ").nth(1)?;
+    let inside = rest.split(']').next()?;
+    let mut parts = inside.split_whitespace();
+    parts.next()?;
+    parts.next()?;
+    let dest = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if let Ok(uid) = dest.parse() {
+        return Some(uid);
+    }
+    let (start, end) = dest.split_once(':')?;
+    let start: u32 = start.parse().ok()?;
+    let end: u32 = end.parse().ok()?;
+    (start == end).then_some(start)
+}
+
+/// `UID MOVE` or `UID COPY`, and the UID the copy was given when the
+/// server says it. `uid_mv` checks the response and then drops it.
+fn transferred(s: &mut Session, command: &str, uid: u32, to: &str) -> imap::Result<Option<u32>> {
+    let (buf, _) = s.run(format!("UID {command} {uid} {}", astring(to)))?;
+    Ok(copied_uid(&buf))
+}
+
+/// The message's `Message-ID`, from its header only. The search for a
+/// moved message uses it when the server did not send `COPYUID`.
+fn message_id_of(s: &mut Session, uid: u32) -> imap::Result<Option<String>> {
+    let fetches = s.uid_fetch(uid.to_string(), "BODY.PEEK[HEADER]")?;
+    let raw = fetches.iter().find_map(|f| f.header()).unwrap_or_default();
+    Ok(mail::field(raw, "Message-ID"))
 }
 
 impl Drop for Imap {

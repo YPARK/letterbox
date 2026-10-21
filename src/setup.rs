@@ -59,7 +59,7 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
     let security = match port {
         993 => config::Security::Tls,
         143 => config::Security::Starttls,
-        _ if matches!(host, "localhost" | "127.0.0.1" | "::1") => config::Security::None,
+        _ if config::local(host) => config::Security::None,
         _ => config::Security::Tls,
     };
     let email = email.trim().to_string();
@@ -78,6 +78,9 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
         password_command: None,
         password: None,
         missing: None,
+        smtp_host: None,
+        smtp_port: None,
+        trash: None,
     }
 }
 

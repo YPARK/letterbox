@@ -225,6 +225,10 @@ pub struct Summary {
     /// The first words of its text.
     pub preview: String,
     pub size: u32,
+    /// Its `Message-ID`, as the header has it, with the brackets; empty
+    /// when it has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message_id: String,
 }
 
 /// The summary of a message from its header, and as much of its text after
@@ -242,6 +246,7 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
             flags,
             preview: String::new(),
             size,
+            message_id: String::new(),
         };
     };
     let first = m.from().and_then(Address::first);
@@ -265,6 +270,12 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
         flags,
         preview,
         size,
+        message_id: m
+            .message_id()
+            .map(clean)
+            .filter(|s| !s.is_empty())
+            .map(|s| brackets(&s))
+            .unwrap_or_default(),
     }
 }
 
@@ -488,4 +499,70 @@ pub fn controls(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// The value of the header `name` in `raw`, unfolded onto one line; none
+/// when the message has no such header. The header block ends at the first
+/// blank line.
+pub fn field(raw: &[u8], name: &str) -> Option<String> {
+    let text = header_block(raw);
+    let mut value: Option<String> = None;
+    let mut matches = false;
+    for line in text.lines() {
+        if line.starts_with([' ', '\t']) {
+            if matches {
+                let v = value.get_or_insert_with(String::new);
+                if !v.is_empty() {
+                    v.push(' ');
+                }
+                v.push_str(line.trim());
+            }
+            continue;
+        }
+        let Some((n, v)) = line.split_once(':') else {
+            matches = false;
+            continue;
+        };
+        matches = n.trim().eq_ignore_ascii_case(name);
+        if matches {
+            value = Some(v.trim().to_string());
+        }
+    }
+    value.filter(|v| !v.is_empty())
+}
+
+/// `id` with the angle brackets a `Message-ID` is written in, unless it
+/// already has them.
+pub(crate) fn brackets(id: &str) -> String {
+    let id = id.trim();
+    if id.starts_with('<') {
+        id.to_string()
+    } else {
+        format!("<{id}>")
+    }
+}
+
+fn header_block(raw: &[u8]) -> String {
+    String::from_utf8_lossy(&raw[..header_end(raw)]).into_owned()
+}
+
+/// Where the headers end: the earlier of `\r\n\r\n` and `\n\n`, or the
+/// whole message when it has no blank line. Only that prefix is decoded.
+fn header_end(raw: &[u8]) -> usize {
+    let mut i = 0;
+    while i + 1 < raw.len() {
+        if raw[i] == b'\n' && raw[i + 1] == b'\n' {
+            return i;
+        }
+        if i + 3 < raw.len()
+            && raw[i] == b'\r'
+            && raw[i + 1] == b'\n'
+            && raw[i + 2] == b'\r'
+            && raw[i + 3] == b'\n'
+        {
+            return i;
+        }
+        i += 1;
+    }
+    raw.len()
 }

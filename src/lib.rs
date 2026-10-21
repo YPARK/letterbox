@@ -3,8 +3,10 @@
 //! program is `letterbox`, and `lbx` for short, each of them `run`.
 
 mod app;
+mod compose;
 mod config;
 mod demo;
+mod edit;
 mod imap;
 mod mail;
 mod mcp;
@@ -12,8 +14,10 @@ mod net;
 mod oauth;
 mod secret;
 mod setup;
+mod smtp;
 mod store;
 mod theme;
+mod trash;
 mod ui;
 mod vault;
 mod worker;

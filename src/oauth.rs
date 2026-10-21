@@ -1,7 +1,7 @@
 //! Signing in to Microsoft 365 and Outlook.com as Microsoft has mail apps
 //! do, on Microsoft's own page: OAuth 2.0, with PKCE. The password, and a
 //! second factor, are given to Microsoft alone; letterbox is given a token
-//! for IMAP that it renews, and that the account's owner, or its
+//! for IMAP and for sending that it renews, and that the account's owner, or its
 //! organisation, may take back.
 //!
 //! Two ways are tried at once, whichever is done first: Microsoft's page in
@@ -29,7 +29,8 @@ pub const CLIENT_ID: &str = "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
 /// Any organisation's account, or a personal one.
 pub const TENANT: &str = "common";
 pub const IMAP_HOST: &str = "outlook.office365.com";
-const SCOPE: &str = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access";
+const SCOPE: &str = "https://outlook.office.com/IMAP.AccessAsUser.All \
+     https://outlook.office.com/SMTP.Send offline_access";
 /// How long signing in is waited for: in tests, not long.
 const WAIT: Duration = Duration::from_secs(if cfg!(test) { 20 } else { 15 * 60 });
 /// A token is renewed this long before it runs out.
@@ -446,10 +447,17 @@ pub struct XOAuth2 {
     pub token: String,
 }
 
+impl XOAuth2 {
+    /// The initial client response, before it is encoded for the server.
+    pub fn secret(&self) -> String {
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
+    }
+}
+
 impl imap::Authenticator for XOAuth2 {
     type Response = String;
 
     fn process(&self, _: &[u8]) -> String {
-        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
+        self.secret()
     }
 }

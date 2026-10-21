@@ -2,7 +2,7 @@
 //! now, to try letterbox with before setting up an account.
 
 use crate::mail::{self, Flags, Folder, Role, Summary};
-use crate::store::{Flag, Page, Store};
+use crate::store::{Flag, Page, Removal, Store};
 use jiff::{ToSpan, Zoned};
 use std::collections::BTreeMap;
 
@@ -15,6 +15,8 @@ struct Letter {
 pub struct Demo {
     /// Each folder's messages, oldest first, as a server numbers them.
     folders: BTreeMap<String, Vec<Letter>>,
+    /// The next UID, across every folder: a move gives the message a new one.
+    next: u32,
 }
 
 /// A message, `hours` ago.
@@ -217,7 +219,10 @@ impl Demo {
         for f in ["Archive", "Junk", "Trash", "Projects", "Projects/Grant"] {
             file(f, Vec::new());
         }
-        Demo { folders }
+        Demo {
+            next: uid + 1,
+            folders,
+        }
     }
 
     fn letters(&mut self, folder: &str) -> anyhow::Result<&mut Vec<Letter>> {
@@ -280,8 +285,74 @@ impl Store for Demo {
         match flag {
             Flag::Seen => letter.flags.seen = on,
             Flag::Flagged => letter.flags.flagged = on,
+            Flag::Answered => letter.flags.answered = on,
         }
         Ok(())
+    }
+
+    fn relocate(
+        &mut self,
+        from: &str,
+        uid: u32,
+        to: &str,
+        _message_id: &str,
+    ) -> anyhow::Result<u32> {
+        if !self.folders.contains_key(to) {
+            anyhow::bail!("no folder {to}");
+        }
+        let letter = {
+            let letters = self.letters(from)?;
+            let at = letters
+                .iter()
+                .position(|l| l.uid == uid)
+                .ok_or_else(|| anyhow::anyhow!("no message {uid} in {from}"))?;
+            letters.remove(at)
+        };
+        let uid = self.next;
+        self.next += 1;
+        self.folders
+            .get_mut(to)
+            .expect("checked")
+            .push(Letter { uid, ..letter });
+        Ok(uid)
+    }
+
+    fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal> {
+        let letters = self.letters(folder)?;
+        let n = letters.len();
+        letters.retain(|l| l.uid != uid);
+        Ok(if letters.len() == n {
+            Removal::Missing
+        } else {
+            Removal::Gone
+        })
+    }
+
+    fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
+        let uid = self.next;
+        self.next += 1;
+        let mut flags = Flags::default();
+        flags.seen = seen;
+        self.letters(folder)?.push(Letter {
+            uid,
+            flags,
+            raw: raw.to_vec(),
+        });
+        Ok(())
+    }
+
+    fn create(&mut self, path: &str) -> anyhow::Result<()> {
+        self.folders.entry(path.to_string()).or_default();
+        Ok(())
+    }
+
+    fn address(&self) -> &str {
+        "you@example.com"
+    }
+
+    fn send(&mut self, raw: &[u8]) -> anyhow::Result<String> {
+        self.append("Sent", raw, true)?;
+        Ok("kept in Sent; not delivered".to_string())
     }
 
     fn search(&mut self, folder: &str, words: &str, n: usize) -> anyhow::Result<Vec<Summary>> {

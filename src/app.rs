@@ -2,13 +2,16 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+use crate::compose;
 use crate::config::{self, Auth};
-use crate::mail::{self, Folder, Message, Summary};
+use crate::edit::{self, Done};
+use crate::mail::{self, Folder, Message, Role, Summary};
 use crate::oauth;
 use crate::secret::Keeper;
 use crate::setup;
-use crate::store::{Flag, Store};
+use crate::store::{Flag, Removal, Store};
 use crate::theme::{self, Theme};
+use crate::trash::{self, Entry};
 use crate::ui;
 use crate::vault;
 use crate::worker::{self, Added, Answer, Ask, Reply};
@@ -21,7 +24,7 @@ use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,7 +62,13 @@ pub enum State {
 
 pub struct Account {
     pub name: String,
+    /// Its address, once the store has said it: the ledger's name for it,
+    /// and what a message is sent from.
+    pub email: String,
     pub folders: Vec<Folder>,
+    /// The folder `d` moves mail to, when the server marks none as Trash.
+    /// Taken from the account when it joins, and kept in the accounts file.
+    pub trash: Option<String>,
     pub state: State,
     /// To ask its store; none once it is removed, and its thread ends.
     asks: Option<Sender<Ask>>,
@@ -303,6 +312,38 @@ pub enum Item {
     Link(String),
 }
 
+/// A message being written, in the pane that covers the list and the
+/// message read.
+pub struct Compose {
+    pub buffer: edit::Buffer,
+    pub account: usize,
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
+    /// The folder and UID it replies to, marked answered once sent.
+    pub answering: Option<(String, u32)>,
+    /// `C-c` was pressed, and the next key sends or cancels.
+    pub prefix: bool,
+    pub scroll: usize,
+    /// A send has been asked and not yet answered; the pane stays up.
+    pub sending: bool,
+}
+
+/// The existing folders letterbox is asking which of is Trash, the one
+/// highlighted, for an account whose server marks none.
+pub struct TrashPick {
+    pub account: usize,
+    pub folders: Vec<(String, String)>,
+    pub at: usize,
+}
+
+/// A delete waiting until the folder that is Trash is known.
+struct Held {
+    account: usize,
+    from: String,
+    uid: u32,
+    message_id: String,
+}
+
 /// The message's attachments and links, listed to open, the one picked,
 /// and what came of the last opened.
 pub struct Files {
@@ -436,6 +477,17 @@ pub struct App {
     pub removing: Option<usize>,
     /// The message's attachments and links, listed to open.
     pub files: Option<Files>,
+    /// Which existing folder should be Trash, while that is being asked.
+    pub picking: Option<TrashPick>,
+    /// A message being written, over the list and the message read.
+    pub compose: Option<Compose>,
+    pub(crate) ledger: trash::Ledger,
+    held: Option<Held>,
+    /// A reply waiting on the message it answers, fetched first.
+    reply_when: Option<(usize, String, u32)>,
+    /// Trash removals asked and not yet answered, by address, folder and UID,
+    /// so one is not asked twice.
+    purging: HashSet<(String, String, u32)>,
     /// What to do outside the screen, once it is drawn.
     pub launch: Option<Launch>,
     replies: Receiver<Reply>,
@@ -543,6 +595,8 @@ impl App {
     /// are asked for at once.
     pub fn new(stores: Vec<(String, Box<dyn Store>)>, config: PathBuf) -> Self {
         let (replies_to, replies) = mpsc::channel();
+        let ledger = trash::Ledger::load();
+        let status = ledger.fault().unwrap_or("").to_string();
         let mut app = App {
             accounts: Vec::new(),
             rows: Vec::new(),
@@ -563,7 +617,7 @@ impl App {
             read: Kept::default(),
             focus: Focus::List,
             theme: Theme::of(theme::Name::default()),
-            status: String::new(),
+            status,
             help: false,
             help_scroll: 0,
             targets: Vec::new(),
@@ -576,6 +630,12 @@ impl App {
             form: None,
             removing: None,
             files: None,
+            picking: None,
+            compose: None,
+            ledger,
+            held: None,
+            reply_when: None,
+            purging: HashSet::new(),
             launch: None,
             replies,
             replies_to,
@@ -603,10 +663,13 @@ impl App {
     /// place among the accounts.
     fn join(&mut self, name: String, store: Box<dyn Store>) -> usize {
         let a = self.accounts.len();
+        let trash = store.trash().map(str::to_string);
         let asks = worker::spawn(a, store, self.replies_to.clone());
         self.accounts.push(Account {
             name,
+            email: String::new(),
             folders: Vec::new(),
+            trash,
             state: State::Connecting,
             asks: Some(asks),
         });
@@ -692,6 +755,14 @@ impl App {
             }
             return;
         }
+        // The address is said as the thread starts, not in answer to an ask.
+        if let Answer::Address(email) = reply.answer {
+            if let Some(account) = self.accounts.get_mut(a) {
+                account.email = email;
+            }
+            self.sweep(a);
+            return;
+        }
         self.pending = self.pending.saturating_sub(1);
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
@@ -728,6 +799,7 @@ impl App {
             Answer::Folders(Ok(folders)) => {
                 let first = self.accounts.iter().all(|x| x.folders.is_empty());
                 self.accounts[a].folders = folders;
+                self.remember_trash(a);
                 self.accounts[a].state = State::Ready;
                 self.rebuild();
                 if first && self.listing.is_none() {
@@ -750,6 +822,8 @@ impl App {
                 for p in paths {
                     self.ask(a, Ask::Count(p));
                 }
+                self.sweep(a);
+                self.resume_held(a);
             }
             Answer::Folders(Err(e)) => {
                 self.status = format!("{}: {}", self.accounts[a].name, first_line(&e));
@@ -769,6 +843,7 @@ impl App {
             | Answer::Skipped
             | Answer::Added(_)
             | Answer::Waiting(_)
+            | Answer::Address(_)
             | Answer::Fetched(_)
             | Answer::Realm { .. } => {}
             Answer::Page {
@@ -840,6 +915,16 @@ impl App {
                         Err(e) => Body::Failed(e),
                     };
                 }
+                if self
+                    .reply_when
+                    .as_ref()
+                    .is_some_and(|(x, f, u)| *x == a && f == &folder && *u == uid)
+                {
+                    self.reply_when = None;
+                    if let Some(m) = self.read.get(&(a, folder, uid)) {
+                        self.open_reply(a, &m);
+                    }
+                }
             }
             Answer::Set {
                 folder,
@@ -873,6 +958,77 @@ impl App {
                     Err(e) => self.status = format!("cannot search: {}", first_line(&e)),
                 }
                 self.narrow();
+            }
+            Answer::Moved {
+                from,
+                uid,
+                to,
+                message_id,
+                trashed,
+                new_uid,
+                email,
+            } => match new_uid {
+                Ok(new_uid) => {
+                    if !email.is_empty() {
+                        self.accounts[a].email = email.clone();
+                    }
+                    if trashed {
+                        let at = jiff::Timestamp::now().as_second();
+                        if let Err(e) = self.ledger.record(Entry {
+                            account: email,
+                            message_id,
+                            folder: to.clone(),
+                            uid: new_uid,
+                            origin: from.clone(),
+                            at,
+                        }) {
+                            self.status = format!("moved to Trash, and not recorded: {e:#}");
+                        }
+                    } else {
+                        let email = self.accounts[a].email.clone();
+                        self.forget_trashed(&email, &from, uid);
+                    }
+                    self.ask(a, Ask::Count(from));
+                    self.ask(a, Ask::Count(to));
+                    self.reload(a);
+                }
+                Err(e) => {
+                    self.status = format!("cannot move it: {}", first_line(&e));
+                    self.reload(a);
+                }
+            },
+            Answer::Expunged {
+                folder,
+                uid,
+                result,
+            } => {
+                let email = self.accounts[a].email.clone();
+                self.purging.remove(&(email.clone(), folder.clone(), uid));
+                match result {
+                    Ok(Removal::Gone) => {
+                        self.forget_trashed(&email, &folder, uid);
+                        self.drop_listed(a, &folder, uid);
+                        self.ask(a, Ask::Count(folder));
+                    }
+                    Ok(Removal::Missing) => self.forget_trashed(&email, &folder, uid),
+                    Err(e) => self.status = format!("cannot remove it: {}", first_line(&e)),
+                }
+            }
+            Answer::Sent { said, answer } => {
+                if let Some(compose) = &mut self.compose {
+                    compose.sending = false;
+                }
+                match said {
+                    Ok(said) => {
+                        if let Some((folder, uid)) = answer {
+                            self.marked(a, &folder, uid, Flag::Answered, true);
+                        }
+                        self.compose = None;
+                        self.status = said;
+                        self.reload(a);
+                    }
+                    Err(e) => self.status = first_line(&e).to_string(),
+                }
             }
         }
     }
@@ -918,6 +1074,7 @@ impl App {
             let field = match flag {
                 Flag::Seen => &mut s.flags.seen,
                 Flag::Flagged => &mut s.flags.flagged,
+                Flag::Answered => &mut s.flags.answered,
             };
             changed |= *field != on;
             *field = on;
@@ -1247,6 +1404,7 @@ impl App {
             return;
         }
         let path = folder.path.clone();
+        let trash = folder.role == Role::Trash;
         if self
             .listing
             .as_ref()
@@ -1281,6 +1439,9 @@ impl App {
                 n: PAGE,
             },
         );
+        if trash {
+            self.sweep(a);
+        }
     }
 
     /// Look in the folder listed again, and count every folder's messages.
@@ -1415,6 +1576,7 @@ impl App {
         let on = match flag {
             Flag::Seen => !s.flags.seen,
             Flag::Flagged => !s.flags.flagged,
+            Flag::Answered => !s.flags.answered,
         };
         self.set(flag, on);
     }
@@ -1454,6 +1616,12 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent) {
+        if self.compose.is_some() {
+            return self.compose_key(key);
+        }
+        if self.picking.is_some() {
+            return self.pick_key(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
             self.quit = true;
@@ -1602,6 +1770,9 @@ impl App {
             KeyCode::Char('f') => self.list_files(),
             KeyCode::Char('A') => self.open_form(),
             KeyCode::Char('D') => self.ask_to_remove(),
+            KeyCode::Char('d') => self.delete(),
+            KeyCode::Char('c') => self.compose_new(),
+            KeyCode::Char('R') => self.reply(),
             _ => {}
         }
     }
@@ -1722,6 +1893,9 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
+        if self.compose.is_some() {
+            return;
+        }
         let at = self
             .targets
             .iter()
@@ -1736,6 +1910,13 @@ impl App {
         };
         if self.help {
             self.help_scroll = self.help_scroll.saturating_add_signed(by);
+            return;
+        }
+        if let Some(pick) = &mut self.picking {
+            pick.at = pick
+                .at
+                .saturating_add_signed(by)
+                .min(pick.folders.len().saturating_sub(1));
             return;
         }
         if let Some(files) = &mut self.files {
@@ -1768,6 +1949,19 @@ impl App {
         if self.help {
             if at != Some(Target::Popup) {
                 self.help = false;
+            }
+            return;
+        }
+        if self.picking.is_some() {
+            match at {
+                Some(Target::Item(i)) => {
+                    if let Some(pick) = &mut self.picking {
+                        pick.at = i;
+                    }
+                    self.choose_trash();
+                }
+                Some(Target::Popup) => {}
+                _ => self.cancel_trash(),
             }
             return;
         }
@@ -2026,6 +2220,489 @@ impl App {
             }
         }
         self.status = format!("saved to {}: {}", tilde(&dir), saved.join(", "));
+    }
+
+    /// Move what is picked to Trash, or, in Trash, back where it was.
+    fn delete(&mut self) {
+        let Some(listing) = &self.listing else {
+            return;
+        };
+        let Some(summary) = self.current().cloned() else {
+            return;
+        };
+        let (account, folder, uid) = (listing.account, listing.folder.clone(), summary.uid);
+        if self.folder().is_some_and(|f| f.role == Role::Trash) {
+            let email = self.accounts[account].email.clone();
+            let known = self
+                .ledger
+                .origin(&email, &folder, &summary.message_id, uid);
+            let dest = known.clone().unwrap_or_else(|| self.inbox(account));
+            let name = self.folder_label(account, &dest);
+            self.drop_listed(account, &folder, uid);
+            self.status = if known.is_some() {
+                format!("put back in {name}")
+            } else {
+                format!("put back in {name}; letterbox had not moved it")
+            };
+            self.ask(
+                account,
+                Ask::Move {
+                    from: folder,
+                    uid,
+                    to: dest,
+                    message_id: summary.message_id,
+                    trashed: false,
+                },
+            );
+            return;
+        }
+        let Some(trash) = self.trash_of(account) else {
+            self.ask_which_trash(account, folder, summary);
+            return;
+        };
+        self.move_to_trash(account, folder, summary.uid, summary.message_id, trash);
+    }
+
+    /// List the account's other folders and ask which one `d` should move
+    /// mail to. A server that marks a Trash folder is not asked.
+    fn ask_which_trash(&mut self, account: usize, folder: String, summary: Summary) {
+        let folders: Vec<(String, String)> = self
+            .accounts
+            .get(account)
+            .map(|a| {
+                a.folders
+                    .iter()
+                    .filter(|f| f.selectable && f.path != folder)
+                    .map(|f| (f.path.clone(), trash_label(f)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if folders.is_empty() {
+            self.status = "there is no other folder to use as Trash".to_string();
+            return;
+        }
+        self.held = Some(Held {
+            account,
+            from: folder,
+            uid: summary.uid,
+            message_id: summary.message_id,
+        });
+        self.picking = Some(TrashPick {
+            account,
+            folders,
+            at: 0,
+        });
+        self.status = "which folder should be Trash?".to_string();
+    }
+
+    fn pick_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(pick) = &mut self.picking {
+                    pick.at = (pick.at + 1).min(pick.folders.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(pick) = &mut self.picking {
+                    pick.at = pick.at.saturating_sub(1);
+                }
+            }
+            KeyCode::Enter => self.choose_trash(),
+            KeyCode::Esc => self.cancel_trash(),
+            _ => {}
+        }
+    }
+
+    fn cancel_trash(&mut self) {
+        self.picking = None;
+        self.held = None;
+        self.status = "not moved".to_string();
+    }
+
+    /// The folder highlighted is Trash from now on, and the delete that
+    /// was waiting is moved there.
+    fn choose_trash(&mut self) {
+        let Some(pick) = self.picking.take() else {
+            return;
+        };
+        let Some((path, _)) = pick.folders.get(pick.at).cloned() else {
+            self.held = None;
+            self.status = "not moved".to_string();
+            return;
+        };
+        if let Some(folder) = self.folder_mut(pick.account, &path) {
+            folder.role = Role::Trash;
+        }
+        self.accounts[pick.account].trash = Some(path.clone());
+        let remembered = if self.editable {
+            let name = self.accounts[pick.account].name.clone();
+            config::set_trash(&self.config, &name, &path)
+        } else {
+            Ok(())
+        };
+        let moved = self.resume_held(pick.account);
+        if let Err(e) = remembered
+            && moved
+        {
+            self.status = format!(
+                "{} · not remembered: {}",
+                self.status,
+                first_line(&format!("{e:#}"))
+            );
+        }
+    }
+
+    fn move_to_trash(
+        &mut self,
+        account: usize,
+        from: String,
+        uid: u32,
+        message_id: String,
+        trash: String,
+    ) {
+        let name = self.folder_label(account, &trash);
+        self.drop_listed(account, &from, uid);
+        self.status = format!("moved to {name} · d there puts it back, for 7 days");
+        self.ask(
+            account,
+            Ask::Move {
+                from,
+                uid,
+                to: trash,
+                message_id,
+                trashed: true,
+            },
+        );
+    }
+
+    /// Move the delete that was waiting. False when there was nothing to
+    /// move, or Trash is still not known.
+    fn resume_held(&mut self, account: usize) -> bool {
+        let Some(held) = self.held.take() else {
+            return false;
+        };
+        if held.account != account {
+            self.held = Some(held);
+            return false;
+        }
+        let Some(trash) = self.trash_of(account) else {
+            // Still waiting on which folder that is.
+            if self.picking.is_some() {
+                self.held = Some(held);
+            } else {
+                self.status = "no Trash folder".to_string();
+            }
+            return false;
+        };
+        self.move_to_trash(account, held.from, held.uid, held.message_id, trash);
+        true
+    }
+
+    /// The folder mail is moved to: the one chosen for this account, when
+    /// it is still there, else the one the server marks as Trash.
+    fn trash_of(&self, account: usize) -> Option<String> {
+        let account = self.accounts.get(account)?;
+        if let Some(path) = &account.trash
+            && account
+                .folders
+                .iter()
+                .any(|f| f.path == *path && f.selectable)
+        {
+            return Some(path.clone());
+        }
+        account
+            .folders
+            .iter()
+            .find(|f| f.role == Role::Trash && f.selectable)
+            .map(|f| f.path.clone())
+    }
+
+    /// Give the chosen folder the Trash role, once the server has listed it.
+    fn remember_trash(&mut self, account: usize) {
+        let Some(path) = self.accounts[account].trash.clone() else {
+            return;
+        };
+        if let Some(folder) = self.folder_mut(account, &path)
+            && folder.selectable
+        {
+            folder.role = Role::Trash;
+        }
+    }
+
+    fn inbox(&self, account: usize) -> String {
+        self.accounts
+            .get(account)
+            .and_then(|a| {
+                a.folders
+                    .iter()
+                    .find(|f| f.role == Role::Inbox)
+                    .map(|f| f.path.clone())
+            })
+            .unwrap_or_else(|| "INBOX".to_string())
+    }
+
+    fn folder_label(&self, account: usize, path: &str) -> String {
+        self.accounts
+            .get(account)
+            .and_then(|a| a.folders.iter().find(|f| f.path == path))
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| path.to_string())
+    }
+
+    /// Remove messages letterbox trashed more than seven days ago.
+    fn sweep(&mut self, account: usize) {
+        let email = self
+            .accounts
+            .get(account)
+            .map(|a| a.email.clone())
+            .unwrap_or_default();
+        if email.is_empty() {
+            return;
+        }
+        let now = jiff::Timestamp::now().as_second();
+        let due = self.ledger.due(&email, now);
+        for entry in due {
+            let key = (email.clone(), entry.folder.clone(), entry.uid);
+            if !self.purging.insert(key) {
+                continue;
+            }
+            self.ask(
+                account,
+                Ask::Expunge {
+                    folder: entry.folder,
+                    uid: entry.uid,
+                },
+            );
+        }
+    }
+
+    fn forget_trashed(&mut self, email: &str, folder: &str, uid: u32) {
+        if let Err(e) = self.ledger.forget(email, folder, uid) {
+            self.status = format!(
+                "cannot update the trash record: {}",
+                first_line(&format!("{e:#}"))
+            );
+        }
+    }
+
+    fn drop_listed(&mut self, account: usize, folder: &str, uid: u32) {
+        if let Some(listing) = self
+            .listing
+            .as_mut()
+            .filter(|l| l.account == account && l.folder == folder)
+        {
+            let before = listing.messages.len();
+            listing.messages.retain(|m| m.uid != uid);
+            if listing.messages.len() != before {
+                listing.total = listing.total.saturating_sub(1);
+            }
+        }
+        if let Some((messages, total)) = self.listed.get_mut(&(account, folder.to_string())) {
+            let before = messages.len();
+            messages.retain(|m| m.uid != uid);
+            if messages.len() != before {
+                *total = total.saturating_sub(1);
+            }
+        }
+        if self
+            .reading
+            .as_ref()
+            .is_some_and(|r| r.account == account && r.folder == folder && r.uid == uid)
+        {
+            self.reading = None;
+            self.drawn = None;
+        }
+        self.narrow();
+    }
+
+    fn reload(&mut self, account: usize) {
+        let Some(folder) = self
+            .listing
+            .as_ref()
+            .filter(|l| l.account == account)
+            .map(|l| l.folder.clone())
+        else {
+            return;
+        };
+        self.ask(
+            account,
+            Ask::Page {
+                folder,
+                offset: 0,
+                n: PAGE,
+            },
+        );
+    }
+
+    fn compose_new(&mut self) {
+        let Some(account) = self.account_of() else {
+            self.status = "no account to send from".to_string();
+            return;
+        };
+        let (text, row, col) = compose::blank();
+        self.open_compose(account, text, row, col, None, None, None);
+    }
+
+    fn reply(&mut self) {
+        let Some(listing) = &self.listing else {
+            return;
+        };
+        let Some(summary) = self.current() else {
+            self.status = "no message to reply to".to_string();
+            return;
+        };
+        let (account, folder, uid) = (listing.account, listing.folder.clone(), summary.uid);
+        if let Some(message) = self.cached(account, &folder, uid) {
+            self.open_reply(account, &message);
+            return;
+        }
+        self.reply_when = Some((account, folder.clone(), uid));
+        self.status = "reading it to reply".to_string();
+        self.ask(
+            account,
+            Ask::Open {
+                folder,
+                uid,
+                mark: false,
+            },
+        );
+    }
+
+    fn cached(&self, account: usize, folder: &str, uid: u32) -> Option<std::sync::Arc<Message>> {
+        if self
+            .reading
+            .as_ref()
+            .is_some_and(|r| r.account == account && r.folder == folder && r.uid == uid)
+        {
+            if let Some(message) = self.message() {
+                return Some(message.clone());
+            }
+        }
+        self.read.get(&(account, folder.to_string(), uid))
+    }
+
+    fn open_reply(&mut self, account: usize, message: &Message) {
+        let (text, row) = compose::reply(message);
+        let (in_reply_to, references) = compose::thread(message);
+        let answering = Some((
+            self.reading
+                .as_ref()
+                .filter(|r| r.uid == message.uid)
+                .map(|r| r.folder.clone())
+                .unwrap_or_else(|| {
+                    self.listing
+                        .as_ref()
+                        .map(|l| l.folder.clone())
+                        .unwrap_or_default()
+                }),
+            message.uid,
+        ));
+        // The folder the message was read from, which may not be the one listed
+        // once a reply waited on the fetch.
+        let answering = self
+            .reading
+            .as_ref()
+            .filter(|r| r.account == account && r.uid == message.uid)
+            .map(|r| (r.folder.clone(), r.uid))
+            .or(answering);
+        self.open_compose(account, text, row, 0, in_reply_to, references, answering);
+    }
+
+    fn open_compose(
+        &mut self,
+        account: usize,
+        text: String,
+        row: usize,
+        col: usize,
+        in_reply_to: Option<String>,
+        references: Option<String>,
+        answering: Option<(String, u32)>,
+    ) {
+        let mut buffer = edit::Buffer::from_text(&text);
+        buffer.place(row, col);
+        self.help = false;
+        self.searching = false;
+        self.compose = Some(Compose {
+            buffer,
+            account,
+            in_reply_to,
+            references,
+            answering,
+            prefix: false,
+            scroll: 0,
+            sending: false,
+        });
+    }
+
+    fn account_of(&self) -> Option<usize> {
+        self.listing
+            .as_ref()
+            .map(|l| l.account)
+            .or_else(|| self.live().next())
+    }
+
+    fn compose_key(&mut self, key: KeyEvent) {
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        if compose.sending {
+            return;
+        }
+        let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
+        match done {
+            Done::Stay => {}
+            Done::Cancel => {
+                self.compose = None;
+                self.status = "not sent".to_string();
+            }
+            Done::Send => self.send_compose(),
+        }
+    }
+
+    fn send_compose(&mut self) {
+        let Some(compose) = &self.compose else {
+            return;
+        };
+        if compose.sending {
+            return;
+        }
+        let account = compose.account;
+        let draft = match compose::parse(&compose.buffer.text()) {
+            Ok(draft) => draft,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+        let email = self
+            .accounts
+            .get(account)
+            .map(|a| a.email.clone())
+            .unwrap_or_default();
+        if email.is_empty() {
+            self.status = "this account has no address to send from".to_string();
+            return;
+        }
+        let raw = compose::bytes(
+            &email,
+            &draft,
+            compose.in_reply_to.as_deref(),
+            compose.references.as_deref(),
+        );
+        let answer = compose.answering.clone();
+        self.compose.as_mut().expect("open").sending = true;
+        self.status = "sending…".to_string();
+        self.ask(account, Ask::Send { raw, answer });
+    }
+}
+
+/// How a folder is named when asking which one is Trash: its own name, and
+/// its path when that says where it sits.
+fn trash_label(folder: &Folder) -> String {
+    if folder.path.eq_ignore_ascii_case(&folder.name) || folder.role == Role::Inbox {
+        folder.name.clone()
+    } else {
+        format!("{} · {}", folder.name, folder.path)
     }
 }
 

@@ -4,7 +4,7 @@
 //! through the list is not fetched, and folders are counted last.
 
 use crate::mail::{self, Folder, Message, Summary};
-use crate::store::{Flag, Page, Store};
+use crate::store::{Flag, Page, Removal, Store};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -33,6 +33,25 @@ pub enum Ask {
         folder: String,
         words: String,
         n: usize,
+    },
+    /// Move a message. `trashed` records where it came from, so it can be
+    /// put back; a move out of Trash does not.
+    Move {
+        from: String,
+        uid: u32,
+        to: String,
+        message_id: String,
+        trashed: bool,
+    },
+    Expunge {
+        folder: String,
+        uid: u32,
+    },
+    /// Send `raw`. `answer` is the message it replies to, marked answered
+    /// once the send is taken.
+    Send {
+        raw: Vec<u8>,
+        answer: Option<(String, u32)>,
     },
 }
 
@@ -65,6 +84,27 @@ pub enum Answer {
         folder: String,
         words: String,
         found: Result<Vec<Summary>, String>,
+    },
+    /// The account's address, sent once the store's thread starts, before
+    /// anything is asked: the ledger is kept by the address.
+    Address(String),
+    Moved {
+        from: String,
+        uid: u32,
+        to: String,
+        message_id: String,
+        trashed: bool,
+        new_uid: Result<u32, String>,
+        email: String,
+    },
+    Expunged {
+        folder: String,
+        uid: u32,
+        result: Result<Removal, String>,
+    },
+    Sent {
+        said: Result<String, String>,
+        answer: Option<(String, u32)>,
     },
     /// Asked, and passed over for what was asked after it.
     Skipped,
@@ -143,6 +183,39 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             folder,
             words,
         },
+        Ask::Move {
+            from,
+            uid,
+            to,
+            message_id,
+            trashed,
+        } => {
+            let email = store.address().to_string();
+            let new_uid = store.relocate(&from, uid, &to, &message_id).map_err(text);
+            Answer::Moved {
+                new_uid,
+                email,
+                from,
+                uid,
+                to,
+                message_id,
+                trashed,
+            }
+        }
+        Ask::Expunge { folder, uid } => Answer::Expunged {
+            result: store.expunge(&folder, uid).map_err(text),
+            folder,
+            uid,
+        },
+        Ask::Send { raw, answer } => {
+            let said = store.send(&raw).map_err(text);
+            if said.is_ok()
+                && let Some((folder, uid)) = &answer
+            {
+                let _ = store.set(folder, *uid, Flag::Answered, true);
+            }
+            Answer::Sent { said, answer }
+        }
     }
 }
 
@@ -167,6 +240,10 @@ fn superseded(ask: &Ask, after: &VecDeque<Ask>) -> bool {
 pub fn spawn(account: usize, mut store: Box<dyn Store>, replies: Sender<Reply>) -> Sender<Ask> {
     let (asks, rx): (Sender<Ask>, Receiver<Ask>) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = replies.send(Reply {
+            account,
+            answer: Answer::Address(store.address().to_string()),
+        });
         let mut queue: VecDeque<Ask> = VecDeque::new();
         loop {
             if queue.is_empty() {

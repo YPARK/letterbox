@@ -5,7 +5,7 @@
 
 use crate::app::{
     AGAIN, App, Body, Button, FIELDS, Files, Focus, Form, Item, KEEP, PASSPHRASE, PASSWORD, Row,
-    SIGN_IN, State, Target, ohp_reads,
+    SIGN_IN, State, Target, TrashPick, ohp_reads,
 };
 use crate::config::Auth;
 use crate::mail::Message;
@@ -68,7 +68,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
-    let [side_w, list_w, read_w] = panes(main.width, app.focus);
+    let composing = app.compose.is_some();
+    let [side_w, list_w, read_w] = if composing {
+        if main.width >= MEDIUM {
+            [SIDEBAR, 0, main.width - SIDEBAR]
+        } else {
+            [0, 0, main.width]
+        }
+    } else {
+        panes(main.width, app.focus)
+    };
     app.side_by_side = list_w > 0 && read_w > 0;
     let [side, list, read] = Layout::horizontal([
         Constraint::Length(side_w),
@@ -84,7 +93,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         messages(f, app, list);
     }
     if read_w > 0 {
-        reader(f, app, read);
+        if app.compose.is_some() {
+            compose_pane(f, app, read);
+        } else {
+            reader(f, app, read);
+        }
     }
     keys(f, app, foot_area, foot_lines, spots);
     let popup = if app.help {
@@ -95,6 +108,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Some(form_dialog(f, &t, form))
     } else if let Some(files) = &app.files {
         Some(files_dialog(f, &t, files))
+    } else if let Some(pick) = &app.picking {
+        Some(trash_dialog(f, &t, pick))
     } else {
         app.removing.map(|a| removing(f, &t, &app.accounts[a].name))
     };
@@ -405,6 +420,53 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     (area, targets)
 }
 
+/// The account's folders, one highlighted, asking which of them is Trash.
+fn trash_dialog(f: &mut Frame, t: &Theme, pick: &TrashPick) -> (Rect, Targets) {
+    let width = f.area().width.min(72);
+    let room = (width as usize).saturating_sub(4);
+    let intro = wrap(
+        "Which of these folders should hold mail you delete? It stays there for 7 days, and d puts it back.",
+        room,
+    );
+    let shows = (f.area().height as usize)
+        .saturating_sub(intro.len() + 4)
+        .max(1)
+        .min(pick.folders.len());
+    let start = pick
+        .at
+        .saturating_sub(shows / 2)
+        .min(pick.folders.len().saturating_sub(shows));
+    let mut lines: Vec<Line> = intro.into_iter().map(Line::raw).collect();
+    lines.push(Line::raw(""));
+    let first = lines.len();
+    for (i, (_, name)) in pick.folders.iter().enumerate().skip(start).take(shows) {
+        let style = if i == pick.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::styled(
+            format!(" {} ", clip(name, room.saturating_sub(2))),
+            style,
+        ));
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, "Trash", "⏎ this folder · esc cancel")),
+        area,
+    );
+    let targets = (start..start + shows)
+        .map(|i| {
+            (
+                spot(area, first + i - start, 0, room as u16),
+                Target::Item(i),
+            )
+        })
+        .collect();
+    (area, targets)
+}
+
 fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
     let width = f.area().width.min(64);
     let room = (width as usize).saturating_sub(4);
@@ -441,6 +503,103 @@ fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
     (area, targets)
 }
 
+/// The message being written: its text, the cursor reversed, and a mode
+/// line, as an Emacs buffer has one.
+fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(compose) = &mut app.compose else {
+        return;
+    };
+    let t = app.theme;
+    let mode_h = 1u16.min(area.height);
+    let body = Rect {
+        height: area.height.saturating_sub(mode_h),
+        ..area
+    };
+    let mode = Rect {
+        y: area.y + body.height,
+        height: area.height - body.height,
+        ..area
+    };
+    let rows = (body.height as usize).max(1);
+    if compose.buffer.row() < compose.scroll {
+        compose.scroll = compose.buffer.row();
+    } else if compose.buffer.row() >= compose.scroll + rows {
+        compose.scroll = compose.buffer.row() + 1 - rows;
+    }
+    let width = (body.width as usize).max(1);
+    let scroll = compose.scroll;
+    let cursor_row = compose.buffer.row();
+    let cursor_col = compose.buffer.col();
+    let mut lines: Vec<Line> = compose
+        .buffer
+        .lines()
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(rows)
+        .map(|(i, line)| compose_line(line, i == cursor_row, cursor_col, width, t))
+        .collect();
+    while (lines.len() as u16) < body.height {
+        lines.push(Line::raw(""));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::new().bg(t.page).fg(t.text)),
+        body,
+    );
+    let mode_line = Line::from(vec![
+        Span::styled(" Compose ", Style::new().fg(t.side).bg(t.title).bold()),
+        Span::styled(
+            "  C-c C-c send   C-c C-k or C-g cancel",
+            Style::new().fg(t.dim),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(mode_line).style(Style::new().bg(t.side)),
+        mode,
+    );
+}
+
+fn compose_line(line: &str, cursor: bool, col: usize, width: usize, t: Theme) -> Line<'static> {
+    let chars: Vec<char> = line.chars().collect();
+    let widths: Vec<usize> = chars
+        .iter()
+        .map(|c| c.width().unwrap_or(0).max(1))
+        .collect();
+    let col = col.min(chars.len());
+    let cursor_x: usize = widths.iter().take(col).sum();
+    let mut start = 0;
+    let mut start_x = 0;
+    if cursor && width > 0 && cursor_x >= width {
+        while cursor_x.saturating_sub(start_x) >= width && start < chars.len() {
+            start_x += widths[start];
+            start += 1;
+        }
+    }
+    let quoted = line.trim_start().starts_with('>');
+    let mut spans = Vec::new();
+    let mut x = 0;
+    let mut i = start;
+    while i < chars.len() && x + widths[i] <= width {
+        let style = if cursor && i == col {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else if quoted {
+            Style::new().fg(t.dim)
+        } else {
+            Style::new().fg(t.text)
+        };
+        spans.push(Span::styled(chars[i].to_string(), style));
+        x += widths[i];
+        i += 1;
+    }
+    if cursor && col >= chars.len() && x < width {
+        spans.push(Span::styled(
+            " ",
+            Style::new().add_modifier(Modifier::REVERSED),
+        ));
+    }
+    Line::from(spans)
+}
+
 fn search(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     f.render_widget(Block::new().style(Style::new().bg(t.side)), area);
@@ -463,7 +622,9 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
     let width = field.width.saturating_sub(2).min(64);
     let room = (width as usize).saturating_sub(5);
     let mut spans = vec![Span::raw(" ⌕ ")];
-    if app.query.is_empty() && !app.searching {
+    if app.compose.is_some() {
+        spans = vec![Span::styled(" Compose", Style::new().fg(t.title).bold())];
+    } else if app.query.is_empty() && !app.searching {
         let what = if folder.is_empty() || room < 16 {
             "Search".to_string()
         } else {
@@ -1068,6 +1229,20 @@ fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spo
 /// foot takes on a screen `width` wide: hints left out to fit, but help and
 /// quit.
 fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
+    if app.picking.is_some() {
+        let list = [("j/k", "move"), ("⏎", "this folder"), ("esc", "cancel")];
+        return lay(&list, width);
+    }
+    if app.compose.is_some() {
+        let list = [
+            ("C-c C-c", "send"),
+            ("C-g", "cancel"),
+            ("C-a/e", "line"),
+            ("C-k", "kill"),
+            ("C-y", "yank"),
+        ];
+        return lay(&list, width);
+    }
     let mut list: Vec<(&str, &str)> = match app.focus {
         Focus::Side => vec![
             ("⏎", "open"),
@@ -1078,6 +1253,9 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         ],
         Focus::List => vec![
             ("⏎", "read"),
+            ("d", "trash"),
+            ("c", "compose"),
+            ("R", "reply"),
             ("/", "search"),
             ("u", "read/unread"),
             ("s", "flag"),
@@ -1086,6 +1264,8 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         Focus::Reader => vec![
             ("␣", "page"),
             ("n/p", "next/previous"),
+            ("d", "trash"),
+            ("R", "reply"),
             ("u", "unread"),
             ("s", "flag"),
             ("f", "files & links"),
@@ -1095,25 +1275,26 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         ],
     };
     list.extend([("?", "help"), ("q", "quit")]);
-    let lay = |list: &[(&str, &str)]| -> Vec<Vec<(String, String)>> {
-        let mut lines: Vec<Vec<(String, String)>> = vec![Vec::new()];
-        let mut w = 0;
-        for (k, what) in list {
-            let (k, what) = (format!(" {k} "), format!("{what} "));
-            let iw = k.width() + what.width();
-            if w + iw > width as usize && w > 0 {
-                lines.push(Vec::new());
-                w = 0;
-            }
-            w += iw;
-            lines.last_mut().expect("a line").push((k, what));
-        }
-        lines
-    };
-    let mut lines = lay(&list);
+    let mut lines = lay(&list, width);
     while lines.len() > FOOT && list.len() > 2 {
         list.remove(list.len() - 3);
-        lines = lay(&list);
+        lines = lay(&list, width);
+    }
+    lines
+}
+
+fn lay(list: &[(&str, &str)], width: u16) -> Vec<Vec<(String, String)>> {
+    let mut lines: Vec<Vec<(String, String)>> = vec![Vec::new()];
+    let mut w = 0;
+    for (k, what) in list {
+        let (k, what) = (format!(" {k} "), format!("{what} "));
+        let iw = k.width() + what.width();
+        if w + iw > width as usize && w > 0 {
+            lines.push(Vec::new());
+            w = 0;
+        }
+        w += iw;
+        lines.last_mut().expect("a line").push((k, what));
     }
     lines
 }
@@ -1136,6 +1317,16 @@ fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
         ("esc", "back to the list; clear the search"),
         ("u", "mark read, or unread"),
         ("s", "flag, or unflag"),
+        (
+            "d",
+            "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
+        ),
+        ("c", "write a message"),
+        ("R", "reply to the message"),
+        (
+            "C-c C-c",
+            "send the message being written; C-g leaves it unsent",
+        ),
         ("o", "open the message in the browser, as its HTML"),
         (
             "f",

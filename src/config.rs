@@ -57,6 +57,14 @@ pub struct Account {
     /// A shell command that prints the password, as `pass show mail/work`,
     /// instead.
     pub password_command: Option<String>,
+    /// The SMTP submission server, when it is not the one guessed from the
+    /// address. Port 587, unless `smtp_port` says, or 465 for TLS from the
+    /// start.
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<u16>,
+    /// The folder mail is moved to by `d`, when the server marks none as
+    /// Trash. Its path, as the server names it.
+    pub trash: Option<String>,
     /// The password as typed, or Microsoft's refresh token as given, while
     /// an account is being added: never written to the file.
     #[serde(skip)]
@@ -85,6 +93,17 @@ impl Account {
 
     pub fn user(&self) -> &str {
         self.user.as_deref().unwrap_or(&self.email)
+    }
+
+    /// Where mail is sent: `smtp_host` and `smtp_port` when they are set,
+    /// else the provider's submission server, on port 587.
+    pub fn submission(&self) -> (String, u16) {
+        let host = self
+            .smtp_host
+            .clone()
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| guess_smtp(&self.email));
+        (host, self.smtp_port.unwrap_or(587))
     }
 
     pub fn port(&self) -> u16 {
@@ -163,7 +182,7 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Account>> {
     Ok(file.account)
 }
 
-fn local(host: &str) -> bool {
+pub(crate) fn local(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
@@ -171,39 +190,65 @@ fn local(host: &str) -> bool {
 pub const MICROSOFT_NOTE: &str = "Signs in on Microsoft's page, in your browser, or with a code \
      on any device: no password is kept here, only a token, renewed.";
 
-/// The IMAP server of an address, as the large providers have it, else
-/// `imap.` and its domain; and what to know to sign in there.
-pub fn guess(email: &str) -> (String, Option<&'static str>) {
-    let domain = email
+fn domain_of(email: &str) -> String {
+    email
         .rsplit_once('@')
         .map(|(_, d)| d.trim().to_lowercase())
-        .unwrap_or_default();
-    let known: Option<(&str, Option<&'static str>)> = match domain.as_str() {
+        .unwrap_or_default()
+}
+
+/// IMAP host, submission host, and what to know to sign in, for a domain
+/// whose provider is known.
+fn provider(domain: &str) -> Option<(&'static str, &'static str, Option<&'static str>)> {
+    match domain {
         "gmail.com" | "googlemail.com" => Some((
             "imap.gmail.com",
+            "smtp.gmail.com",
             Some("Gmail takes an app password, made at myaccount.google.com/apppasswords"),
         )),
         "icloud.com" | "me.com" | "mac.com" => Some((
             "imap.mail.me.com",
+            "smtp.mail.me.com",
             Some("iCloud takes an app-specific password, made at account.apple.com"),
         )),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => {
-            Some((crate::oauth::IMAP_HOST, Some(MICROSOFT_NOTE)))
-        }
+        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => Some((
+            crate::oauth::IMAP_HOST,
+            "smtp.office365.com",
+            Some(MICROSOFT_NOTE),
+        )),
         "yahoo.com" | "ymail.com" => Some((
             "imap.mail.yahoo.com",
+            "smtp.mail.yahoo.com",
             Some("Yahoo takes an app password, made in its account security settings"),
         )),
         "fastmail.com" | "fastmail.fm" => Some((
             "imap.fastmail.com",
+            "smtp.fastmail.com",
             Some("Fastmail takes an app password, made in its settings"),
         )),
         _ => None,
-    };
-    match known {
-        Some((host, note)) => (host.to_string(), note),
+    }
+}
+
+/// The IMAP server of an address, as the large providers have it, else
+/// `imap.` and its domain; and what to know to sign in there.
+pub fn guess(email: &str) -> (String, Option<&'static str>) {
+    let domain = domain_of(email);
+    match provider(&domain) {
+        Some((host, _, note)) => (host.to_string(), note),
         None if domain.is_empty() => (String::new(), None),
         None => (format!("imap.{domain}"), None),
+    }
+}
+
+/// The submission server of an address, as the large providers have it,
+/// else `smtp.` and its domain.
+pub fn guess_smtp(email: &str) -> String {
+    let domain = domain_of(email);
+    match provider(&domain) {
+        Some((_, host, _)) => host.to_string(),
+        None if domain.is_empty() => String::new(),
+        None => format!("smtp.{domain}"),
     }
 }
 
@@ -239,6 +284,15 @@ fn table(a: &Account) -> toml_edit::Table {
     }
     if let Some(c) = &a.password_command {
         t["password_command"] = toml_edit::value(c);
+    }
+    if let Some(h) = &a.smtp_host {
+        t["smtp_host"] = toml_edit::value(h);
+    }
+    if let Some(p) = a.smtp_port {
+        t["smtp_port"] = toml_edit::value(i64::from(p));
+    }
+    if let Some(folder) = &a.trash {
+        t["trash"] = toml_edit::value(folder);
     }
     t
 }
@@ -283,6 +337,26 @@ pub fn add(path: &Path, account: &Account) -> anyhow::Result<()> {
         .as_array_of_tables_mut()
         .context("`account` in the file is not a list of [[account]] tables")?;
     accounts.push(table(account));
+    write_doc(path, &doc)
+}
+
+/// Remember `folder` as Trash for the account named `name`: the folder `d`
+/// moves mail to, when the server itself marks none.
+pub fn set_trash(path: &Path, name: &str, folder: &str) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    let accounts = doc
+        .get_mut("account")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .context("no accounts in the file")?;
+    let table = accounts
+        .iter_mut()
+        .find(|t| {
+            t.get("name")
+                .and_then(toml_edit::Item::as_str)
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .with_context(|| format!("no account named {name}"))?;
+    table["trash"] = toml_edit::value(folder);
     write_doc(path, &doc)
 }
 
@@ -346,4 +420,9 @@ host = "imap.example.com"
 # letterbox keeps it: in the system's store, or with keep = "vault" in its
 # vault. Or it is printed by a command of yours:
 # password_command = "pass show mail/work"
+# The server mail is sent through, when it is not smtp. and the domain:
+# smtp_host = "smtp.example.com"
+# smtp_port = 587
+# The folder d moves mail to, when the server marks none as Trash:
+# trash = "Deleted Items"
 "#;
