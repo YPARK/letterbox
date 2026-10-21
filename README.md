@@ -17,8 +17,10 @@ background, as in an Emacs buffer.
 Rust 1.92 or later:
 
 ```sh
-cargo install --git https://github.com/YPARK/letterbox
+cargo install letterbox
 ```
+
+or `cargo install --path .` in a clone of this repository.
 
 This installs `letterbox`, and `lbx`, the same program by a shorter name:
 `lbx` for the TUI, `lbx list -n 5`, and so on.
