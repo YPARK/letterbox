@@ -197,37 +197,73 @@ fn domain_of(email: &str) -> String {
         .unwrap_or_default()
 }
 
-/// IMAP host, submission host, and what to know to sign in, for a domain
-/// whose provider is known.
-fn provider(domain: &str) -> Option<(&'static str, &'static str, Option<&'static str>)> {
-    match domain {
-        "gmail.com" | "googlemail.com" => Some((
-            "imap.gmail.com",
-            "smtp.gmail.com",
-            Some("Gmail takes an app password, made at myaccount.google.com/apppasswords"),
-        )),
-        "icloud.com" | "me.com" | "mac.com" => Some((
-            "imap.mail.me.com",
-            "smtp.mail.me.com",
-            Some("iCloud takes an app-specific password, made at account.apple.com"),
-        )),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => Some((
-            crate::oauth::IMAP_HOST,
-            "smtp.office365.com",
-            Some(MICROSOFT_NOTE),
-        )),
-        "yahoo.com" | "ymail.com" => Some((
-            "imap.mail.yahoo.com",
-            "smtp.mail.yahoo.com",
-            Some("Yahoo takes an app password, made in its account security settings"),
-        )),
-        "fastmail.com" | "fastmail.fm" => Some((
-            "imap.fastmail.com",
-            "smtp.fastmail.com",
-            Some("Fastmail takes an app password, made in its settings"),
-        )),
-        _ => None,
-    }
+/// A provider whose servers are known: its addresses' domains, its IMAP
+/// and submission hosts, what to know to sign in, the page its app
+/// passwords are made on, and whether it shows them in four groups of four.
+struct Provider {
+    domains: &'static [&'static str],
+    imap: &'static str,
+    smtp: &'static str,
+    note: &'static str,
+    page: Option<&'static str>,
+    grouped: bool,
+}
+
+const PROVIDERS: &[Provider] = &[
+    Provider {
+        domains: &["gmail.com", "googlemail.com"],
+        imap: "imap.gmail.com",
+        smtp: "smtp.gmail.com",
+        note: "Gmail takes an app password, not the account's: with 2-Step Verification on, \
+               make one at myaccount.google.com/apppasswords and paste it here.",
+        page: Some("https://myaccount.google.com/apppasswords"),
+        grouped: true,
+    },
+    Provider {
+        domains: &["icloud.com", "me.com", "mac.com"],
+        imap: "imap.mail.me.com",
+        smtp: "smtp.mail.me.com",
+        note: "iCloud takes an app-specific password, made at account.apple.com under \
+               Sign-In and Security.",
+        page: Some("https://account.apple.com"),
+        grouped: false,
+    },
+    Provider {
+        domains: &["outlook.com", "hotmail.com", "live.com", "msn.com"],
+        imap: crate::oauth::IMAP_HOST,
+        smtp: "smtp.office365.com",
+        note: MICROSOFT_NOTE,
+        page: None,
+        grouped: false,
+    },
+    Provider {
+        domains: &["yahoo.com", "ymail.com"],
+        imap: "imap.mail.yahoo.com",
+        smtp: "smtp.mail.yahoo.com",
+        note: "Yahoo takes an app password, made in its account security settings.",
+        page: Some("https://login.yahoo.com/account/security"),
+        grouped: true,
+    },
+    Provider {
+        domains: &["fastmail.com", "fastmail.fm"],
+        imap: "imap.fastmail.com",
+        smtp: "smtp.fastmail.com",
+        note: "Fastmail takes an app password, made in its privacy and security settings.",
+        page: Some("https://app.fastmail.com/settings/security"),
+        grouped: true,
+    },
+];
+
+/// The provider of a domain, if it is known.
+fn provider(domain: &str) -> Option<&'static Provider> {
+    PROVIDERS.iter().find(|p| p.domains.contains(&domain))
+}
+
+/// The provider whose IMAP server `host` is, if it is known.
+fn provider_at(host: &str) -> Option<&'static Provider> {
+    PROVIDERS
+        .iter()
+        .find(|p| p.imap.eq_ignore_ascii_case(host.trim()))
 }
 
 /// The IMAP server of an address, as the large providers have it, else
@@ -235,7 +271,7 @@ fn provider(domain: &str) -> Option<(&'static str, &'static str, Option<&'static
 pub fn guess(email: &str) -> (String, Option<&'static str>) {
     let domain = domain_of(email);
     match provider(&domain) {
-        Some((host, _, note)) => (host.to_string(), note),
+        Some(p) => (p.imap.to_string(), Some(p.note)),
         None if domain.is_empty() => (String::new(), None),
         None => (format!("imap.{domain}"), None),
     }
@@ -246,9 +282,34 @@ pub fn guess(email: &str) -> (String, Option<&'static str>) {
 pub fn guess_smtp(email: &str) -> String {
     let domain = domain_of(email);
     match provider(&domain) {
-        Some((_, host, _)) => host.to_string(),
+        Some(p) => p.smtp.to_string(),
         None if domain.is_empty() => String::new(),
         None => format!("smtp.{domain}"),
+    }
+}
+
+/// What to know to make an app password for the account at `host`, or
+/// else for the address `email`, if its provider takes one: what to say,
+/// and the page they are made on.
+pub fn app_password_help(email: &str, host: &str) -> Option<(&'static str, &'static str)> {
+    provider_at(host)
+        .or_else(|| provider(&domain_of(email)))
+        .and_then(|p| Some((p.note, p.page?)))
+}
+
+/// The password to sign in to `host` with: an app password, as a provider
+/// that makes them shows it in four groups of four, run together; else as
+/// typed, as elsewhere a space may be in a password.
+pub fn app_password(host: &str, typed: &str) -> String {
+    let groups: Vec<&str> = typed.split_whitespace().collect();
+    let grouped = groups.len() == 4
+        && groups
+            .iter()
+            .all(|g| g.len() == 4 && g.bytes().all(|b| b.is_ascii_alphanumeric()));
+    if grouped && provider_at(host).is_some_and(|p| p.grouped) {
+        groups.concat()
+    } else {
+        typed.to_string()
     }
 }
 

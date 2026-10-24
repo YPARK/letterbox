@@ -1078,7 +1078,7 @@ fn an_account_that_cannot_sign_in_is_not_added() {
     let mut app = empty_app(path.clone());
     fill_form(&mut app, account.port.unwrap(), "wrong");
     let form = app.form.as_ref().expect("the form stays open");
-    assert!(form.failed);
+    assert_eq!(form.failed, Some(app::Failure::Refused));
     assert!(
         form.note.as_ref().unwrap().contains("cannot sign in"),
         "{:?}",
@@ -1089,6 +1089,100 @@ fn an_account_that_cannot_sign_in_is_not_added() {
     assert!(
         screen.contains("Add account") && screen.contains("•••••▏"),
         "{screen}"
+    );
+}
+
+/// The form filled in for the fake server, as for a Gmail address, up to
+/// the password.
+fn fill_gmail_form(app: &mut App, port: u16) {
+    let port = port.to_string();
+    press(
+        app,
+        &[
+            "A",
+            "me@gmail.com",
+            "<tab>",
+            "<tab>",
+            "<c-u>",
+            "127.0.0.1",
+            "<tab>",
+            "<c-u>",
+            &port,
+            "<tab>",
+            "<c-u>",
+            "me",
+            "<tab>",
+            "<tab>",
+        ],
+    );
+}
+
+#[test]
+fn a_failed_sign_in_still_says_where_an_app_password_is_made() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = empty_app(dir.path().join("accounts.toml"));
+    fill_gmail_form(&mut app, account.port.unwrap());
+    press(&mut app, &["wrong", "<enter>"]);
+    let form = app.form.as_ref().expect("the form stays open");
+    assert_eq!(form.failed, Some(app::Failure::Refused));
+    let screen = app::screen(&mut app, 100, 40);
+    assert!(screen.contains("cannot sign in"), "{screen}");
+    assert!(screen.contains("apppasswords"), "{screen}");
+    let screen = app::screen(&mut app, 80, 24);
+    assert!(screen.contains("Sign in and add"), "{screen}");
+}
+
+#[test]
+fn a_mistake_in_the_form_is_said_without_the_providers_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = empty_app(dir.path().join("accounts.toml"));
+    press(
+        &mut app,
+        &[
+            "A",
+            "me@gmail.com",
+            "<tab>",
+            "<tab>",
+            "<tab>",
+            "<c-u>",
+            "x",
+            "<tab>",
+            "<tab>",
+            "<tab>",
+            "pw",
+            "<enter>",
+        ],
+    );
+    let screen = app::screen(&mut app, 100, 40);
+    assert!(screen.contains("the port is a number"), "{screen}");
+    assert!(!screen.contains("apppasswords"), "{screen}");
+}
+
+#[test]
+fn ctrl_o_opens_the_page_an_app_password_is_made_on() {
+    static OPENED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = empty_app(dir.path().join("accounts.toml"));
+    app.browse = |url| OPENED.lock().unwrap().push(url.to_string());
+    press(&mut app, &["A", "me@ubc.ca", "<c-o>"]);
+    assert!(
+        OPENED.lock().unwrap().is_empty(),
+        "no page for an unknown provider"
+    );
+    assert!(!app::screen(&mut app, 120, 40).contains("^o"));
+    press(&mut app, &["<c-u>", "me@gmail.com"]);
+    assert!(app::screen(&mut app, 120, 40).contains("^o"));
+    press(&mut app, &["<tab>", "<c-o>"]);
+    assert_eq!(
+        *OPENED.lock().unwrap(),
+        ["https://myaccount.google.com/apppasswords"]
+    );
+    assert!(app.status.contains("opened"), "{}", app.status);
+    assert_eq!(
+        app.form.as_ref().unwrap().fields[app::NAME],
+        "gmail.com",
+        "nothing typed"
     );
 }
 
@@ -1146,6 +1240,60 @@ fn providers_servers_are_guessed_from_the_address() {
         "smtp.office365.com"
     );
     assert_eq!(crate::config::guess_smtp("x@ubc.ca"), "smtp.ubc.ca");
+}
+
+#[test]
+fn an_app_password_page_is_known_for_the_providers_that_take_one() {
+    use crate::config::app_password_help;
+    let page = |email, host| app_password_help(email, host).map(|(_, page)| page);
+    assert_eq!(
+        page("x@gmail.com", ""),
+        Some("https://myaccount.google.com/apppasswords")
+    );
+    assert!(page("x@icloud.com", "").is_some());
+    assert!(page("x@yahoo.com", "").is_some());
+    // An address of its own domain, on Gmail's server, is Gmail's.
+    assert_eq!(page("x@ubc.ca", "imap.gmail.com"), page("x@gmail.com", ""));
+    assert_eq!(
+        page("x@outlook.com", ""),
+        None,
+        "it signs in in the browser"
+    );
+    assert_eq!(page("x@ubc.ca", "imap.ubc.ca"), None);
+}
+
+#[test]
+fn an_app_password_is_taken_with_its_spaces_or_without() {
+    use crate::config::app_password;
+    let gmail = "imap.gmail.com";
+    // Yahoo's and Fastmail's are shown in groups of four too.
+    for host in ["imap.mail.yahoo.com", "imap.fastmail.com"] {
+        assert_eq!(
+            app_password(host, "ab12 cd34 ef56 gh78"),
+            "ab12cd34ef56gh78"
+        );
+    }
+    assert_eq!(
+        app_password(gmail, "abcdefgh ijklmnop"),
+        "abcdefgh ijklmnop",
+        "not in groups of four"
+    );
+    assert_eq!(
+        app_password(gmail, "abcd efgh ijkl mnop"),
+        "abcdefghijklmnop"
+    );
+    assert_eq!(
+        app_password(gmail, " abcd efgh ijkl mnop "),
+        "abcdefghijklmnop"
+    );
+    assert_eq!(app_password(gmail, "abcdefghijklmnop"), "abcdefghijklmnop");
+    // Not an app password's shape: kept as typed.
+    assert_eq!(app_password(gmail, "my pass word"), "my pass word");
+    // Elsewhere a space may be in a password.
+    assert_eq!(
+        app_password("imap.ubc.ca", "abcd efgh ijkl mnop"),
+        "abcd efgh ijkl mnop"
+    );
 }
 
 #[test]

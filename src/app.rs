@@ -99,9 +99,9 @@ pub const FIELDS: [&str; 10] = [
     "Passphrase",
     "Again",
 ];
-const EMAIL: usize = 0;
-const NAME: usize = 1;
-const SERVER: usize = 2;
+pub(crate) const EMAIL: usize = 0;
+pub(crate) const NAME: usize = 1;
+pub(crate) const SERVER: usize = 2;
 const PORT: usize = 3;
 const USER: usize = 4;
 pub const SIGN_IN: usize = 5;
@@ -109,6 +109,14 @@ pub const PASSWORD: usize = 6;
 pub const KEEP: usize = 7;
 pub const PASSPHRASE: usize = 8;
 pub const AGAIN: usize = 9;
+
+/// Why the form could not add its account: a mistake in what is typed, or
+/// the server refused to sign in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Failure {
+    Mistake,
+    Refused,
+}
 
 /// An account being added: what is typed, the field typed in, and which
 /// fields were typed rather than filled in from the address.
@@ -125,7 +133,7 @@ pub struct Form {
     pub keeper: usize,
     /// What to know of the provider, or why signing in failed.
     pub note: Option<String>,
-    pub failed: bool,
+    pub failed: Option<Failure>,
     /// Whether it is signing in, to be added if it can; how to sign in on
     /// Microsoft's pages, while it waits; and what stops it waiting.
     pub checking: bool,
@@ -146,7 +154,7 @@ impl Form {
             keepers,
             keeper: 0,
             note: None,
-            failed: false,
+            failed: None,
             checking: false,
             waiting: None,
             stop: Arc::new(AtomicBool::new(false)),
@@ -210,7 +218,7 @@ impl Form {
         if !self.typed[SERVER] {
             self.fields[SERVER] = oauth::IMAP_HOST.to_string();
         }
-        if !self.failed {
+        if self.failed.is_none() {
             self.note = Some(config::MICROSOFT_NOTE.to_string());
         }
     }
@@ -235,7 +243,7 @@ impl Form {
         if !self.typed[USER] {
             self.fields[USER] = email;
         }
-        if !self.failed {
+        if self.failed.is_none() {
             self.note = note.map(str::to_string);
         }
         if !self.typed[SIGN_IN] {
@@ -1150,13 +1158,13 @@ impl App {
         let port = f[PORT].trim().parse::<u16>();
         if let Some(i) = missing {
             form.at = i;
-            form.failed = true;
+            form.failed = Some(Failure::Mistake);
             form.note = Some(format!("{} is needed", FIELDS[i]));
             return;
         }
         let Ok(port) = port else {
             form.at = PORT;
-            form.failed = true;
+            form.failed = Some(Failure::Mistake);
             form.note = Some("the port is a number, as 993".to_string());
             return;
         };
@@ -1179,7 +1187,7 @@ impl App {
             };
             if let Some((at, why)) = problem {
                 form.at = at;
-                form.failed = true;
+                form.failed = Some(Failure::Mistake);
                 form.note = Some(why.to_string());
                 return;
             }
@@ -1190,7 +1198,7 @@ impl App {
             account.password = Some(f[PASSWORD].clone());
         }
         form.checking = true;
-        form.failed = false;
+        form.failed = None;
         form.waiting = None;
         form.note = Some(if microsoft {
             "asking Microsoft…".to_string()
@@ -1298,7 +1306,7 @@ impl App {
             Err(e) => match &mut self.form {
                 Some(form) => {
                     form.checking = false;
-                    form.failed = true;
+                    form.failed = Some(Failure::Refused);
                     form.note = Some(e);
                 }
                 None => self.status = format!("cannot add the account: {}", first_line(&e)),
@@ -1341,6 +1349,7 @@ impl App {
     /// Take a key in the form.
     fn form_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let browse = self.browse;
         let Some(form) = &mut self.form else { return };
         if form.checking {
             if key.code == KeyCode::Esc {
@@ -1357,6 +1366,14 @@ impl App {
             KeyCode::BackTab | KeyCode::Up => form.step(-1),
             KeyCode::Enter if form.last() => self.submit(),
             KeyCode::Enter => form.step(1),
+            KeyCode::Char('o') if ctrl => {
+                if let Some((_, page)) =
+                    config::app_password_help(&form.fields[EMAIL], &form.fields[SERVER])
+                {
+                    browse(page);
+                    self.status = "opened in the browser".to_string();
+                }
+            }
             KeyCode::Left if form.at == KEEP => form.turn(-1),
             KeyCode::Right | KeyCode::Char(' ') if form.at == KEEP => form.turn(1),
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if form.at == SIGN_IN => {
@@ -1379,7 +1396,7 @@ impl App {
         }
         let Some(form) = &mut self.form else { return };
         if form.at == EMAIL && !form.checking {
-            form.failed = false;
+            form.failed = None;
             form.fill();
         }
         if before == EMAIL && form.at != EMAIL {
@@ -2540,7 +2557,7 @@ impl App {
             return;
         };
         let (text, row, col) = compose::blank();
-        self.open_compose(account, text, row, col, None, None, None);
+        self.open_compose(account, text, (row, col), None, None, None);
     }
 
     fn reply(&mut self) {
@@ -2573,10 +2590,9 @@ impl App {
             .reading
             .as_ref()
             .is_some_and(|r| r.account == account && r.folder == folder && r.uid == uid)
+            && let Some(message) = self.message()
         {
-            if let Some(message) = self.message() {
-                return Some(message.clone());
-            }
+            return Some(message.clone());
         }
         self.read.get(&(account, folder.to_string(), uid))
     }
@@ -2605,15 +2621,14 @@ impl App {
             .filter(|r| r.account == account && r.uid == message.uid)
             .map(|r| (r.folder.clone(), r.uid))
             .or(answering);
-        self.open_compose(account, text, row, 0, in_reply_to, references, answering);
+        self.open_compose(account, text, (row, 0), in_reply_to, references, answering);
     }
 
     fn open_compose(
         &mut self,
         account: usize,
         text: String,
-        row: usize,
-        col: usize,
+        (row, col): (usize, usize),
         in_reply_to: Option<String>,
         references: Option<String>,
         answering: Option<(String, u32)>,

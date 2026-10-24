@@ -4,10 +4,10 @@
 //! in two, one of them at a time.
 
 use crate::app::{
-    AGAIN, App, Body, Button, FIELDS, Files, Focus, Form, Item, KEEP, PASSPHRASE, PASSWORD, Row,
-    SIGN_IN, State, Target, TrashPick, ohp_reads,
+    AGAIN, App, Body, Button, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP, PASSPHRASE,
+    PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, ohp_reads,
 };
-use crate::config::Auth;
+use crate::config::{self, Auth};
 use crate::mail::Message;
 use crate::secret::Keeper;
 use crate::theme::Theme;
@@ -246,12 +246,18 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
         ]));
     }
     lines.push(Line::raw(""));
-    let note_style = if form.failed {
+    let note_style = if form.failed.is_some() {
         Style::new().fg(t.error)
     } else {
         Style::new().fg(t.soft)
     };
-    if let Some(note) = &form.note {
+    // How to make an app password, where the provider takes one: said
+    // with the key that opens its page.
+    let help = config::app_password_help(&form.fields[EMAIL], &form.fields[SERVER])
+        .filter(|_| form.auth == Auth::Password)
+        .map(|(note, _)| format!("{note} ^o opens the page."));
+    let guiding = form.failed.is_none() && !form.checking;
+    if let Some(note) = help.as_ref().filter(|_| guiding).or(form.note.as_ref()) {
         lines.extend(
             wrap(note, room)
                 .into_iter()
@@ -283,6 +289,14 @@ fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targets) {
             wrap(&w.page, room)
                 .into_iter()
                 .map(|l| Line::styled(l, Style::new().fg(t.faint))),
+        );
+    } else if let Some(help) = help.filter(|_| form.failed == Some(Failure::Refused)) {
+        // Refused, why takes the help's place above: it is said again here,
+        // where what is kept is said otherwise.
+        lines.extend(
+            wrap(&help, room)
+                .into_iter()
+                .map(|l| Line::styled(l, Style::new().fg(t.soft))),
         );
     } else {
         let secret = match form.auth {

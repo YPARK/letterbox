@@ -331,8 +331,10 @@ impl Store for Demo {
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
         let uid = self.next;
         self.next += 1;
-        let mut flags = Flags::default();
-        flags.seen = seen;
+        let flags = Flags {
+            seen,
+            ..Flags::default()
+        };
         self.letters(folder)?.push(Letter {
             uid,
             flags,

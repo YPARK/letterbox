@@ -13,8 +13,9 @@ use std::path::Path;
 /// Keep a password: given where, the host, the user and the password.
 pub type Keep = fn(Keeper, &str, &str, &str) -> anyhow::Result<()>;
 
-/// Sign in as `account`, with the password it was given as typed, or the
-/// token Microsoft gave; if it can, keep that secret in `keeper`, by
+/// Sign in as `account`, with the password it was given as typed (an app
+/// password as its provider shows it, run together), or the token
+/// Microsoft gave; if it can, keep that secret in `keeper`, by
 /// `keep`, and add the account to the file at `path`. The store signed in,
 /// and its folders.
 pub fn add(
@@ -31,6 +32,11 @@ pub fn add(
     }
     if account.password_command.is_none() {
         account.keep = keeper;
+    }
+    if account.auth == config::Auth::Password {
+        account.password = account
+            .password
+            .map(|typed| config::app_password(&account.host, &typed));
     }
     let mut imap = Imap::new(account.clone());
     let folders = crate::store::Store::folders(&mut imap)?;

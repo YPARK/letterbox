@@ -245,10 +245,9 @@ pub fn for_transfer(raw: &[u8], eightbit: bool) -> Vec<u8> {
     if !head
         .to_ascii_lowercase()
         .contains("content-transfer-encoding:")
+        && let Some(stripped) = head.strip_suffix("\r\n\r\n")
     {
-        if let Some(stripped) = head.strip_suffix("\r\n\r\n") {
-            head = format!("{stripped}\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n");
-        }
+        head = format!("{stripped}\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n");
     }
     let encoded = quoted_printable(&String::from_utf8_lossy(body));
     let mut out = head.into_bytes();
