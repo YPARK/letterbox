@@ -734,6 +734,11 @@ fn press(app: &mut App, keys: &[&str]) {
     }
 }
 
+/// The demo's Inbox: the six letters, and the lab's mail still to deal with;
+/// and how many of them are unread.
+const INBOX: usize = 33;
+const UNREAD: u32 = 18;
+
 fn unseen(app: &App) -> Option<u32> {
     app.folder().and_then(|f| f.unseen)
 }
@@ -742,9 +747,9 @@ fn unseen(app: &App) -> Option<u32> {
 fn the_inbox_is_listed_first() {
     let app = demo();
     assert_eq!(app.folder_name(), "Inbox");
-    assert_eq!(app.shown.len(), 6);
+    assert_eq!(app.shown.len(), INBOX);
     assert_eq!(app.shown[0].from, "Ada Lovelace");
-    assert_eq!(unseen(&app), Some(2));
+    assert_eq!(unseen(&app), Some(UNREAD));
     // Listed, a message is not read, nor marked read.
     assert!(app.reading.is_none());
 }
@@ -759,10 +764,10 @@ fn reading_a_message_marks_it_read_and_u_unmarks_it() {
     };
     assert!(m.text.contains("sets out how"));
     assert!(app.shown[0].flags.seen);
-    assert_eq!(unseen(&app), Some(1));
+    assert_eq!(unseen(&app), Some(UNREAD - 1));
     press(&mut app, &["u"]);
     assert!(!app.shown[0].flags.seen);
-    assert_eq!(unseen(&app), Some(2));
+    assert_eq!(unseen(&app), Some(UNREAD));
     let screen = app::screen(&mut app, 140, 40);
     assert!(
         screen.contains("From  Ada Lovelace <ada@analytical.example>"),
@@ -774,11 +779,14 @@ fn reading_a_message_marks_it_read_and_u_unmarks_it() {
 fn n_reads_the_next_and_search_narrows() {
     let mut app = demo();
     press(&mut app, &["<enter>", "n"]);
-    assert_eq!(app.message().unwrap().subject, "Re: the compiler");
-    press(&mut app, &["<esc>", "/", "photo"]);
+    assert_eq!(
+        app.message().unwrap().subject,
+        "[letterbox] Issue #41: a map of the inbox"
+    );
+    press(&mut app, &["<esc>", "/", "photo 51"]);
     assert_eq!(app.shown.len(), 1);
     press(&mut app, &["<esc>"]);
-    assert_eq!(app.shown.len(), 6);
+    assert_eq!(app.shown.len(), INBOX);
     // What only the text has is found by the server, on ⏎.
     press(&mut app, &["/", "bernoulli numbers step", "<enter>"]);
     assert_eq!(app.shown.len(), 1, "{}", app.status);
@@ -819,7 +827,13 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     // SAFETY: tests that read it are this one alone.
     unsafe { std::env::set_var("LETTERBOX_DOWNLOADS", dir.path()) };
     let mut app = demo();
-    press(&mut app, &["G", "k", "k", "<enter>"]);
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(&mut app, &["<enter>"]);
     assert_eq!(
         app.message().unwrap().subject,
         "Computable numbers: the paper, and the figures"
@@ -853,7 +867,11 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     let Some(app::Launch::Open(text)) = app.launch.take() else {
         panic!("not for the system: {:?}", app.launch);
     };
-    assert_eq!(text.file_name().unwrap(), "3-states.txt");
+    let uid = app.message().unwrap().uid;
+    assert_eq!(
+        text.file_name().unwrap().to_string_lossy(),
+        format!("{uid}-states.txt")
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1871,7 +1889,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
     let inbox = &accounts["structuredContent"]["accounts"][0]["folders"][0];
     assert_eq!(
         (inbox["path"].as_str(), inbox["total"].as_u64()),
-        (Some("INBOX"), Some(6))
+        (Some("INBOX"), Some(INBOX as u64))
     );
 
     let listed = call(&mut server, "list_messages", json!({ "limit": 2 }));
@@ -1881,7 +1899,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
     assert_eq!(listed["messages"][0]["from"], "Ada Lovelace");
     let uid = listed["messages"][0]["uid"].as_u64().unwrap();
 
-    let found = call(&mut server, "search_messages", json!({ "query": "photo" }));
+    let found = call(&mut server, "search_messages", json!({ "query": "helix" }));
     assert_eq!(
         found["structuredContent"]["messages"][0]["subject"],
         "Photo 51"
@@ -2445,12 +2463,12 @@ fn every_accounts_inbox_sent_and_drafts_are_in_the_sidebar_together() {
 fn the_inboxes_together_are_listed_newest_first_each_with_its_account() {
     let mut app = two_accounts();
     // Unread, they are counted together.
-    assert_eq!(app.unseen_of(Role::Inbox), Some(2 + 3));
+    assert_eq!(app.unseen_of(Role::Inbox), Some(UNREAD + UNREAD + 1));
     list_row(&mut app, app::Row::All(Role::Inbox));
-    assert_eq!(app.shown.len(), 13, "{}", app.status);
+    assert_eq!(app.shown.len(), 2 * INBOX + 1, "{}", app.status);
     assert_eq!(app.shown[0].subject, "Newest of all");
     assert_eq!(app.shown[0].account, 1);
-    assert_eq!(app.shown.iter().filter(|m| m.account == 0).count(), 6);
+    assert_eq!(app.shown.iter().filter(|m| m.account == 0).count(), INBOX);
     let dates: Vec<i64> = app.shown.iter().filter_map(|m| m.date).collect();
     assert!(dates.windows(2).all(|w| w[0] >= w[1]), "{dates:?}");
     let screen = app::screen(&mut app, 140, 40);
@@ -2469,8 +2487,8 @@ fn a_message_together_with_others_is_read_and_marked_on_its_own_account() {
     assert_eq!((reading.account, reading.folder.as_str()), (1, "INBOX"));
     assert_eq!(app.message().unwrap().subject, "Newest of all");
     let unseen = |app: &App, a: usize| app.accounts[a].folders[0].unseen;
-    assert_eq!(unseen(&app, 1), Some(2), "Work's newest is read");
-    assert_eq!(unseen(&app, 0), Some(2), "Home's are not");
+    assert_eq!(unseen(&app, 1), Some(UNREAD), "Work's newest is read");
+    assert_eq!(unseen(&app, 0), Some(UNREAD), "Home's are not");
     assert!(app.shown[0].flags.seen);
 }
 
@@ -2493,7 +2511,7 @@ fn a_message_together_with_others_is_trashed_on_its_own_account() {
         "{}",
         app.status
     );
-    assert_eq!(app.shown.len(), 12);
+    assert_eq!(app.shown.len(), 2 * INBOX);
     let trash = |app: &App, a: usize| {
         app.accounts[a]
             .folders
