@@ -3094,3 +3094,134 @@ fn a_narrow_foot_leaves_hints_out_but_help_and_quit() {
     assert!(lines[lines.len() - 3].contains("Compose"), "{screen}");
     assert!(lines[lines.len() - 2].contains("send"), "{screen}");
 }
+
+// ---- the colours ----
+
+/// WCAG's contrast of two colours, 1 to 21; the terminal's own dark
+/// ground as the theme takes it.
+fn contrast(a: ratatui::style::Color, b: ratatui::style::Color) -> f64 {
+    use ratatui::style::Color;
+    let luminance = |c: Color| {
+        let (r, g, b) = match c {
+            Color::Rgb(r, g, b) => (r, g, b),
+            Color::Reset => crate::theme::TERMINAL_DARK,
+            other => panic!("{other:?} is not a colour to measure"),
+        };
+        let lin = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    };
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn every_colour_reads_on_every_ground_it_is_drawn_on() {
+    use crate::theme::{Name, Theme};
+    use clap::ValueEnum;
+    for &name in Name::value_variants() {
+        let t = Theme::of(name);
+        let accounts = t.accounts().iter().map(|&c| ("account", c, 4.5));
+        let inks = [
+            ("title", t.title, 7.0),
+            ("text", t.text, 7.0),
+            ("soft", t.soft, 4.5),
+            ("dim", t.dim, 4.5),
+            // Signatures and notes are faint too: text, not only icons.
+            ("faint", t.faint, 4.5),
+            ("accent", t.accent, 4.5),
+            ("flag", t.flag, 4.5),
+            ("error", t.error, 4.5),
+        ];
+        let grounds = [
+            ("page", t.page),
+            ("side", t.side),
+            ("field", t.field),
+            ("focus", t.focus),
+            ("row", t.row),
+        ];
+        for (ink, colour, need) in inks.into_iter().chain(accounts) {
+            for (ground, behind) in grounds {
+                let got = contrast(colour, behind);
+                assert!(
+                    got >= need,
+                    "{name:?}: {ink} on {ground} is {got:.1}:1, under {need}:1"
+                );
+            }
+        }
+        // Labels drawn on a colour: the button pressed with ⏎, and the
+        // mode line's name of the message being written.
+        for (what, ink, behind) in [
+            ("a button", t.on_accent, t.accent),
+            ("Compose", t.side, t.title),
+        ] {
+            let got = contrast(ink, behind);
+            assert!(got >= 4.5, "{name:?}: {what} reads {got:.1}:1");
+        }
+        // Each step down reads less than the one above it.
+        let steps = [t.title, t.text, t.soft, t.dim, t.faint].map(|c| contrast(c, t.page));
+        assert!(steps.is_sorted_by(|a, b| a > b), "{name:?}: {steps:?}");
+        // Grounds that must be told apart: the panes, the picked row in
+        // the pane with the focus and in the others, and a rule under it.
+        for (what, a, b) in [
+            ("side and page", t.side, t.page),
+            ("side and row", t.side, t.row),
+            ("focus and row", t.focus, t.row),
+            ("rule and focus", t.rule, t.focus),
+            ("rule and page", t.rule, t.page),
+        ] {
+            let got = contrast(a, b);
+            assert!(got >= 1.12, "{name:?}: {what} are {got:.2}:1 apart");
+        }
+    }
+}
+
+#[test]
+fn unread_a_flag_and_the_accounts_are_told_apart_by_hue() {
+    // Blue for unread, orange for a flag, as every common colour blindness
+    // tells them apart; the accounts in neither.
+    use crate::theme::{Name, Theme};
+    use clap::ValueEnum;
+    use ratatui::style::Color;
+    let hue = |c: Color| {
+        let Color::Rgb(r, g, b) = c else {
+            panic!("{c:?} is not a colour");
+        };
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let h = if max == r {
+            (g - b) / (max - min)
+        } else if max == g {
+            2.0 + (b - r) / (max - min)
+        } else {
+            4.0 + (r - g) / (max - min)
+        };
+        (h * 60.0).rem_euclid(360.0)
+    };
+    let apart = |a: f64, b: f64| {
+        let d = (a - b).abs();
+        d.min(360.0 - d)
+    };
+    for &name in Name::value_variants() {
+        let t = Theme::of(name);
+        let (unread, flag) = (hue(t.accent), hue(t.flag));
+        assert!(
+            (190.0..230.0).contains(&unread),
+            "{name:?}: unread {unread}"
+        );
+        assert!((20.0..40.0).contains(&flag), "{name:?}: flag {flag}");
+        for (i, &c) in t.accounts().iter().enumerate() {
+            let h = hue(c);
+            for (what, other) in [("unread", unread), ("flag", flag)] {
+                let d = apart(h, other);
+                assert!(d >= 30.0, "{name:?}: account {i} is {d} from {what}");
+            }
+        }
+    }
+}

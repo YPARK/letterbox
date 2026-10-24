@@ -3229,14 +3229,14 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
             Color::Rgb(r, g, b) => (r, g, b),
             Color::Reset if bg => {
                 if dark {
-                    (28, 28, 28)
+                    theme::TERMINAL_DARK
                 } else {
                     (255, 255, 255)
                 }
             }
             Color::Reset => {
                 if dark {
-                    (222, 222, 222)
+                    theme::TERMINAL_DARK_TEXT
                 } else {
                     (40, 40, 40)
                 }

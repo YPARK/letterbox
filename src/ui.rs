@@ -142,7 +142,7 @@ fn buttons(t: &Theme, labels: &[(&str, Button)]) -> (Line<'static>, Vec<(u16, u1
         let text = format!(" {label} ");
         let w = text.width() as u16;
         let style = if i == 0 {
-            Style::new().fg(t.page).bg(t.accent).bold()
+            Style::new().fg(t.on_accent).bg(t.accent).bold()
         } else {
             Style::new().fg(t.text).bg(t.focus)
         };
