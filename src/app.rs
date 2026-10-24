@@ -3,9 +3,10 @@
 //! screen is never kept waiting by a server.
 
 use crate::compose;
+use crate::compose::{Respond, Thread};
 use crate::config::{self, Auth};
 use crate::edit::{self, Done};
-use crate::mail::{self, Folder, Message, Role, Summary};
+use crate::mail::{self, Attachment, Folder, Message, Role, Summary};
 use crate::oauth;
 use crate::secret::Keeper;
 use crate::setup;
@@ -19,6 +20,9 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
@@ -445,7 +449,7 @@ pub enum Target {
     Field(usize),
     Button(Button),
     /// A key's hint at the foot: clicked, as if it were pressed.
-    Key(KeyCode),
+    Key(KeyEvent),
     /// An attachment or link in the list of them, by its place.
     Item(usize),
 }
@@ -476,15 +480,23 @@ pub enum Item {
 pub struct Compose {
     pub buffer: edit::Buffer,
     pub account: usize,
-    pub in_reply_to: Option<String>,
-    pub references: Option<String>,
-    /// The folder and UID it replies to, marked answered once sent.
-    pub answering: Option<(String, u32)>,
+    /// What it answers, if anything.
+    thread: Thread,
     /// `C-c` was pressed, and the next key sends or cancels.
     pub prefix: bool,
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
+    /// The files it is sent with: a forward's, the message's it forwards.
+    pub files: Vec<compose::File>,
+}
+
+/// A message to answer once it is read: where it is, and how.
+struct Pending {
+    account: usize,
+    folder: String,
+    uid: u32,
+    how: Respond,
 }
 
 /// The existing folders letterbox is asking which of is Trash, the one
@@ -634,6 +646,8 @@ pub struct App {
     /// An account being added, or one about to be removed.
     pub form: Option<Box<Form>>,
     pub removing: Option<usize>,
+    /// An account being renamed, and its name as typed so far.
+    pub renaming: Option<(usize, String)>,
     /// The message's attachments and links, listed to open.
     pub files: Option<Files>,
     /// Which existing folder should be Trash, while that is being asked.
@@ -643,7 +657,7 @@ pub struct App {
     pub(crate) ledger: trash::Ledger,
     held: Option<Held>,
     /// A reply waiting on the message it answers, fetched first.
-    reply_when: Option<(usize, String, u32)>,
+    reply_when: Option<Pending>,
     /// Trash removals asked and not yet answered, by address, folder and UID,
     /// so one is not asked twice.
     purging: HashSet<(String, String, u32)>,
@@ -737,14 +751,30 @@ fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
     }
 }
 
-/// The terminal, as ratatui takes it, with the mouse's clicks and wheel.
+/// Whether the terminal tells apart keys that it otherwise sends alike, as
+/// Ctrl+Shift+R and Ctrl+R: asked once, as it answers each time it is asked.
+static TELLS_APART: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// The terminal, as ratatui takes it, with the mouse's clicks and wheel,
+/// and keys told apart where the terminal can.
 fn take() -> DefaultTerminal {
     let terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    if *TELLS_APART.get_or_init(|| {
+        ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+    }) {
+        let _ = execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
     terminal
 }
 
 fn give_back() {
+    if TELLS_APART.get() == Some(&true) {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
 }
@@ -788,6 +818,7 @@ impl App {
             browse: oauth::browse,
             form: None,
             removing: None,
+            renaming: None,
             files: None,
             picking: None,
             compose: None,
@@ -1071,15 +1102,12 @@ impl App {
                         Err(e) => Body::Failed(e),
                     };
                 }
-                if self
+                if let Some(p) = self
                     .reply_when
-                    .as_ref()
-                    .is_some_and(|(x, f, u)| *x == a && f == &folder && *u == uid)
+                    .take_if(|p| p.account == a && p.folder == folder && p.uid == uid)
+                    && let Some(m) = self.read.get(&(a, folder.clone(), uid))
                 {
-                    self.reply_when = None;
-                    if let Some(m) = self.read.get(&(a, folder, uid)) {
-                        self.open_reply(a, &m);
-                    }
+                    self.open_reply(a, &folder, &m, p.how);
                 }
             }
             Answer::Set {
@@ -1573,19 +1601,11 @@ impl App {
                 form.flip()
             }
             _ if form.at == KEEP || form.at == SIGN_IN => {}
-            KeyCode::Backspace => {
-                form.fields[form.at].pop();
-                form.typed[form.at] = true;
+            _ => {
+                if edit_line(&mut form.fields[form.at], key) {
+                    form.typed[form.at] = true;
+                }
             }
-            KeyCode::Char('u') if ctrl => {
-                form.fields[form.at].clear();
-                form.typed[form.at] = true;
-            }
-            KeyCode::Char(c) if !ctrl => {
-                form.fields[form.at].push(c);
-                form.typed[form.at] = true;
-            }
-            _ => {}
         }
         let Some(form) = &mut self.form else { return };
         if form.at == EMAIL && !form.checking {
@@ -1893,6 +1913,7 @@ impl App {
             return self.pick_key(key);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         if ctrl && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -1914,6 +1935,20 @@ impl App {
         if self.files.is_some() {
             return self.files_key(key);
         }
+        if let Some((a, typed)) = &mut self.renaming {
+            match key.code {
+                KeyCode::Esc => self.renaming = None,
+                KeyCode::Enter => {
+                    let (a, typed) = (*a, typed.clone());
+                    self.renaming = None;
+                    self.rename(a, &typed);
+                }
+                _ => {
+                    edit_line(typed, key);
+                }
+            }
+            return;
+        }
         if let Some(a) = self.removing.take() {
             if key.code == KeyCode::Char('y') {
                 self.remove(a);
@@ -1934,19 +1969,11 @@ impl App {
                     self.search();
                 }
                 KeyCode::Down | KeyCode::Up => self.searching = false,
-                KeyCode::Backspace => {
-                    self.query.pop();
-                    self.found = None;
+                _ => {
+                    if edit_line(&mut self.query, key) {
+                        self.found = None;
+                    }
                 }
-                KeyCode::Char('u') if ctrl => {
-                    self.query.clear();
-                    self.found = None;
-                }
-                KeyCode::Char(c) => {
-                    self.query.push(c);
-                    self.found = None;
-                }
-                _ => {}
             }
             self.narrow();
             return;
@@ -2027,13 +2054,21 @@ impl App {
             KeyCode::PageUp => self.step(-5),
             KeyCode::Char('g') | KeyCode::Home => self.jump(false),
             KeyCode::Char('G') | KeyCode::End => self.jump(true),
+            // Some terminals say Shift's letter in upper case, some not.
+            KeyCode::Char('r' | 'R') if ctrl && shift => self.respond(Respond::All),
+            KeyCode::Char('r') if ctrl => self.respond(Respond::Reply),
+            KeyCode::Char('f') if ctrl => self.respond(Respond::Forward),
+            KeyCode::Char('n' | 'N') if ctrl => {
+                self.refresh();
+                self.status = "looking for new mail…".to_string();
+            }
+            KeyCode::Char('e') => self.respond(Respond::All),
             KeyCode::Char('n') => self.next(1),
             KeyCode::Char('p') => self.next(-1),
             KeyCode::Char('u') => self.toggle(Flag::Seen),
             KeyCode::Char('s') => self.toggle(Flag::Flagged),
             KeyCode::Char('r') => {
-                self.refresh();
-                self.status = "looking for new mail…".to_string();
+                self.status = "reply is C-r, to all e or C-S-r; C-n looks for new mail".to_string();
             }
             KeyCode::Char('o') => self.open_in_browser(),
             KeyCode::Char('a') => self.save_attachments(),
@@ -2042,15 +2077,15 @@ impl App {
             KeyCode::Char('D') => self.ask_to_remove(),
             KeyCode::Char('d') => self.delete(),
             KeyCode::Char('c') => self.compose_new(),
-            KeyCode::Char('R') => self.reply(),
+            KeyCode::Char('R') => self.ask_to_rename(),
             _ => {}
         }
     }
 
-    /// Ask whether to remove the account picked in the sidebar, or, with
-    /// the focus elsewhere, the account listed.
-    fn ask_to_remove(&mut self) {
-        let a = match (self.focus, self.rows.get(self.row)) {
+    /// The account `D` and `R` act on: the one picked in the sidebar, or,
+    /// with the focus elsewhere, the one listed, else the message's.
+    fn account_picked(&self) -> Option<usize> {
+        match (self.focus, self.rows.get(self.row)) {
             (Focus::Side, Some(&Row::Account(a) | &Row::Folder(a, _))) => Some(a),
             (Focus::Side, _) => None,
             _ => self
@@ -2058,12 +2093,43 @@ impl App {
                 .as_ref()
                 .and_then(Listing::account)
                 .or_else(|| self.current().map(|m| m.account)),
+        }
+    }
+
+    /// Ask whether to remove the account picked.
+    fn ask_to_remove(&mut self) {
+        let Some(a) = self.account_picked() else {
+            return;
         };
-        let Some(a) = a else { return };
         if self.editable {
             self.removing = Some(a);
         } else {
             self.status = "the demo's account is made up: it cannot be removed".to_string();
+        }
+    }
+
+    /// Ask what to call the account picked.
+    fn ask_to_rename(&mut self) {
+        let Some(a) = self.account_picked() else {
+            self.status = "pick an account's folder to rename it".to_string();
+            return;
+        };
+        if self.editable {
+            self.renaming = Some((a, self.accounts[a].name.clone()));
+        } else {
+            self.status = "the demo's account is made up: it cannot be renamed".to_string();
+        }
+    }
+
+    /// Call the account `a` `name`, in the accounts file and here.
+    fn rename(&mut self, a: usize, name: &str) {
+        let old = self.accounts[a].name.clone();
+        match config::rename(&self.config, &old, name) {
+            Ok(name) => {
+                self.status = format!("renamed {old} to {name}");
+                self.accounts[a].name = name;
+            }
+            Err(e) => self.status = format!("cannot rename {old}: {e:#}"),
         }
     }
 
@@ -2176,6 +2242,10 @@ impl App {
             MouseEventKind::ScrollUp => -1,
             _ => return,
         };
+        // Asked a question, nothing behind it scrolls.
+        if self.removing.is_some() || self.renaming.is_some() {
+            return;
+        }
         if self.help {
             self.help_scroll = self.help_scroll.saturating_add_signed(by);
             return;
@@ -2214,9 +2284,12 @@ impl App {
     }
 
     fn click(&mut self, at: Option<Target>) {
-        if self.help {
+        // A click away from help, or from renaming, closes it, the name
+        // left as it is.
+        if self.help || self.renaming.is_some() {
             if at != Some(Target::Popup) {
                 self.help = false;
+                self.renaming = None;
             }
             return;
         }
@@ -2283,7 +2356,7 @@ impl App {
         }
         self.searching = false;
         match at {
-            Some(Target::Key(code)) => self.key(KeyEvent::new(code, KeyModifiers::NONE)),
+            Some(Target::Key(key)) => self.key(key),
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
             Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {
@@ -2473,7 +2546,7 @@ impl App {
         }
         let dir = downloads();
         let mut saved = Vec::new();
-        for (name, bytes) in files {
+        for (Attachment { name, .. }, bytes) in files {
             let path = unused(&dir, &safe_name(&name));
             match std::fs::create_dir_all(&dir).and_then(|_| write_new(&path, &bytes)) {
                 Ok(()) => saved.push(
@@ -2796,21 +2869,28 @@ impl App {
             return;
         };
         let (text, row, col) = compose::blank();
-        self.open_compose(account, text, (row, col), None, None, None);
+        self.open_compose(account, text, (row, col), Thread::default(), Vec::new());
     }
 
-    fn reply(&mut self) {
+    /// Answer the message picked, as `how` says; read first, if it was
+    /// not.
+    fn respond(&mut self, how: Respond) {
         let Some(summary) = self.current() else {
-            self.status = "no message to reply to".to_string();
+            self.status = "no message to answer".to_string();
             return;
         };
         let (account, folder, uid) = (summary.account, summary.folder.clone(), summary.uid);
         if let Some(message) = self.cached(account, &folder, uid) {
-            self.open_reply(account, &message);
+            self.open_reply(account, &folder, &message, how);
             return;
         }
-        self.reply_when = Some((account, folder.clone(), uid));
-        self.status = "reading it to reply".to_string();
+        self.reply_when = Some(Pending {
+            account,
+            folder: folder.clone(),
+            uid,
+            how,
+        });
+        self.status = "reading it first".to_string();
         self.ask(
             account,
             Ask::Open {
@@ -2833,31 +2913,11 @@ impl App {
         self.read.get(&(account, folder.to_string(), uid))
     }
 
-    fn open_reply(&mut self, account: usize, message: &Message) {
-        let (text, row) = compose::reply(message);
-        let (in_reply_to, references) = compose::thread(message);
-        let answering = Some((
-            self.reading
-                .as_ref()
-                .filter(|r| r.account == account && r.uid == message.uid)
-                .map(|r| r.folder.clone())
-                .or_else(|| {
-                    self.current()
-                        .filter(|m| m.account == account && m.uid == message.uid)
-                        .map(|m| m.folder.clone())
-                })
-                .unwrap_or_default(),
-            message.uid,
-        ));
-        // The folder the message was read from, which may not be the one listed
-        // once a reply waited on the fetch.
-        let answering = self
-            .reading
-            .as_ref()
-            .filter(|r| r.account == account && r.uid == message.uid)
-            .map(|r| (r.folder.clone(), r.uid))
-            .or(answering);
-        self.open_compose(account, text, (row, 0), in_reply_to, references, answering);
+    /// Write the answer to `message`, in `folder` of `account`.
+    fn open_reply(&mut self, account: usize, folder: &str, message: &Message, how: Respond) {
+        let me = self.accounts[account].email.clone();
+        let (text, at, thread, files) = compose::respond(message, folder, how, &me);
+        self.open_compose(account, text, at, thread, files);
     }
 
     fn open_compose(
@@ -2865,9 +2925,8 @@ impl App {
         account: usize,
         text: String,
         (row, col): (usize, usize),
-        in_reply_to: Option<String>,
-        references: Option<String>,
-        answering: Option<(String, u32)>,
+        thread: Thread,
+        files: Vec<compose::File>,
     ) {
         let mut buffer = edit::Buffer::from_text(&text);
         buffer.place(row, col);
@@ -2876,12 +2935,11 @@ impl App {
         self.compose = Some(Compose {
             buffer,
             account,
-            in_reply_to,
-            references,
-            answering,
+            thread,
             prefix: false,
             scroll: 0,
             sending: false,
+            files,
         });
     }
 
@@ -2940,13 +2998,33 @@ impl App {
         let raw = compose::bytes(
             &email,
             &draft,
-            compose.in_reply_to.as_deref(),
-            compose.references.as_deref(),
+            compose.thread.in_reply_to.as_deref(),
+            compose.thread.references.as_deref(),
+            &compose.files,
         );
-        let answer = compose.answering.clone();
+        let answer = compose.thread.answering.clone();
         self.compose.as_mut().expect("open").sending = true;
         self.status = "sending…".to_string();
         self.ask(account, Ask::Send { raw, answer });
+    }
+}
+
+/// Edit a line typed in, a field's or the search's, by `key`: a character
+/// typed, `⌫` the last taken back, `C-u` all of it. Whether it changed.
+fn edit_line(line: &mut String, key: KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Backspace => line.pop().is_some(),
+        KeyCode::Char('u') if ctrl => {
+            let had = !line.is_empty();
+            line.clear();
+            had
+        }
+        KeyCode::Char(c) if !ctrl => {
+            line.push(c);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -3202,29 +3280,52 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
 /// `<space>`, `<up>`, `<down>`, `<left>`, `<right>`, `<backspace>`, and
 /// with control, as `<c-u>`; anything else, each character typed.
 pub fn keys(spec: &str) -> Vec<KeyEvent> {
-    let named = match spec {
-        "<enter>" => Some(KeyCode::Enter),
-        "<esc>" => Some(KeyCode::Esc),
-        "<tab>" => Some(KeyCode::Tab),
-        "<space>" => Some(KeyCode::Char(' ')),
-        "<up>" => Some(KeyCode::Up),
-        "<down>" => Some(KeyCode::Down),
-        "<left>" => Some(KeyCode::Left),
-        "<right>" => Some(KeyCode::Right),
-        "<backspace>" => Some(KeyCode::Backspace),
-        _ => None,
-    };
-    if let Some(code) = named {
-        return vec![KeyEvent::new(code, KeyModifiers::NONE)];
-    }
-    let ctrl: Option<Vec<char>> = spec
-        .strip_prefix("<c-")
-        .and_then(|s| s.strip_suffix('>'))
-        .map(|s| s.chars().collect());
-    if let Some(&[c]) = ctrl.as_deref() {
-        return vec![KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)];
+    // `<c-s-r>` is `C-S-r`, `<enter>` is `enter`, as the foot names them.
+    if let Some(name) = spec.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
+        && let Some(key) = key_named(&name.replace("c-", "C-").replace("s-", "S-"))
+    {
+        return vec![key];
     }
     spec.chars()
         .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
         .collect()
+}
+
+/// The key a name stands for, as the foot and the help name them: `⏎`,
+/// `␣`, `esc`, a character, or one after `C-` or `C-S-`; none for a name
+/// that stands for two, as `j/k`.
+pub fn key_named(name: &str) -> Option<KeyEvent> {
+    let none = KeyModifiers::NONE;
+    let named = match name {
+        "⏎" | "enter" => Some(KeyCode::Enter),
+        "␣" | "space" => Some(KeyCode::Char(' ')),
+        "esc" => Some(KeyCode::Esc),
+        "tab" => Some(KeyCode::Tab),
+        "up" => Some(KeyCode::Up),
+        "down" => Some(KeyCode::Down),
+        "left" => Some(KeyCode::Left),
+        "right" => Some(KeyCode::Right),
+        "backspace" => Some(KeyCode::Backspace),
+        _ => None,
+    };
+    if let Some(code) = named {
+        return Some(KeyEvent::new(code, none));
+    }
+    // Ctrl and Shift, as a terminal that tells them apart says them: the
+    // letter in upper case.
+    let (rest, with, upper) = if let Some(k) = name.strip_prefix("C-S-") {
+        (k, KeyModifiers::CONTROL | KeyModifiers::SHIFT, true)
+    } else if let Some(k) = name.strip_prefix("C-") {
+        (k, KeyModifiers::CONTROL, false)
+    } else {
+        (name, none, false)
+    };
+    let mut chars = rest.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if upper => {
+            Some(KeyEvent::new(KeyCode::Char(c.to_ascii_uppercase()), with))
+        }
+        (Some(c), None) => Some(KeyEvent::new(KeyCode::Char(c), with)),
+        _ => None,
+    }
 }

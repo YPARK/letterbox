@@ -352,23 +352,7 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
         .any(|p| matches!(p.body, PartType::Html(_)))
         .then(|| m.body_html(0).map(|h| h.into_owned()))
         .flatten();
-    let attachments = m
-        .attachments()
-        .map(|p| Attachment {
-            name: p
-                .attachment_name()
-                .map(clean)
-                .unwrap_or_else(|| "unnamed".into()),
-            mime: p
-                .content_type()
-                .map(|c| match c.subtype() {
-                    Some(s) => clean(&format!("{}/{s}", c.ctype())),
-                    None => clean(c.ctype()),
-                })
-                .unwrap_or_default(),
-            size: p.contents().len(),
-        })
-        .collect();
+    let attachments = m.attachments().map(attachment).collect();
     let text = m.body_text(0).map(|t| body(&t)).unwrap_or_default();
     let links = links(&text, html.as_deref());
     let message = Message {
@@ -446,19 +430,33 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
 }
 
 /// The attachments of a message, by name, and what they hold.
-pub fn attachments(raw: &[u8]) -> Vec<(String, Vec<u8>)> {
+pub fn attachments(raw: &[u8]) -> Vec<(Attachment, Vec<u8>)> {
     let Some(m) = MessageParser::default().parse(raw) else {
         return Vec::new();
     };
     m.attachments()
-        .map(|p| {
-            let name = p
-                .attachment_name()
-                .map(clean)
-                .unwrap_or_else(|| "unnamed".into());
-            (name, p.contents().to_vec())
-        })
+        .map(|p| (attachment(p), p.contents().to_vec()))
         .collect()
+}
+
+/// An attachment as it is listed: its name, its type, its size. A part
+/// that says no type is taken as bytes.
+fn attachment(p: &mail_parser::MessagePart) -> Attachment {
+    Attachment {
+        name: p
+            .attachment_name()
+            .map(clean)
+            .unwrap_or_else(|| "unnamed".into()),
+        mime: p
+            .content_type()
+            .map(|c| match c.subtype() {
+                Some(s) => clean(&format!("{}/{s}", c.ctype())),
+                None => clean(c.ctype()),
+            })
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "application/octet-stream".into()),
+        size: p.contents().len(),
+    }
 }
 
 /// `Name <address>`, or either alone, for each in `a`.

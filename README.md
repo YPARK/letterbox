@@ -37,6 +37,7 @@ letterbox accounts add                     # asks for the address and password
 letterbox accounts add --email me@example.com --host imap.example.com
 letterbox accounts                         # those set up; --check signs in to each
 letterbox accounts remove Work             # its mail stays on its server
+letterbox accounts rename Work Office      # only letterbox's name for it
 ```
 
 The server is filled in from the address, as the large providers have it
@@ -119,17 +120,25 @@ letterbox search grant report --account Work
 | `s` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
 | `c` | write a message |
-| `R` | reply to the message |
+| `C-r` | reply to the sender |
+| `e`, `C-S-r` | reply to all: the sender, the others it went to copied |
+| `C-f` | forward it, its files with it |
 | `o` | open the message in the browser, as its HTML |
 | `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
-| `r` | look for new mail now; it is looked for every two minutes |
+| `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
+| `R` | rename the account picked in the sidebar, or the one listed |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `?` | all the keys |
 | `q` | quit |
 
-`c` opens a message to write, and `R` a reply, in a pane edited as Emacs
+`C-S-r` needs a terminal that tells it from `C-r`, as kitty, WezTerm and
+Ghostty do when asked; kitty keeps `ctrl+shift+r` and `ctrl+shift+n` for
+itself unless `kitty.conf` says `map ctrl+shift+r no_op`, and the same
+for `n`. `e` replies to all in any terminal.
+
+`c` opens a message to write, `C-r` a reply, in a pane edited as Emacs
 edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
 back, `M-f` `M-b` `M-d` by word. `C-c C-c` sends it, `C-g` or `C-c C-k`

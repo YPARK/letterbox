@@ -78,43 +78,192 @@ pub fn parse(text: &str) -> Result<Draft, String> {
     })
 }
 
-/// `Re: …` unless `subject` already begins so. The check is by characters:
-/// a subject can start with a character of more than one byte.
+/// `Re: …` unless `subject` already begins so.
 pub fn reply_subject(subject: &str) -> String {
+    prefixed(subject, "Re:", &["re:"])
+}
+
+/// `Fwd: …` unless `subject` already says it is forwarded.
+pub(crate) fn forward_subject(subject: &str) -> String {
+    prefixed(subject, "Fwd:", &["fwd:", "fw:"])
+}
+
+/// `subject` after `prefix`, unless it begins with one of `already`, in
+/// any case; the prefix alone for no subject. The check is by characters:
+/// a subject can start with a character of more than one byte.
+fn prefixed(subject: &str, prefix: &str, already: &[&str]) -> String {
     let subject = subject.trim();
-    let mut chars = subject.chars();
-    let re = matches!(
-        (chars.next(), chars.next(), chars.next()),
-        (Some('r' | 'R'), Some('e' | 'E'), Some(':'))
-    );
-    if re {
+    let start: String = subject.chars().take(4).collect::<String>().to_lowercase();
+    if already.iter().any(|a| start.starts_with(a)) {
         subject.to_string()
     } else if subject.is_empty() {
-        "Re:".to_string()
+        prefix.to_string()
     } else {
-        format!("Re: {subject}")
+        format!("{prefix} {subject}")
+    }
+}
+
+/// A file sent with a message: its name, its type, and its bytes.
+pub(crate) struct File {
+    pub name: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Who a reply is to: the addresses the message asks replies go to, else
+/// its sender.
+fn sender(message: &Message) -> Vec<String> {
+    let asked: Vec<String> = message
+        .reply_to
+        .iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect();
+    if asked.is_empty() {
+        vec![message.from.clone()]
+    } else {
+        asked
+    }
+}
+
+/// The files of `message`, each with its own type, to send on.
+pub(crate) fn files(message: &Message) -> Vec<File> {
+    mail::attachments(&message.raw)
+        .into_iter()
+        .map(|(a, bytes)| File {
+            name: a.name,
+            mime: a.mime,
+            bytes,
+        })
+        .collect()
+}
+
+/// What a message written answers: its `In-Reply-To` and `References`,
+/// and the folder and UID of the message, to mark it answered once sent.
+#[derive(Default)]
+pub(crate) struct Thread {
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
+    pub answering: Option<(String, u32)>,
+}
+
+/// How a message is answered: to its sender, to all it went to, or
+/// forwarded.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Respond {
+    Reply,
+    All,
+    Forward,
+}
+
+/// What answering `message`, in `folder`, as `how` says, begins with: the
+/// buffer, where point is, what it answers, and the files it sends on.
+/// `me` is the address it is sent from, not to be copied.
+pub(crate) fn respond(
+    message: &Message,
+    folder: &str,
+    how: Respond,
+    me: &str,
+) -> (String, (usize, usize), Thread, Vec<File>) {
+    let thread = || {
+        let (in_reply_to, references) = thread(message);
+        Thread {
+            in_reply_to,
+            references,
+            answering: Some((folder.to_string(), message.uid)),
+        }
+    };
+    match how {
+        Respond::Reply => {
+            let (text, row) = reply(message);
+            (text, (row, 0), thread(), Vec::new())
+        }
+        Respond::All => {
+            let (text, row) = reply_all(message, me);
+            (text, (row, 0), thread(), Vec::new())
+        }
+        Respond::Forward => {
+            let (text, row, col) = forward(message);
+            (text, (row, col), Thread::default(), files(message))
+        }
     }
 }
 
 /// The buffer a reply opens with, and the row its point starts on: the
 /// first line of the body, above what it quotes.
 pub fn reply(message: &Message) -> (String, usize) {
-    let to = message
-        .reply_to
-        .first()
-        .cloned()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| message.from.clone());
+    answer(message, &sender(message), &[])
+}
+
+/// A reply to all: to the sender, with everyone else the message was to
+/// or copied to copied, each once, but `me`. Your own message is answered
+/// to whom it went, those it was copied to copied.
+pub fn reply_all(message: &Message, me: &str) -> (String, usize) {
+    let spec = |a: &str| addr_spec(a).map(|s| s.to_lowercase());
+    let me = spec(me);
+    let mine = me.is_some() && spec(&message.from) == me;
+    let (to, rest) = if mine {
+        (message.to.clone(), message.cc.clone())
+    } else {
+        let others = message.to.iter().chain(&message.cc).cloned().collect();
+        (sender(message), others)
+    };
+    let mut seen: Vec<String> = to.iter().filter_map(|a| spec(a)).chain(me).collect();
+    let mut cc = Vec::new();
+    for a in rest {
+        if let Some(s) = spec(&a)
+            && !seen.contains(&s)
+        {
+            seen.push(s);
+            cc.push(a);
+        }
+    }
+    answer(message, &to, &cc)
+}
+
+/// The buffer a reply opens with: to `to`, `cc` copied.
+fn answer(message: &Message, to: &[String], cc: &[String]) -> (String, usize) {
+    let to = to.join(", ");
     let subject = reply_subject(&message.subject);
-    let when = message.date.map(ui::long_date).filter(|s| !s.is_empty());
-    let wrote = match &when {
+    let wrote = match when(message) {
         Some(w) => format!("On {w}, {} wrote:", message.from),
         None => format!("{} wrote:", message.from),
     };
     let quoted = quote(&message.text);
-    let text = format!("To: {to}\nCc: \nSubject: {subject}\n\n\n{wrote}\n{quoted}");
+    let cc = cc.join(", ");
+    let text = format!("To: {to}\nCc: {cc}\nSubject: {subject}\n\n\n{wrote}\n{quoted}");
     let row = 4;
     (text, row)
+}
+
+/// When `message` is dated, as a reply or a forward says it.
+fn when(message: &Message) -> Option<String> {
+    message.date.map(ui::long_date).filter(|s| !s.is_empty())
+}
+
+/// The buffer a forward opens with, the message's headers and text below
+/// a line that says it is forwarded; point is at the end of `To:`. Its
+/// files go with it, taken by the caller.
+pub fn forward(message: &Message) -> (String, usize, usize) {
+    use std::fmt::Write;
+    let subject = forward_subject(&message.subject);
+    let mut head = format!("From: {}\n", message.from);
+    if let Some(w) = when(message) {
+        let _ = writeln!(head, "Date: {w}");
+    }
+    let _ = writeln!(head, "Subject: {}", message.subject);
+    if !message.to.is_empty() {
+        let _ = writeln!(head, "To: {}", message.to.join(", "));
+    }
+    if !message.cc.is_empty() {
+        let _ = writeln!(head, "Cc: {}", message.cc.join(", "));
+    }
+    let text = format!(
+        "To: \nCc: \nSubject: {subject}\n\n\n---------- Forwarded message ----------\n\
+         {head}\n{}\n",
+        message.text.trim_end()
+    );
+    (text, 0, 4)
 }
 
 /// An empty message; point is at the end of `To:`, to type the address.
@@ -151,13 +300,15 @@ pub fn thread(message: &Message) -> (Option<String>, Option<String>) {
 }
 
 /// `draft` as the bytes sent from `from`, answering `in_reply_to` when it
-/// is a reply. The body is UTF-8, declared `8bit`; a server without
-/// `8BITMIME` has it rewritten before it is sent.
+/// is a reply. Alone, the body is UTF-8, declared `8bit`, and a server
+/// without `8BITMIME` has it rewritten before it is sent; with `files`, it
+/// is in parts, each in base64, so that every server takes it as it is.
 pub fn bytes(
     from: &str,
     draft: &Draft,
     in_reply_to: Option<&str>,
     references: Option<&str>,
+    files: &[File],
 ) -> Vec<u8> {
     let date = Zoned::now().strftime("%a, %d %b %Y %H:%M:%S %z");
     let id = message_id(from);
@@ -175,8 +326,6 @@ pub fn bytes(
         head.push_str(&format!("References: {refs}\r\n"));
     }
     head.push_str("MIME-Version: 1.0\r\n");
-    head.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-    head.push_str("Content-Transfer-Encoding: 8bit\r\n");
     let body = draft.body.replace("\r\n", "\n").replace('\r', "\n");
     let body = body.replace('\n', "\r\n");
     let body = if body.ends_with("\r\n") {
@@ -184,7 +333,51 @@ pub fn bytes(
     } else {
         format!("{body}\r\n")
     };
-    format!("{head}\r\n{body}").into_bytes()
+    if files.is_empty() {
+        head.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+        head.push_str("Content-Transfer-Encoding: 8bit\r\n");
+        return format!("{head}\r\n{body}").into_bytes();
+    }
+    let boundary = format!("=_{}", random_hex());
+    head.push_str(&format!(
+        "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n"
+    ));
+    let size: usize = body.len() + files.iter().map(|f| f.bytes.len()).sum::<usize>();
+    let mut out = String::with_capacity(head.len() + size * 140 / 100 + 1024);
+    out.push_str(&head);
+    out.push_str("\r\n");
+    // Each part in base64, so no part holds the boundary.
+    let mut part = |headers: &str, bytes: &[u8]| {
+        out.push_str(&format!("--{boundary}\r\n{headers}"));
+        out.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
+        base64_lines(bytes, &mut out);
+    };
+    part(
+        "Content-Type: text/plain; charset=utf-8\r\n",
+        body.as_bytes(),
+    );
+    for f in files {
+        let name = encoded(&f.name.replace(['"', '\\'], "_"));
+        part(
+            &format!(
+                "Content-Type: {}; name=\"{name}\"\r\n\
+                 Content-Disposition: attachment; filename=\"{name}\"\r\n",
+                f.mime
+            ),
+            &f.bytes,
+        );
+    }
+    out.push_str(&format!("--{boundary}--\r\n"));
+    out.into_bytes()
+}
+
+/// `bytes` in base64 onto `out`, in lines of 76 characters, as MIME has
+/// them: 57 bytes a line.
+fn base64_lines(bytes: &[u8], out: &mut String) {
+    for line in bytes.chunks(57) {
+        base64::engine::general_purpose::STANDARD.encode_string(line, out);
+        out.push_str("\r\n");
+    }
 }
 
 fn quote(text: &str) -> String {
@@ -291,10 +484,14 @@ fn encoded(s: &str) -> String {
 fn message_id(from: &str) -> String {
     let domain = from.rsplit_once('@').map(|(_, d)| d).unwrap_or("letterbox");
     let ticks = jiff::Timestamp::now().as_millisecond();
+    format!("<{ticks}.{}@{domain}>", random_hex())
+}
+
+/// Sixteen random hex digits, or the time's when there is no randomness.
+fn random_hex() -> String {
     let mut rand = [0u8; 8];
-    let hex = match getrandom::fill(&mut rand) {
-        Ok(()) => rand.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-        Err(_) => "0".to_string(),
-    };
-    format!("<{ticks}.{hex}@{domain}>")
+    match getrandom::fill(&mut rand) {
+        Ok(()) => rand.iter().map(|b| format!("{b:02x}")).collect(),
+        Err(_) => format!("{:016x}", jiff::Timestamp::now().as_nanosecond()),
+    }
 }

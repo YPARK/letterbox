@@ -405,20 +405,26 @@ pub fn add(path: &Path, account: &Account) -> anyhow::Result<()> {
 /// moves mail to, when the server itself marks none.
 pub fn set_trash(path: &Path, name: &str, folder: &str) -> anyhow::Result<()> {
     let mut doc = read_doc(path)?;
-    let accounts = doc
-        .get_mut("account")
-        .and_then(toml_edit::Item::as_array_of_tables_mut)
-        .context("no accounts in the file")?;
-    let table = accounts
-        .iter_mut()
-        .find(|t| {
-            t.get("name")
-                .and_then(toml_edit::Item::as_str)
-                .is_some_and(|n| n.eq_ignore_ascii_case(name))
-        })
-        .with_context(|| format!("no account named {name}"))?;
-    table["trash"] = toml_edit::value(folder);
+    account_table(&mut doc, name)?["trash"] = toml_edit::value(folder);
     write_doc(path, &doc)
+}
+
+/// Whether the `[[account]]` table is the account named `name`, in any case.
+fn is_named(t: &toml_edit::Table, name: &str) -> bool {
+    t.get("name")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(|n| n.eq_ignore_ascii_case(name))
+}
+
+/// The `[[account]]` table of the account named `name`.
+fn account_table<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    name: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    doc.get_mut("account")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|accounts| accounts.iter_mut().find(|t| is_named(t, name)))
+        .with_context(|| format!("no [[account]] named {name} in the file"))
 }
 
 /// Take the account named `name` out of the file at `path`; the account,
@@ -429,11 +435,7 @@ pub fn remove(path: &Path, name: &str) -> anyhow::Result<Account> {
         .find(|a| a.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| anyhow::anyhow!("no account named {name}"))?;
     let mut doc = read_doc(path)?;
-    let named = |t: &toml_edit::Table| {
-        t.get("name")
-            .and_then(toml_edit::Item::as_str)
-            .is_some_and(|n| n.eq_ignore_ascii_case(name))
-    };
+    let named = |t: &toml_edit::Table| is_named(t, name);
     let mut header = None;
     if let Some(accounts) = doc
         .get_mut("account")
@@ -467,6 +469,33 @@ pub fn remove(path: &Path, name: &str) -> anyhow::Result<Account> {
     }
     write_doc(path, &doc)?;
     Ok(account)
+}
+
+/// Call the account named `old` `new` in the file at `path`, the file's
+/// comments kept, the name's own too; the name, as it is kept. A name is
+/// something, and is not another account's.
+pub fn rename(path: &Path, old: &str, new: &str) -> anyhow::Result<String> {
+    let new = new.trim();
+    if new.is_empty() {
+        bail!("a name is needed");
+    }
+    let mut doc = read_doc(path)?;
+    let taken = doc
+        .get("account")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .is_some_and(|a| a.iter().any(|t| is_named(t, new) && !is_named(t, old)));
+    if taken {
+        bail!("there is an account named {new} already");
+    }
+    let value = account_table(&mut doc, old)?
+        .get_mut("name")
+        .and_then(toml_edit::Item::as_value_mut)
+        .context("its name is not a string")?;
+    let decor = value.decor().clone();
+    *value = new.into();
+    *value.decor_mut() = decor;
+    write_doc(path, &doc)?;
+    Ok(new.to_string())
 }
 
 /// What `letterbox accounts` shows with none set up.

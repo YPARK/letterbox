@@ -14,7 +14,7 @@ use crate::theme::Theme;
 use crate::vault;
 use jiff::{Timestamp, ToSpan, Zoned};
 use ratatui::Frame;
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyEvent;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -111,7 +111,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if let Some(pick) = &app.picking {
         Some(trash_dialog(f, &t, pick))
     } else {
-        app.removing.map(|a| removing(f, &t, &app.accounts[a].name))
+        app.removing
+            .map(|a| removing(f, &t, &app.accounts[a].name))
+            .or_else(|| {
+                app.renaming
+                    .as_ref()
+                    .map(|(a, typed)| renaming(f, &t, &app.accounts[*a].name, typed))
+            })
     };
     if let Some((area, targets)) = popup {
         app.targets.push((area, Target::Popup));
@@ -481,34 +487,58 @@ fn trash_dialog(f: &mut Frame, t: &Theme, pick: &TrashPick) -> (Rect, Targets) {
     (area, targets)
 }
 
-fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
+/// A question about an account, in a box of its own: what is asked, and
+/// `last`, a line to answer on, under it.
+fn question(
+    f: &mut Frame,
+    t: &Theme,
+    title: &str,
+    foot: &str,
+    asked: &str,
+    last: impl FnOnce(usize) -> Line<'static>,
+) -> (Rect, usize) {
     let width = f.area().width.min(64);
     let room = (width as usize).saturating_sub(4);
     let mut lines = vec![Line::raw("")];
-    lines.extend(
-        wrap(
-            &format!(
-                "Remove {name} from letterbox? Its mail stays on its server; the password \
-                 letterbox kept for it is forgotten."
-            ),
-            room,
-        )
-        .into_iter()
-        .map(Line::raw),
-    );
+    lines.extend(wrap(asked, room).into_iter().map(Line::raw));
     lines.push(Line::raw(""));
-    let (row, places) = buttons(t, &[("Remove", Button::Remove), ("Keep", Button::Keep)]);
-    let buttons_at = lines.len();
-    lines.push(row);
+    let last_at = lines.len();
+    lines.push(last(room));
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(lines).block(dialog(
-            t,
-            "Remove account",
-            "y removes · any other key keeps it",
-        )),
-        area,
+    f.render_widget(Paragraph::new(lines).block(dialog(t, title, foot)), area);
+    (area, last_at)
+}
+
+fn renaming(f: &mut Frame, t: &Theme, name: &str, typed: &str) -> (Rect, Targets) {
+    let field = Style::new().fg(t.text).bg(t.field);
+    let (area, _) = question(
+        f,
+        t,
+        "Rename account",
+        "⏎ renames · esc keeps it",
+        &format!("What is {name} to be called? Only letterbox's name for it changes."),
+        |room| {
+            let value = tail(typed, room.saturating_sub(1));
+            let pad = " ".repeat(room.saturating_sub(value.width() + 1));
+            Line::from(Span::styled(format!("{value}▏{pad}"), field))
+        },
+    );
+    (area, Vec::new())
+}
+
+fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
+    let (row, places) = buttons(t, &[("Remove", Button::Remove), ("Keep", Button::Keep)]);
+    let (area, buttons_at) = question(
+        f,
+        t,
+        "Remove account",
+        "y removes · any other key keeps it",
+        &format!(
+            "Remove {name} from letterbox? Its mail stays on its server; the password \
+             letterbox kept for it is forgotten."
+        ),
+        |_| row,
     );
     let targets = places
         .into_iter()
@@ -1223,23 +1253,11 @@ fn size(bytes: usize) -> String {
 }
 
 /// Where a key's hint is at the foot: its line, how far along, how wide.
-type Spot = (usize, u16, u16, KeyCode);
+type Spot = (usize, u16, u16, KeyEvent);
 
-/// The key a hint stands for, to press it when it is clicked: none for
-/// those that stand for two, as `j/k`.
-fn code(key: &str) -> Option<KeyCode> {
-    match key {
-        "⏎" => Some(KeyCode::Enter),
-        "␣" => Some(KeyCode::Char(' ')),
-        "esc" => Some(KeyCode::Esc),
-        k => {
-            let mut c = k.chars();
-            match (c.next(), c.next()) {
-                (Some(c), None) => Some(KeyCode::Char(c)),
-                _ => None,
-            }
-        }
-    }
+/// The key a hint stands for, to press it when it is clicked.
+fn code(key: &str) -> Option<KeyEvent> {
+    crate::app::key_named(key)
 }
 
 /// The foot: what happened, at the right of the keys where there is room,
@@ -1331,24 +1349,29 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
             ("⏎", "open"),
             ("j/k", "move"),
             ("A", "add account"),
+            ("R", "rename"),
             ("D", "remove"),
-            ("r", "refresh"),
+            ("C-n", "new mail"),
         ],
         Focus::List => vec![
             ("⏎", "read"),
             ("d", "trash"),
             ("c", "compose"),
-            ("R", "reply"),
+            ("C-r", "reply"),
+            ("e", "reply all"),
+            ("C-f", "forward"),
             ("/", "search"),
             ("u", "read/unread"),
             ("s", "flag"),
-            ("r", "refresh"),
+            ("C-n", "new mail"),
         ],
         Focus::Reader => vec![
             ("␣", "page"),
             ("n/p", "next/previous"),
             ("d", "trash"),
-            ("R", "reply"),
+            ("C-r", "reply"),
+            ("e", "reply all"),
+            ("C-f", "forward"),
             ("u", "unread"),
             ("s", "flag"),
             ("f", "files & links"),
@@ -1405,10 +1428,15 @@ fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
             "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
         ),
         ("c", "write a message"),
-        ("R", "reply to the message"),
+        ("C-r", "reply to the sender"),
+        (
+            "e C-S-r",
+            "reply to all: the sender, and the others it went to, copied",
+        ),
+        ("C-f", "forward it, its files with it"),
         (
             "C-c C-c",
-            "send the message being written; C-g leaves it unsent",
+            "send the message being written; C-g or C-c C-k leaves it unsent",
         ),
         ("o", "open the message in the browser, as its HTML"),
         (
@@ -1417,10 +1445,14 @@ fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
         ),
         ("a", "save its attachments to Downloads"),
         (
-            "r",
+            "C-n",
             "look for new mail now; it is looked for every two minutes",
         ),
         ("A", "add an account: its address and password"),
+        (
+            "R",
+            "rename an account: the one picked in the sidebar, else the one listed",
+        ),
         (
             "D",
             "remove an account: the one picked in the sidebar, else the one listed",

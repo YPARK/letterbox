@@ -162,6 +162,8 @@ enum AccountAction {
         #[arg(long)]
         keep_password: bool,
     },
+    /// Call an account something else; only letterbox's name for it changes
+    Rename { name: String, new: String },
 }
 
 #[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
@@ -504,6 +506,14 @@ fn command(args: &Args) -> anyhow::Result<()> {
             if !forgotten && !keep_password {
                 println!("its password is still in the vault, which is locked");
             }
+            Ok(())
+        }
+        Some(Command::Accounts {
+            action: Some(AccountAction::Rename { name, new }),
+            ..
+        }) => {
+            let new = config::rename(&args.config, name, new)?;
+            println!("renamed {name} to {new}");
             Ok(())
         }
         Some(Command::Accounts {

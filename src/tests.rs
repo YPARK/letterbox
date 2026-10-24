@@ -1322,7 +1322,9 @@ fn click_at(app: &mut App, target: app::Target) {
     app.settle(Duration::from_secs(5));
 }
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
     MouseEvent {
@@ -1381,7 +1383,10 @@ fn the_forms_fields_and_buttons_are_clicked() {
 #[test]
 fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
     let mut app = demo();
-    click_at(&mut app, app::Target::Key(KeyCode::Char('?')));
+    click_at(
+        &mut app,
+        app::Target::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+    );
     assert!(app.help);
     let screen = app::screen(&mut app, 60, 12);
     assert!(screen.contains("j/k or the wheel scroll"), "{screen}");
@@ -1406,7 +1411,10 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
         KeyModifiers::NONE,
     ));
     assert!(!app.help);
-    click_at(&mut app, app::Target::Key(KeyCode::Enter));
+    click_at(
+        &mut app,
+        app::Target::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
     assert!(app.message().is_some());
 }
 
@@ -2126,7 +2134,7 @@ fn a_reply_is_addressed_to_the_sender() {
         subject: subject.clone(),
         body: "hi".into(),
     };
-    let raw = crate::compose::bytes("me@example.com", &draft, None, None);
+    let raw = crate::compose::bytes("me@example.com", &draft, None, None, &[]);
     assert_eq!(mail::message(1, raw).unwrap().subject, subject);
     let (id, refs) = crate::compose::thread(&message);
     assert_eq!(id.as_deref(), Some("<1@demo>"));
@@ -2136,7 +2144,7 @@ fn a_reply_is_addressed_to_the_sender() {
 #[test]
 fn replying_opens_the_message_and_the_demo_keeps_what_is_sent() {
     let mut app = demo();
-    press(&mut app, &["R"]);
+    press(&mut app, &["<c-r>"]);
     let text = app.compose.as_ref().unwrap().buffer.text();
     assert!(
         text.contains("To: Ada Lovelace <ada@analytical.example>"),
@@ -2447,7 +2455,7 @@ fn a_message_together_with_others_is_read_and_marked_on_its_own_account() {
 fn a_reply_from_the_inboxes_together_is_sent_from_its_account() {
     let mut app = two_accounts();
     list_row(&mut app, app::Row::All(Role::Inbox));
-    press(&mut app, &["R"]);
+    press(&mut app, &["<c-r>"]);
     assert_eq!(app.compose.as_ref().unwrap().account, 1);
     press(&mut app, &["<esc>"]);
 }
@@ -2539,4 +2547,250 @@ fn the_account_removed_from_folders_together_is_the_one_of_the_message_picked() 
     press(&mut app, &["D"]);
     assert_eq!(app.removing, Some(1));
     press(&mut app, &["n"]);
+}
+
+// ---- replying to all, forwarding, and renaming an account ----
+
+/// A message to you and others: from Ada, to you and Bob, Carol copied.
+fn to_several() -> mail::Message {
+    let raw = b"From: Ada Lovelace <ada@analytical.example>\r\n\
+        To: You <you@example.com>, Bob <bob@example.com>\r\n\
+        Cc: Carol <carol@example.com>, ada@analytical.example\r\n\
+        Subject: Notes on the engine\r\nMessage-ID: <1@demo>\r\n\
+        Date: Mon, 2 Jan 2023 10:00:00 +0000\r\n\r\nHello\r\n"
+        .to_vec();
+    mail::message(1, raw).unwrap()
+}
+
+#[test]
+fn a_reply_to_all_is_to_the_sender_with_the_others_copied_but_you() {
+    let (text, row) = crate::compose::reply_all(&to_several(), "YOU@example.com");
+    assert!(
+        text.starts_with("To: Ada Lovelace <ada@analytical.example>\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nCc: Bob <bob@example.com>, Carol <carol@example.com>\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nSubject: Re: Notes on the engine\n"),
+        "{text}"
+    );
+    assert!(text.contains("> Hello\n"), "{text}");
+    assert_eq!(row, 4);
+}
+
+#[test]
+fn a_forward_says_what_it_forwards_and_waits_for_whom_to() {
+    let (text, row, col) = crate::compose::forward(&to_several());
+    assert!(
+        text.starts_with("To: \nCc: \nSubject: Fwd: Notes on the engine\n\n"),
+        "{text}"
+    );
+    assert_eq!((row, col), (0, 4));
+    assert!(text.contains("Forwarded message"), "{text}");
+    assert!(
+        text.contains("From: Ada Lovelace <ada@analytical.example>"),
+        "{text}"
+    );
+    assert!(text.contains("\nHello\n"), "{text}");
+    assert_eq!(crate::compose::forward_subject("Fwd: x"), "Fwd: x");
+    assert_eq!(crate::compose::forward_subject("FW: x"), "FW: x");
+}
+
+#[test]
+fn a_message_with_files_is_sent_in_parts_each_as_it_was() {
+    let draft = crate::compose::Draft {
+        to: vec!["a@b.c".into()],
+        cc: Vec::new(),
+        subject: "Fwd: é".into(),
+        body: "Here it is, café.".into(),
+    };
+    let files = vec![crate::compose::File {
+        name: "paper.pdf".into(),
+        mime: "application/pdf".into(),
+        bytes: b"%PDF-1.4 \xff\x00 binary".to_vec(),
+    }];
+    let raw = crate::compose::bytes("me@example.com", &draft, None, None, &files);
+    assert!(raw.is_ascii(), "every server takes it as it is");
+    let message = mail::message(1, raw.clone()).unwrap();
+    assert_eq!(message.text.trim(), "Here it is, café.");
+    assert_eq!(message.subject, "Fwd: é");
+    let files: Vec<(String, String, Vec<u8>)> = mail::attachments(&raw)
+        .into_iter()
+        .map(|(a, bytes)| (a.name, a.mime, bytes))
+        .collect();
+    assert_eq!(
+        files,
+        [(
+            "paper.pdf".to_string(),
+            "application/pdf".to_string(),
+            b"%PDF-1.4 \xff\x00 binary".to_vec()
+        )]
+    );
+}
+
+#[test]
+fn reply_forward_and_new_mail_have_their_keys() {
+    let mut app = demo();
+    // r is not reply: it says what is.
+    press(&mut app, &["r"]);
+    assert!(app.compose.is_none());
+    assert!(app.status.contains("C-r"), "{}", app.status);
+    press(&mut app, &["<c-n>"]);
+    assert!(app.status.contains("new mail"), "{}", app.status);
+    press(&mut app, &["<c-r>"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.contains("Subject: Re: "), "{text}");
+    press(&mut app, &["<c-g>", "e"]);
+    assert!(app.compose.is_some(), "e replies to all");
+    press(&mut app, &["<c-g>", "<c-s-r>"]);
+    assert!(app.compose.is_some(), "so does C-S-r");
+    press(&mut app, &["<c-g>", "<c-f>"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.contains("Subject: Fwd: "), "{text}");
+    press(&mut app, &["<c-g>"]);
+    let help = {
+        press(&mut app, &["?"]);
+        app::screen(&mut app, 100, 60)
+    };
+    for key in ["C-r", "C-S-r", "C-f", "C-n", "R"] {
+        assert!(help.contains(key), "{key} in {help}");
+    }
+}
+
+#[test]
+fn a_forward_carries_the_files_of_what_it_forwards() {
+    let mut app = demo();
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(
+        &mut app,
+        &["<c-f>", "ada@analytical.example", "<c-c>", "<c-c>"],
+    );
+    assert!(app.compose.is_none(), "{}", app.status);
+    press(&mut app, &["h", "j", "j"]);
+    assert_eq!(app.folder_name(), "Sent");
+    let sent = app.shown[0].clone();
+    assert!(sent.subject.starts_with("Fwd: "), "{}", sent.subject);
+    press(&mut app, &["l", "<enter>"]);
+    let message = app.message().expect("read").clone();
+    assert!(
+        message
+            .attachments
+            .iter()
+            .any(|a| a.mime == "application/pdf"),
+        "{:?}",
+        message.attachments
+    );
+}
+
+#[test]
+fn an_account_is_renamed_in_its_file_its_comments_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "# my mail\n[[account]]\nname = \"Home\" # the old one\nemail = \"a@b.c\"\nhost = \"imap.b.c\"\n\
+         [[account]]\nname = \"Work\"\nemail = \"w@b.c\"\nhost = \"imap.b.c\"\n",
+    )
+    .unwrap();
+    crate::config::rename(&path, "home", "Personal").unwrap();
+    let file = std::fs::read_to_string(&path).unwrap();
+    assert!(file.starts_with("# my mail\n"), "{file}");
+    assert!(file.contains("name = \"Personal\""), "{file}");
+    assert!(
+        crate::config::rename(&path, "Personal", "work").is_err(),
+        "a name twice"
+    );
+    assert!(crate::config::rename(&path, "Nobody", "X").is_err());
+    assert!(
+        crate::config::rename(&path, "Personal", " ").is_err(),
+        "a name is something"
+    );
+}
+
+#[test]
+fn an_account_is_renamed_from_the_sidebar() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = empty_app(path.clone());
+    fill_form(&mut app, account.port.unwrap(), "secret");
+    assert!(app.form.is_none());
+    press(&mut app, &["h", "R"]);
+    assert!(app::screen(&mut app, 120, 40).contains("Rename"));
+    press(&mut app, &["<c-u>", "Personal", "<enter>"]);
+    assert_eq!(app.accounts[0].name, "Personal", "{}", app.status);
+    assert_eq!(crate::config::load(&path).unwrap()[0].name, "Personal");
+    // Esc leaves it as it is, and so does a click away from it.
+    press(&mut app, &["R", "<c-u>", "X", "<esc>"]);
+    assert_eq!(app.accounts[0].name, "Personal");
+    press(&mut app, &["R"]);
+    click_at(&mut app, app::Target::Side);
+    assert!(app.renaming.is_none());
+    assert_eq!(app.accounts[0].name, "Personal");
+}
+
+#[test]
+fn an_account_the_file_names_otherwise_is_not_said_to_be_renamed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "account = [{ name = \"Home\", email = \"a@b.c\", host = \"imap.b.c\" }]\n",
+    )
+    .unwrap();
+    assert!(crate::config::rename(&path, "Home", "Personal").is_err());
+}
+
+#[test]
+fn a_reply_to_all_of_your_own_message_is_to_whom_it_went() {
+    let raw = b"From: You <you@example.com>\r\n\
+        To: Bob <bob@example.com>, Carol <carol@example.com>\r\n\
+        Cc: Dan <dan@example.com>\r\nSubject: Plans\r\n\r\nHi\r\n"
+        .to_vec();
+    let message = mail::message(1, raw).unwrap();
+    let (text, _) = crate::compose::reply_all(&message, "you@example.com");
+    assert!(
+        text.starts_with(
+            "To: Bob <bob@example.com>, Carol <carol@example.com>\nCc: Dan <dan@example.com>\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_reply_is_to_every_address_the_message_asks_replies_go_to() {
+    let raw = b"From: Ada <ada@analytical.example>\r\n\
+        Reply-To: a@x.example, b@y.example\r\nTo: you@example.com\r\n\
+        Subject: Plans\r\n\r\nHi\r\n"
+        .to_vec();
+    let message = mail::message(1, raw).unwrap();
+    let (text, _) = crate::compose::reply(&message);
+    assert!(text.starts_with("To: a@x.example, b@y.example\n"), "{text}");
+}
+
+#[test]
+fn a_forwards_files_keep_each_its_own_type() {
+    let raw = b"From: Ada <ada@analytical.example>\r\nTo: you@example.com\r\n\
+        Subject: Pictures\r\nMIME-Version: 1.0\r\n\
+        Content-Type: multipart/mixed; boundary=b\r\n\r\n\
+        --b\r\nContent-Type: text/plain\r\n\r\nTwo\r\n\
+        --b\r\nContent-Type: image/png\r\n\
+        Content-Disposition: attachment; filename=same\r\n\r\npng\r\n\
+        --b\r\nContent-Type: image/jpeg\r\n\
+        Content-Disposition: attachment; filename=same\r\n\r\njpg\r\n\
+        --b--\r\n"
+        .to_vec();
+    let message = mail::message(1, raw).unwrap();
+    let files = crate::compose::files(&message);
+    let types: Vec<&str> = files.iter().map(|f| f.mime.as_str()).collect();
+    assert_eq!(types, ["image/png", "image/jpeg"]);
+    assert!(files.iter().all(|f| !f.mime.is_empty()));
 }
