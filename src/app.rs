@@ -74,10 +74,13 @@ pub struct Account {
     asks: Option<Sender<Ask>>,
 }
 
-/// What the sidebar lists: each account, and its folders under it; and a
-/// row to add another.
+/// What the sidebar lists: with more than one account, their Inbox, Sent
+/// and Drafts together, under a heading; each account, and its folders
+/// under it; and a row to add another.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Row {
+    Everyone,
+    All(Role),
     Account(usize),
     Folder(usize, usize),
     Add,
@@ -256,14 +259,162 @@ impl Form {
     }
 }
 
-/// The messages of the folder shown.
-pub struct Listing {
+/// The roles whose folders are listed together, every account's, in the
+/// sidebar's order.
+const TOGETHER: [Role; 3] = [Role::Inbox, Role::Sent, Role::Drafts];
+
+/// What the list shows: a folder of one account's, or every account's
+/// folder of a role.
+#[derive(Clone, PartialEq, Debug)]
+pub enum View {
+    Folder(usize, String),
+    All(Role),
+}
+
+/// A folder's messages, as many as are listed, newest first as its server
+/// numbers them; and how many it holds.
+pub(crate) struct Part {
     pub account: usize,
     pub folder: String,
     pub messages: Vec<Summary>,
     pub total: u32,
     pub loading: bool,
     pub error: Option<String>,
+}
+
+impl Part {
+    fn is(&self, account: usize, folder: &str) -> bool {
+        self.account == account && self.folder == folder
+    }
+
+    /// Whether it holds more than is listed.
+    fn partial(&self) -> bool {
+        self.messages.len() < self.total as usize
+    }
+
+    /// The date of the oldest dated message listed.
+    fn oldest(&self) -> Option<i64> {
+        self.messages.iter().filter_map(|m| m.date).min()
+    }
+}
+
+/// How old a message of folders together may be and still be listed: as
+/// old as the newest of the oldest listed of the folders listed in part,
+/// as what is still to come of them would come before anything older.
+fn cut(parts: &[Part]) -> Option<i64> {
+    parts
+        .iter()
+        .filter(|p| p.partial())
+        .filter_map(Part::oldest)
+        .max()
+}
+
+/// What is listed: the folders the view shows, each as far as it is.
+pub struct Listing {
+    pub view: View,
+    pub(crate) parts: Vec<Part>,
+}
+
+impl Listing {
+    fn part_mut(&mut self, account: usize, folder: &str) -> Option<&mut Part> {
+        self.parts.iter_mut().find(|p| p.is(account, folder))
+    }
+
+    fn has(&self, account: usize, folder: &str) -> bool {
+        self.parts.iter().any(|p| p.is(account, folder))
+    }
+
+    /// Each folder listed, by its account and path.
+    fn keys(&self) -> Vec<(usize, String)> {
+        self.parts
+            .iter()
+            .map(|p| (p.account, p.folder.clone()))
+            .collect()
+    }
+
+    /// The account whose folder is listed, if it is one account's.
+    pub fn account(&self) -> Option<usize> {
+        match self.view {
+            View::Folder(a, _) => Some(a),
+            View::All(_) => None,
+        }
+    }
+
+    /// Whether more than one account's messages are listed, each to be
+    /// told by its account.
+    pub fn mixed(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|p| p.account != self.parts[0].account)
+    }
+
+    pub fn loading(&self) -> bool {
+        self.parts.iter().any(|p| p.loading)
+    }
+
+    /// Whether messages are still to come before any is listed.
+    pub fn fetching(&self) -> bool {
+        self.loading() && self.parts.iter().all(|p| p.messages.is_empty())
+    }
+
+    pub fn total(&self) -> u32 {
+        self.parts.iter().map(|p| p.total).sum()
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.parts.iter().find_map(|p| p.error.as_deref())
+    }
+}
+
+/// A message listed, and the account and folder it is in.
+#[derive(Clone, Debug)]
+pub struct Listed {
+    pub account: usize,
+    pub folder: String,
+    pub summary: Summary,
+}
+
+impl std::ops::Deref for Listed {
+    type Target = Summary;
+    fn deref(&self) -> &Summary {
+        &self.summary
+    }
+}
+
+impl Listed {
+    fn new(account: usize, folder: &str, summary: Summary) -> Self {
+        Listed {
+            account,
+            folder: folder.to_string(),
+            summary,
+        }
+    }
+
+    fn is(&self, account: usize, folder: &str, uid: u32) -> bool {
+        self.account == account && self.folder == folder && self.uid == uid
+    }
+}
+
+/// The messages of `parts`, as listed, with the folder each is in: one
+/// folder's as its server numbers them; folders together newest first,
+/// the undated last, and none older than the cut.
+pub(crate) fn merged(parts: &[Part]) -> Vec<(&Part, &Summary)> {
+    let mut all: Vec<(&Part, &Summary)> = parts
+        .iter()
+        .flat_map(|p| p.messages.iter().map(move |m| (p, m)))
+        .collect();
+    if let [_] = parts {
+        return all;
+    }
+    let cut = cut(parts);
+    all.retain(|(_, m)| cut.is_none_or(|c| m.date.is_none_or(|d| d >= c)));
+    all.sort_by_key(|(_, m)| newest(m));
+    all
+}
+
+/// What sorts messages of folders together newest first; the undated last.
+fn newest(m: &Summary) -> std::cmp::Reverse<i64> {
+    std::cmp::Reverse(m.date.unwrap_or(i64::MIN))
 }
 
 pub enum Body {
@@ -444,12 +595,12 @@ pub struct App {
     /// Folders shown before, as they were, to show again at once.
     listed: HashMap<(usize, String), (Vec<Summary>, u32)>,
     /// What is listed: the folder's messages, or those the search finds.
-    pub shown: Vec<Summary>,
+    pub shown: Vec<Listed>,
     pub list: ListState,
     pub query: String,
     pub searching: bool,
     /// What the server found for the query, once asked with ⏎.
-    pub found: Option<Vec<Summary>>,
+    pub found: Option<Vec<Listed>>,
     pub reading: Option<Reading>,
     /// How far the message read is scrolled, and how many lines it has and
     /// shows, as last drawn.
@@ -830,6 +981,7 @@ impl App {
                 for p in paths {
                     self.ask(a, Ask::Count(p));
                 }
+                self.join_view(a);
                 self.sweep(a);
                 self.resume_held(a);
             }
@@ -859,11 +1011,7 @@ impl App {
                 offset,
                 page,
             } => {
-                let Some(l) = self
-                    .listing
-                    .as_mut()
-                    .filter(|l| l.account == a && l.folder == folder)
-                else {
+                let Some(l) = self.listing.as_mut().and_then(|l| l.part_mut(a, &folder)) else {
                     return;
                 };
                 l.loading = false;
@@ -951,17 +1099,22 @@ impl App {
                 words,
                 found,
             } => {
-                let current = self
-                    .listing
-                    .as_ref()
-                    .is_some_and(|l| l.account == a && l.folder == folder);
+                let current = self.listing.as_ref().is_some_and(|l| l.has(a, &folder));
                 if !current || words != self.query.trim() {
                     return;
                 }
                 match found {
                     Ok(found) => {
-                        self.status = format!("{} found in {}", found.len(), self.folder_name());
-                        self.found = Some(found);
+                        // Each account's answer joins those come before.
+                        let mut all = self.found.take().unwrap_or_default();
+                        all.retain(|m| m.account != a || m.folder != folder);
+                        all.extend(found.into_iter().map(|s| Listed::new(a, &folder, s)));
+                        // In the list's order: folders together newest first.
+                        if self.listing.as_ref().is_some_and(Listing::mixed) {
+                            all.sort_by_key(|m| newest(m));
+                        }
+                        self.status = format!("{} found in {}", all.len(), self.folder_name());
+                        self.found = Some(all);
                     }
                     Err(e) => self.status = format!("cannot search: {}", first_line(&e)),
                 }
@@ -1048,27 +1201,58 @@ impl App {
             .find(|f| f.path == path)
     }
 
-    /// The name of the folder listed.
+    /// The name of what is listed: a folder's, or a role's, of every
+    /// account's.
     pub fn folder_name(&self) -> String {
-        self.listing
-            .as_ref()
-            .and_then(|l| {
-                self.accounts[l.account]
-                    .folders
-                    .iter()
-                    .find(|f| f.path == l.folder)
-                    .map(|f| f.name.clone())
-            })
-            .unwrap_or_default()
+        match self.listing.as_ref().map(|l| &l.view) {
+            Some(View::All(role)) => format!("{}, all accounts", role.name()),
+            Some(View::Folder(..)) => self.folder().map(|f| f.name.clone()).unwrap_or_default(),
+            None => String::new(),
+        }
     }
 
-    /// The folder listed, as the sidebar has it.
+    /// The folder listed, as the sidebar has it, if one account's is.
     pub fn folder(&self) -> Option<&Folder> {
-        let l = self.listing.as_ref()?;
-        self.accounts[l.account]
+        match &self.listing.as_ref()?.view {
+            View::Folder(a, path) => self.folder_of(*a, path),
+            View::All(_) => None,
+        }
+    }
+
+    fn folder_of(&self, account: usize, path: &str) -> Option<&Folder> {
+        self.accounts
+            .get(account)?
             .folders
             .iter()
-            .find(|f| f.path == l.folder)
+            .find(|f| f.path == path)
+    }
+
+    fn is_trash(&self, account: usize, path: &str) -> bool {
+        self.folder_of(account, path)
+            .is_some_and(|f| f.role == Role::Trash)
+    }
+
+    /// The account's folder of `role`, if it has one to list.
+    fn role_folder(&self, account: usize, role: Role) -> Option<&Folder> {
+        self.accounts[account]
+            .folders
+            .iter()
+            .find(|f| f.selectable && f.role == role)
+    }
+
+    /// The folders of `role`, one an account, of the accounts in use.
+    fn folders_of(&self, role: Role) -> Vec<(usize, String)> {
+        self.live()
+            .filter_map(|a| Some((a, self.role_folder(a, role)?.path.clone())))
+            .collect()
+    }
+
+    /// How many messages of every account's folder of `role` are not read,
+    /// as far as their folders are counted.
+    pub fn unseen_of(&self, role: Role) -> Option<u32> {
+        self.live()
+            .filter_map(|a| self.role_folder(a, role)?.unseen)
+            .reduce(|x, y| x + y)
     }
 
     /// Show a message as marked, or not, wherever it is listed, and count
@@ -1090,13 +1274,14 @@ impl App {
         if let Some(l) = self
             .listing
             .as_mut()
-            .filter(|l| l.account == account && l.folder == folder)
+            .and_then(|l| l.part_mut(account, folder))
         {
             l.messages.iter_mut().for_each(&mut set);
-            self.shown.iter_mut().for_each(&mut set);
-            if let Some(found) = &mut self.found {
-                found.iter_mut().for_each(&mut set);
-            }
+            std::iter::once(&mut self.shown)
+                .chain(self.found.as_mut())
+                .flatten()
+                .filter(|m| m.account == account && m.folder == folder)
+                .for_each(|m| set(&mut m.summary));
         }
         if let Some((messages, _)) = self.listed.get_mut(&(account, folder.to_string())) {
             messages.iter_mut().for_each(&mut set);
@@ -1118,6 +1303,10 @@ impl App {
     fn rebuild(&mut self) {
         let picked = self.rows.get(self.row).copied();
         self.rows.clear();
+        if self.live().count() > 1 {
+            self.rows.push(Row::Everyone);
+            self.rows.extend(TOGETHER.map(Row::All));
+        }
         for a in self.live().collect::<Vec<_>>() {
             self.rows.push(Row::Account(a));
             self.rows
@@ -1328,7 +1517,11 @@ impl App {
         self.accounts[a].asks = None;
         self.listed.retain(|(x, _), _| *x != a);
         self.read.forget(a);
-        if self.listing.as_ref().is_some_and(|l| l.account == a) {
+        // Folders together are no more with one account left.
+        let alone = self.live().filter(|&x| x != a).count() < 2;
+        if self.listing.as_ref().is_some_and(|l| {
+            l.parts.iter().any(|p| p.account == a) || (alone && l.account().is_none())
+        }) {
             self.listing = None;
             self.reading = None;
             self.shown.clear();
@@ -1404,37 +1597,65 @@ impl App {
         }
     }
 
-    pub fn current(&self) -> Option<&Summary> {
+    pub fn current(&self) -> Option<&Listed> {
         self.shown.get(self.list.selected()?)
     }
 
-    /// List the folder picked in the sidebar, as it was if it was listed
+    /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     fn open_folder(&mut self) {
-        let Some(&Row::Folder(a, i)) = self.rows.get(self.row) else {
-            return;
+        let view = match self.rows.get(self.row) {
+            Some(&Row::Folder(a, i)) => {
+                let Some(folder) = self.accounts[a].folders.get(i) else {
+                    return;
+                };
+                if !folder.selectable {
+                    return;
+                }
+                View::Folder(a, folder.path.clone())
+            }
+            Some(&Row::All(role)) => View::All(role),
+            _ => return,
         };
-        let Some(folder) = self.accounts[a].folders.get(i) else {
-            return;
-        };
-        if !folder.selectable {
-            return;
-        }
-        let path = folder.path.clone();
-        let trash = folder.role == Role::Trash;
-        if self
-            .listing
-            .as_ref()
-            .is_some_and(|l| l.account == a && l.folder == path)
-        {
+        if self.listing.as_ref().is_some_and(|l| l.view == view) {
             return;
         }
         if let Some(old) = self.listing.take() {
-            self.listed
-                .insert((old.account, old.folder), (old.messages, old.total));
+            for p in old.parts {
+                self.listed
+                    .insert((p.account, p.folder), (p.messages, p.total));
+            }
         }
-        let (messages, total) = self.listed.remove(&(a, path.clone())).unwrap_or_default();
         self.listing = Some(Listing {
+            view: view.clone(),
+            parts: Vec::new(),
+        });
+        self.query.clear();
+        self.found = None;
+        self.searching = false;
+        // What was picked before is not picked again: the list starts at
+        // its top.
+        self.shown.clear();
+        self.list.select(Some(0));
+        *self.list.offset_mut() = 0;
+        let folders = match view {
+            View::Folder(a, path) => vec![(a, path)],
+            View::All(role) => self.folders_of(role),
+        };
+        for (a, path) in folders {
+            self.list_part(a, path);
+        }
+        self.narrow();
+    }
+
+    /// List one account's folder in what is listed, as it was if it was
+    /// listed before, and ask for its newest messages.
+    fn list_part(&mut self, a: usize, path: String) {
+        let Some(listing) = &mut self.listing else {
+            return;
+        };
+        let (messages, total) = self.listed.remove(&(a, path.clone())).unwrap_or_default();
+        listing.parts.push(Part {
             account: a,
             folder: path.clone(),
             messages,
@@ -1442,39 +1663,73 @@ impl App {
             loading: true,
             error: None,
         });
-        self.query.clear();
-        self.found = None;
-        self.searching = false;
-        self.list.select(Some(0));
-        *self.list.offset_mut() = 0;
-        self.narrow();
+        let trash = self.is_trash(a, &path);
+        self.ask_page(a, path, 0);
+        if trash {
+            self.sweep(a);
+        }
+    }
+
+    /// Join the account's folder to the folders listed together, once its
+    /// folders are known.
+    fn join_view(&mut self, a: usize) {
+        let Some(View::All(role)) = self.listing.as_ref().map(|l| l.view.clone()) else {
+            return;
+        };
+        let Some(path) = self.role_folder(a, role).map(|f| f.path.clone()) else {
+            return;
+        };
+        if !self.listing.as_ref().is_some_and(|l| l.has(a, &path)) {
+            self.list_part(a, path.clone());
+            // What is searched for is searched in its folder too.
+            if self.found.is_some() {
+                self.ask_search(a, path);
+            }
+            self.narrow();
+        }
+    }
+
+    /// Ask for a page of the folder's messages, `offset` from its newest.
+    fn ask_page(&mut self, account: usize, folder: String, offset: usize) {
         self.ask(
-            a,
+            account,
             Ask::Page {
-                folder: path,
-                offset: 0,
+                folder,
+                offset,
                 n: PAGE,
             },
         );
-        if trash {
-            self.sweep(a);
+    }
+
+    /// Ask the folder's server for what the query finds in it.
+    fn ask_search(&mut self, account: usize, folder: String) {
+        let words = self.query.trim().to_string();
+        if !words.is_empty() {
+            self.ask(
+                account,
+                Ask::Search {
+                    folder,
+                    words,
+                    n: FOUND,
+                },
+            );
         }
     }
 
     /// Look in the folder listed again, and count every folder's messages.
     pub fn refresh(&mut self) {
         self.refreshed = Instant::now();
-        if let Some(l) = &mut self.listing {
-            l.loading = true;
-            let (a, folder) = (l.account, l.folder.clone());
-            self.ask(
-                a,
-                Ask::Page {
-                    folder,
-                    offset: 0,
-                    n: PAGE,
-                },
-            );
+        let parts: Vec<(usize, String)> = self
+            .listing
+            .iter_mut()
+            .flat_map(|l| &mut l.parts)
+            .map(|p| {
+                p.loading = true;
+                (p.account, p.folder.clone())
+            })
+            .collect();
+        for (a, folder) in parts {
+            self.ask_page(a, folder, 0);
         }
         for a in self.live().collect::<Vec<_>>() {
             if matches!(self.accounts[a].state, State::Failed(_)) {
@@ -1498,32 +1753,29 @@ impl App {
     /// messages listed with every word of it in their sender, subject or
     /// preview.
     pub fn narrow(&mut self) {
-        let uid = self.current().map(|s| s.uid);
-        let messages = self
-            .listing
-            .as_ref()
-            .map(|l| l.messages.as_slice())
-            .unwrap_or_default();
+        let picked = self.current().map(|m| (m.account, m.folder.clone(), m.uid));
         let words: Vec<String> = self
             .query
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
-        self.shown = match &self.found {
-            Some(found) if !words.is_empty() => found.clone(),
-            _ if words.is_empty() => messages.to_vec(),
-            _ => messages
-                .iter()
-                .filter(|m| {
-                    let text = format!("{} {} {} {}", m.from, m.address, m.subject, m.preview)
-                        .to_lowercase();
-                    words.iter().all(|w| text.contains(w.as_str()))
+        self.shown = match (&self.found, &self.listing) {
+            (Some(found), _) if !words.is_empty() => found.clone(),
+            (_, Some(l)) => merged(&l.parts)
+                .into_iter()
+                .filter(|(_, m)| {
+                    words.is_empty() || {
+                        let text = format!("{} {} {} {}", m.from, m.address, m.subject, m.preview)
+                            .to_lowercase();
+                        words.iter().all(|w| text.contains(w.as_str()))
+                    }
                 })
-                .cloned()
+                .map(|(p, m)| Listed::new(p.account, &p.folder, m.clone()))
                 .collect(),
+            (_, None) => Vec::new(),
         };
-        let at = uid
-            .and_then(|u| self.shown.iter().position(|s| s.uid == u))
+        let at = picked
+            .and_then(|(a, f, u)| self.shown.iter().position(|m| m.is(a, &f, u)))
             .or(self.list.selected())
             .unwrap_or(0);
         self.list
@@ -1532,9 +1784,8 @@ impl App {
 
     /// Read the message picked in the list: at once, if it was read before.
     fn read_picked(&mut self) {
-        let Some(l) = &self.listing else { return };
         let Some(s) = self.current() else { return };
-        let (a, folder, uid, seen) = (l.account, l.folder.clone(), s.uid, s.flags.seen);
+        let (a, folder, uid, seen) = (s.account, s.folder.clone(), s.uid, s.flags.seen);
         if self
             .reading
             .as_ref()
@@ -1573,9 +1824,8 @@ impl App {
 
     /// Mark the message picked, or not, here and on its server.
     fn set(&mut self, flag: Flag, on: bool) {
-        let Some(l) = &self.listing else { return };
         let Some(s) = self.current() else { return };
-        let (a, folder, uid) = (l.account, l.folder.clone(), s.uid);
+        let (a, folder, uid) = (s.account, s.folder.clone(), s.uid);
         self.marked(a, &folder, uid, flag, on);
         self.ask(
             a,
@@ -1614,22 +1864,25 @@ impl App {
             .selected()
             .is_some_and(|i| i + 10 >= self.shown.len());
         let Some(l) = &mut self.listing else { return };
-        if !near || l.loading || self.found.is_some() || !self.query.is_empty() {
+        if !near || self.found.is_some() || !self.query.is_empty() {
             return;
         }
-        if l.messages.len() >= l.total as usize {
-            return;
+        // Those listed in part, but for those whose oldest listed is older
+        // than the cut: they are not what holds the list back.
+        let cut = cut(&l.parts);
+        let asks: Vec<(usize, String, usize)> = l
+            .parts
+            .iter_mut()
+            .filter(|p| !p.loading && p.partial())
+            .filter(|p| cut.is_none_or(|c| p.oldest().is_none_or(|o| o >= c)))
+            .map(|p| {
+                p.loading = true;
+                (p.account, p.folder.clone(), p.messages.len())
+            })
+            .collect();
+        for (a, folder, offset) in asks {
+            self.ask_page(a, folder, offset);
         }
-        l.loading = true;
-        let (a, folder, offset) = (l.account, l.folder.clone(), l.messages.len());
-        self.ask(
-            a,
-            Ask::Page {
-                folder,
-                offset,
-                n: PAGE,
-            },
-        );
     }
 
     pub fn key(&mut self, key: KeyEvent) {
@@ -1800,7 +2053,11 @@ impl App {
         let a = match (self.focus, self.rows.get(self.row)) {
             (Focus::Side, Some(&Row::Account(a) | &Row::Folder(a, _))) => Some(a),
             (Focus::Side, _) => None,
-            _ => self.listing.as_ref().map(|l| l.account),
+            _ => self
+                .listing
+                .as_ref()
+                .and_then(Listing::account)
+                .or_else(|| self.current().map(|m| m.account)),
         };
         let Some(a) = a else { return };
         if self.editable {
@@ -1811,21 +2068,15 @@ impl App {
     }
 
     fn search(&mut self) {
-        let words = self.query.trim().to_string();
         let Some(l) = &self.listing else { return };
-        if words.is_empty() {
+        if self.query.trim().is_empty() {
             return;
         }
-        let (a, folder) = (l.account, l.folder.clone());
+        let parts = l.keys();
         self.status = format!("searching {} on the server…", self.folder_name());
-        self.ask(
-            a,
-            Ask::Search {
-                folder,
-                words,
-                n: FOUND,
-            },
-        );
+        for (a, folder) in parts {
+            self.ask_search(a, folder);
+        }
     }
 
     /// Move through the sidebar or the list, or scroll the message read.
@@ -1839,7 +2090,7 @@ impl App {
                         break;
                     }
                     at = next;
-                    if matches!(self.rows[at], Row::Folder(..) | Row::Add) {
+                    if matches!(self.rows[at], Row::All(_) | Row::Folder(..) | Row::Add) {
                         self.row = at;
                         break;
                     }
@@ -2041,7 +2292,7 @@ impl App {
             }
             Some(Target::Row(i)) => {
                 self.focus = Focus::Side;
-                if matches!(self.rows.get(i), Some(Row::Folder(..))) {
+                if matches!(self.rows.get(i), Some(Row::Folder(..) | Row::All(_))) {
                     self.row = i;
                     self.open_folder();
                     self.focus = Focus::List;
@@ -2241,14 +2492,16 @@ impl App {
 
     /// Move what is picked to Trash, or, in Trash, back where it was.
     fn delete(&mut self) {
-        let Some(listing) = &self.listing else {
+        let Some(Listed {
+            account,
+            folder,
+            summary,
+        }) = self.current().cloned()
+        else {
             return;
         };
-        let Some(summary) = self.current().cloned() else {
-            return;
-        };
-        let (account, folder, uid) = (listing.account, listing.folder.clone(), summary.uid);
-        if self.folder().is_some_and(|f| f.role == Role::Trash) {
+        let uid = summary.uid;
+        if self.is_trash(account, &folder) {
             let email = self.accounts[account].email.clone();
             let known = self
                 .ledger
@@ -2459,9 +2712,7 @@ impl App {
     }
 
     fn folder_label(&self, account: usize, path: &str) -> String {
-        self.accounts
-            .get(account)
-            .and_then(|a| a.folders.iter().find(|f| f.path == path))
+        self.folder_of(account, path)
             .map(|f| f.name.clone())
             .unwrap_or_else(|| path.to_string())
     }
@@ -2506,7 +2757,7 @@ impl App {
         if let Some(listing) = self
             .listing
             .as_mut()
-            .filter(|l| l.account == account && l.folder == folder)
+            .and_then(|l| l.part_mut(account, folder))
         {
             let before = listing.messages.len();
             listing.messages.retain(|m| m.uid != uid);
@@ -2533,22 +2784,10 @@ impl App {
     }
 
     fn reload(&mut self, account: usize) {
-        let Some(folder) = self
-            .listing
-            .as_ref()
-            .filter(|l| l.account == account)
-            .map(|l| l.folder.clone())
-        else {
-            return;
-        };
-        self.ask(
-            account,
-            Ask::Page {
-                folder,
-                offset: 0,
-                n: PAGE,
-            },
-        );
+        let folders = self.listing.as_ref().map(Listing::keys).unwrap_or_default();
+        for (_, folder) in folders.into_iter().filter(|(a, _)| *a == account) {
+            self.ask_page(account, folder, 0);
+        }
     }
 
     fn compose_new(&mut self) {
@@ -2561,14 +2800,11 @@ impl App {
     }
 
     fn reply(&mut self) {
-        let Some(listing) = &self.listing else {
-            return;
-        };
         let Some(summary) = self.current() else {
             self.status = "no message to reply to".to_string();
             return;
         };
-        let (account, folder, uid) = (listing.account, listing.folder.clone(), summary.uid);
+        let (account, folder, uid) = (summary.account, summary.folder.clone(), summary.uid);
         if let Some(message) = self.cached(account, &folder, uid) {
             self.open_reply(account, &message);
             return;
@@ -2603,14 +2839,14 @@ impl App {
         let answering = Some((
             self.reading
                 .as_ref()
-                .filter(|r| r.uid == message.uid)
+                .filter(|r| r.account == account && r.uid == message.uid)
                 .map(|r| r.folder.clone())
-                .unwrap_or_else(|| {
-                    self.listing
-                        .as_ref()
-                        .map(|l| l.folder.clone())
-                        .unwrap_or_default()
-                }),
+                .or_else(|| {
+                    self.current()
+                        .filter(|m| m.account == account && m.uid == message.uid)
+                        .map(|m| m.folder.clone())
+                })
+                .unwrap_or_default(),
             message.uid,
         ));
         // The folder the message was read from, which may not be the one listed
@@ -2649,10 +2885,13 @@ impl App {
         });
     }
 
+    /// The account to write from: the one listed, else the one of the
+    /// message picked, else the first.
     fn account_of(&self) -> Option<usize> {
         self.listing
             .as_ref()
-            .map(|l| l.account)
+            .and_then(Listing::account)
+            .or_else(|| self.current().map(|m| m.account))
             .or_else(|| self.live().next())
     }
 

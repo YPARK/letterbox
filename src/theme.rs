@@ -1,5 +1,6 @@
 //! The screen's colours: sage grays, in steps from the text down to the
-//! rules, with green for what is unread and orange for a flag. `light` is
+//! rules, with green for what is unread and orange for a flag; and muted
+//! colours to tell accounts apart by, where their messages are together. `light` is
 //! painted whatever the terminal's colours; `dark` keeps the terminal's own
 //! background, as an Emacs buffer has it.
 
@@ -41,9 +42,16 @@ pub struct Theme {
     pub flag: Color,
     /// What went wrong, as an account that would not sign in.
     pub error: Color,
+    /// The accounts', in turn.
+    accounts: [Color; 4],
 }
 
 impl Theme {
+    /// The account's colour: the accounts', in turn.
+    pub fn account(&self, account: usize) -> Color {
+        self.accounts[account % self.accounts.len()]
+    }
+
     pub fn of(name: Name) -> Theme {
         match name {
             Name::Light => Theme {
@@ -61,6 +69,12 @@ impl Theme {
                 accent: Color::Rgb(62, 128, 86),
                 flag: Color::Rgb(196, 118, 40),
                 error: Color::Rgb(176, 64, 58),
+                accounts: [
+                    Color::Rgb(58, 106, 156),
+                    Color::Rgb(134, 78, 128),
+                    Color::Rgb(36, 124, 124),
+                    Color::Rgb(140, 112, 40),
+                ],
             },
             Name::Dark => Theme {
                 page: Color::Reset,
@@ -77,6 +91,12 @@ impl Theme {
                 accent: Color::Rgb(122, 182, 136),
                 flag: Color::Rgb(214, 170, 92),
                 error: Color::Rgb(214, 112, 100),
+                accounts: [
+                    Color::Rgb(128, 168, 214),
+                    Color::Rgb(198, 148, 192),
+                    Color::Rgb(108, 188, 188),
+                    Color::Rgb(206, 182, 108),
+                ],
             },
         }
     }

@@ -39,6 +39,19 @@ impl Role {
         }
     }
 
+    /// Its name, as the folders of it of every account are named together.
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Inbox => "Inbox",
+            Role::Drafts => "Drafts",
+            Role::Sent => "Sent",
+            Role::Archive => "Archive",
+            Role::Junk => "Junk",
+            Role::Trash => "Trash",
+            Role::Other => "Other",
+        }
+    }
+
     pub fn icon(self) -> &'static str {
         match self {
             Role::Inbox => "✉",
@@ -210,7 +223,7 @@ pub struct Flags {
 }
 
 /// A message as it is listed.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Summary {
     pub uid: u32,
     /// The sender's name, else their address.

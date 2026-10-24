@@ -5,10 +5,10 @@
 
 use crate::app::{
     AGAIN, App, Body, Button, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP, PASSPHRASE,
-    PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, ohp_reads,
+    PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, View, ohp_reads,
 };
 use crate::config::{self, Auth};
-use crate::mail::Message;
+use crate::mail::{Message, Role};
 use crate::secret::Keeper;
 use crate::theme::Theme;
 use crate::vault;
@@ -660,11 +660,14 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(Line::from(spans)).style(Style::new().bg(t.field).fg(t.dim)),
         field,
     );
-    let count = match (&app.listing, app.folder()) {
-        (Some(l), _) if l.loading && l.messages.is_empty() => "fetching… ".to_string(),
-        (Some(l), Some(fo)) => {
-            let unseen = fo
-                .unseen
+    let count = match &app.listing {
+        Some(l) if l.fetching() => "fetching… ".to_string(),
+        Some(l) => {
+            let unseen = match l.view {
+                View::All(role) => app.unseen_of(role),
+                View::Folder(..) => app.folder().and_then(|f| f.unseen),
+            };
+            let unseen = unseen
                 .filter(|&n| n > 0)
                 .map(|n| format!(", {n} unread"))
                 .unwrap_or_default();
@@ -673,9 +676,9 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 format!("{} of ", app.shown.len())
             };
-            format!("{shown}{} messages{unseen} ", l.total)
+            format!("{shown}{} messages{unseen} ", l.total())
         }
-        _ => String::new(),
+        None => String::new(),
     };
     f.render_widget(
         Paragraph::new(Span::styled(count, Style::new().fg(t.dim))).alignment(Alignment::Right),
@@ -702,20 +705,46 @@ fn rows(area: Rect, offset: usize, heights: &[u16]) -> Vec<(usize, Rect)> {
 fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let width = area.width as usize;
-    let listed = app.listing.as_ref().map(|l| (l.account, l.folder.as_str()));
+    let listed = app.listing.as_ref().map(|l| &l.view);
+    let together = app.rows.contains(&Row::Everyone);
     let items: Vec<ListItem> = app
         .rows
         .iter()
         .map(|row| match *row {
+            Row::Everyone => ListItem::new(vec![
+                Line::raw(""),
+                Line::styled(
+                    " ALL ACCOUNTS",
+                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Row::All(role) => folder_row(
+                t,
+                width,
+                FolderRow {
+                    depth: 1,
+                    role,
+                    name: role.name(),
+                    unseen: app.unseen_of(role),
+                    selectable: true,
+                    open: listed == Some(&View::All(role)),
+                },
+            ),
             Row::Account(a) => {
                 let account = &app.accounts[a];
-                let mut spans = vec![Span::styled(
+                // Its colour, to tell its messages by among others'.
+                let mut spans = if together {
+                    vec![Span::styled(" ●", Style::new().fg(t.account(a)))]
+                } else {
+                    Vec::new()
+                };
+                spans.push(Span::styled(
                     format!(
                         " {}",
                         clip(&account.name.to_uppercase(), width.saturating_sub(16))
                     ),
                     Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
-                )];
+                ));
                 match &account.state {
                     State::Connecting => {
                         spans.push(Span::styled(" connecting…", Style::new().fg(t.faint)))
@@ -729,30 +758,19 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             }
             Row::Folder(a, i) => {
                 let folder = &app.accounts[a].folders[i];
-                let indent = "  ".repeat(folder.depth + 1);
-                let count = folder
-                    .unseen
-                    .filter(|&n| n > 0)
-                    .map(|n| n.to_string())
-                    .unwrap_or_default();
-                let room = width.saturating_sub(indent.len() + 2 + count.len() + 2);
-                let name = clip(&folder.name, room);
-                let pad = room.saturating_sub(name.width());
-                let open = listed == Some((a, folder.path.as_str()));
-                let style = if !folder.selectable {
-                    Style::new().fg(t.dim)
-                } else if open {
-                    Style::new().fg(t.title).bold()
-                } else {
-                    Style::new().fg(t.soft)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::raw(indent),
-                    Span::styled(format!("{} ", folder.role.icon()), Style::new().fg(t.faint)),
-                    Span::styled(name, style),
-                    Span::raw(" ".repeat(pad + 1)),
-                    Span::styled(count, Style::new().fg(t.dim).bold()),
-                ]))
+                folder_row(
+                    t,
+                    width,
+                    FolderRow {
+                        depth: folder.depth + 1,
+                        role: folder.role,
+                        name: &folder.name,
+                        unseen: folder.unseen,
+                        selectable: folder.selectable,
+                        open: matches!(listed, Some(View::Folder(x, path))
+                            if *x == a && *path == folder.path),
+                    },
+                )
             }
             Row::Add => ListItem::new(vec![
                 Line::raw(""),
@@ -781,7 +799,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|r| {
-            if matches!(r, Row::Account(_) | Row::Add) {
+            if matches!(r, Row::Everyone | Row::Account(_) | Row::Add) {
                 2
             } else {
                 1
@@ -791,6 +809,43 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     for (i, row) in rows(area, state.offset(), &heights) {
         app.targets.push((row, Target::Row(i)));
     }
+}
+
+/// A folder's row in the sidebar: indented `depth` steps, its role's icon,
+/// its name, and how many of its messages are not read.
+struct FolderRow<'a> {
+    depth: usize,
+    role: Role,
+    name: &'a str,
+    unseen: Option<u32>,
+    selectable: bool,
+    open: bool,
+}
+
+fn folder_row(t: Theme, width: usize, row: FolderRow) -> ListItem<'static> {
+    let indent = "  ".repeat(row.depth);
+    let count = row
+        .unseen
+        .filter(|&n| n > 0)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let room = width.saturating_sub(indent.len() + 2 + count.len() + 2);
+    let name = clip(row.name, room);
+    let pad = room.saturating_sub(name.width());
+    let style = if !row.selectable {
+        Style::new().fg(t.dim)
+    } else if row.open {
+        Style::new().fg(t.title).bold()
+    } else {
+        Style::new().fg(t.soft)
+    };
+    ListItem::new(Line::from(vec![
+        Span::raw(indent),
+        Span::styled(format!("{} ", row.role.icon()), Style::new().fg(t.faint)),
+        Span::styled(name, style),
+        Span::raw(" ".repeat(pad + 1)),
+        Span::styled(count, Style::new().fg(t.dim).bold()),
+    ]))
 }
 
 fn messages(f: &mut Frame, app: &mut App, area: Rect) {
@@ -822,6 +877,10 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     let end = (top + fits + 1).min(app.shown.len());
     let now = Zoned::now();
     let rule = Line::styled("─".repeat(width), Style::new().fg(t.rule));
+    // Among other accounts' messages, each says its account's name, in
+    // its colour.
+    let together = app.listing.as_ref().is_some_and(|l| l.mixed());
+    let names: Vec<String> = app.accounts.iter().map(|a| clip(&a.name, 12)).collect();
     let items: Vec<ListItem> = app.shown[top..end]
         .iter()
         .map(|m| {
@@ -835,7 +894,16 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
                 right.push(Span::styled("↩ ", Style::new().fg(t.faint)));
             }
             right.push(Span::styled(format!("{date} "), Style::new().fg(t.dim)));
-            let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+            let tag = if together {
+                Span::styled(
+                    format!("{} ", names[m.account]),
+                    Style::new().fg(t.account(m.account)),
+                )
+            } else {
+                Span::raw("")
+            };
+            let right_w: usize =
+                right.iter().map(|s| s.content.width()).sum::<usize>() + tag.content.width();
             let from = clip(
                 if m.from.is_empty() {
                     "(no sender)"
@@ -851,6 +919,7 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Span::raw("   ")
                 },
+                tag,
                 Span::styled(from, Style::new().fg(t.title).bold()),
                 Span::raw(" ".repeat(pad)),
             ];
@@ -929,10 +998,10 @@ fn empty(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" first.", dim),
         ]));
     } else if let Some(l) = &app.listing {
-        if let Some(e) = &l.error {
+        if let Some(e) = l.error() {
             lines.push(Line::styled("  Cannot list this folder:", title));
             lines.extend(e.lines().map(|e| Line::styled(format!("  {e}"), dim)));
-        } else if l.loading {
+        } else if l.loading() {
             lines.push(Line::styled("  fetching…", dim));
         } else if !app.query.is_empty() && app.found.is_none() {
             lines.push(Line::styled("  Nothing listed matches.", title));

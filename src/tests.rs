@@ -2352,3 +2352,191 @@ fn a_body_that_is_not_ascii_is_quoted_when_the_server_cannot_take_it() {
     assert!(text.contains("=C3=A9"), "{text}");
     assert_eq!(crate::smtp::for_transfer(raw, true), raw);
 }
+
+// ---- every account's Inbox, Sent and Drafts together ----
+
+/// The demo twice, as the accounts Home and Work; Work's inbox has a
+/// message newer than any of Home's.
+fn two_accounts() -> App {
+    let mut work = Demo::new();
+    work.append(
+        "INBOX",
+        b"From: Grace Hopper <grace@example.com>\r\nTo: you@example.com\r\n\
+          Subject: Newest of all\r\nDate: Sat, 1 Jan 2050 00:00:00 +0000\r\n\
+          Message-ID: <newest@example.com>\r\n\r\nHello\r\n",
+        false,
+    )
+    .unwrap();
+    let mut app = App::new(
+        vec![
+            ("Home".to_string(), Box::new(Demo::new()) as Box<dyn Store>),
+            ("Work".to_string(), Box::new(work) as Box<dyn Store>),
+        ],
+        PathBuf::from("/nowhere/accounts.toml"),
+    );
+    app.ledger = scratch_ledger();
+    app.settle(Duration::from_secs(5));
+    app
+}
+
+/// List the sidebar's row `row`, as if it were picked there, and pick the
+/// top of the list: what was picked stays picked as the other accounts'
+/// messages come.
+fn list_row(app: &mut App, row: app::Row) {
+    press(app, &["h"]);
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| *r == row)
+        .expect("in the sidebar");
+    press(app, &["<enter>", "g"]);
+}
+
+#[test]
+fn every_accounts_inbox_sent_and_drafts_are_in_the_sidebar_together() {
+    use app::Row;
+    let app = two_accounts();
+    assert_eq!(
+        app.rows[..5],
+        [
+            Row::Everyone,
+            Row::All(Role::Inbox),
+            Row::All(Role::Sent),
+            Row::All(Role::Drafts),
+            Row::Account(0)
+        ]
+    );
+    // With one account, they would be its own again.
+    assert!(!demo().rows.contains(&Row::Everyone));
+}
+
+#[test]
+fn the_inboxes_together_are_listed_newest_first_each_with_its_account() {
+    let mut app = two_accounts();
+    // Unread, they are counted together.
+    assert_eq!(app.unseen_of(Role::Inbox), Some(2 + 3));
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    assert_eq!(app.shown.len(), 13, "{}", app.status);
+    assert_eq!(app.shown[0].subject, "Newest of all");
+    assert_eq!(app.shown[0].account, 1);
+    assert_eq!(app.shown.iter().filter(|m| m.account == 0).count(), 6);
+    let dates: Vec<i64> = app.shown.iter().filter_map(|m| m.date).collect();
+    assert!(dates.windows(2).all(|w| w[0] >= w[1]), "{dates:?}");
+    let screen = app::screen(&mut app, 140, 40);
+    assert!(
+        screen.contains("Work") && screen.contains("Home"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_message_together_with_others_is_read_and_marked_on_its_own_account() {
+    let mut app = two_accounts();
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    press(&mut app, &["<enter>"]);
+    let reading = app.reading.as_ref().unwrap();
+    assert_eq!((reading.account, reading.folder.as_str()), (1, "INBOX"));
+    assert_eq!(app.message().unwrap().subject, "Newest of all");
+    let unseen = |app: &App, a: usize| app.accounts[a].folders[0].unseen;
+    assert_eq!(unseen(&app, 1), Some(2), "Work's newest is read");
+    assert_eq!(unseen(&app, 0), Some(2), "Home's are not");
+    assert!(app.shown[0].flags.seen);
+}
+
+#[test]
+fn a_reply_from_the_inboxes_together_is_sent_from_its_account() {
+    let mut app = two_accounts();
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    press(&mut app, &["R"]);
+    assert_eq!(app.compose.as_ref().unwrap().account, 1);
+    press(&mut app, &["<esc>"]);
+}
+
+#[test]
+fn a_message_together_with_others_is_trashed_on_its_own_account() {
+    let mut app = two_accounts();
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    press(&mut app, &["d"]);
+    assert!(
+        app.shown.iter().all(|m| m.subject != "Newest of all"),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.shown.len(), 12);
+    let trash = |app: &App, a: usize| {
+        app.accounts[a]
+            .folders
+            .iter()
+            .find(|f| f.role == Role::Trash)
+            .and_then(|f| f.total)
+    };
+    assert_eq!(trash(&app, 1), Some(1), "{}", app.status);
+    assert_eq!(trash(&app, 0), Some(0));
+}
+
+#[test]
+fn the_inboxes_together_are_searched_on_every_server() {
+    let mut app = two_accounts();
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    press(&mut app, &["/", "bernoulli numbers step", "<enter>"]);
+    let mut accounts: Vec<usize> = app.shown.iter().map(|m| m.account).collect();
+    accounts.sort();
+    assert_eq!(accounts, [0, 1], "{}", app.status);
+}
+
+#[test]
+fn folders_together_show_no_message_older_than_one_still_to_come() {
+    use app::{Part, merged};
+    let summary = |uid, date| mail::Summary {
+        uid,
+        date: Some(date),
+        ..Default::default()
+    };
+    let part = |account, total, dates: &[i64]| Part {
+        account,
+        folder: "INBOX".to_string(),
+        messages: dates.iter().map(|&d| summary(d as u32, d)).collect(),
+        total,
+        loading: false,
+        error: None,
+    };
+    // A has more than it listed, older than 90: B's 10 waits for them.
+    let parts = [part(0, 200, &[100, 90]), part(1, 2, &[95, 10])];
+    let dates: Vec<i64> = merged(&parts).iter().filter_map(|(_, m)| m.date).collect();
+    assert_eq!(dates, [100, 95, 90]);
+    // A message without a date is not held back: it comes last.
+    let mut undated = part(1, 2, &[95]);
+    undated.messages.push(mail::Summary {
+        uid: 7,
+        ..Default::default()
+    });
+    let parts = [part(0, 200, &[100, 90]), undated];
+    let uids: Vec<u32> = merged(&parts).iter().map(|(_, m)| m.uid).collect();
+    assert_eq!(uids, [100, 95, 90, 7]);
+    // A folder alone is listed as its server numbers it, all of it.
+    let alone = [part(0, 200, &[90, 100])];
+    let dates: Vec<i64> = merged(&alone).iter().filter_map(|(_, m)| m.date).collect();
+    assert_eq!(dates, [90, 100]);
+}
+
+#[test]
+fn the_inboxes_together_are_listed_by_a_click_too() {
+    let mut app = two_accounts();
+    let row = app
+        .rows
+        .iter()
+        .position(|r| *r == app::Row::All(Role::Inbox))
+        .unwrap();
+    click_at(&mut app, app::Target::Row(row));
+    assert_eq!(app.folder_name(), "Inbox, all accounts");
+    assert_eq!(app.focus, Focus::List);
+}
+
+#[test]
+fn the_account_removed_from_folders_together_is_the_one_of_the_message_picked() {
+    let mut app = two_accounts();
+    list_row(&mut app, app::Row::All(Role::Inbox));
+    press(&mut app, &["D"]);
+    assert_eq!(app.removing, Some(1));
+    press(&mut app, &["n"]);
+}
