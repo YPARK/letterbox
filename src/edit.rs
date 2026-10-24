@@ -1,7 +1,7 @@
 //! A text buffer edited as Emacs edits one, enough of the keys to write a
-//! message: moving by character, line and word, killing and yanking. The
-//! arrows do the same as the movement keys, so a message can be written
-//! without them.
+//! message: moving by character, line and word, killing and yanking, the
+//! region from the mark, and searching as you type. The arrows do the same
+//! as the movement keys, so a message can be written without them.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -22,6 +22,34 @@ pub struct Buffer {
     kill: String,
     /// The last key killed text, so a second `C-k` adds to the same kill.
     killing: bool,
+    /// Where `C-SPC` set the mark: the region is from there to point. Any
+    /// change to the text lets it go.
+    mark: Option<(usize, usize)>,
+    /// The search being typed, if one is.
+    search: Option<Search>,
+    /// What was last searched for, for `C-s C-s` to search for again.
+    last_search: String,
+}
+
+/// A search as you type: what is typed, where it began, which way it
+/// goes, where what it last found starts, and whether the last look failed.
+/// What is typed has no line's end, as `⏎` ends the search: what it finds
+/// is on one line.
+struct Search {
+    query: String,
+    origin: (usize, usize),
+    backward: bool,
+    found: Option<(usize, usize)>,
+    failing: bool,
+}
+
+/// Where a search looks from: where it began, past what it found, or at
+/// what it found, as when it turns about.
+#[derive(Clone, Copy)]
+enum From {
+    Origin,
+    Past,
+    At,
 }
 
 impl Buffer {
@@ -39,7 +67,47 @@ impl Buffer {
             preferred: 0,
             kill: String::new(),
             killing: false,
+            mark: None,
+            search: None,
+            last_search: String::new(),
         }
+    }
+
+    /// The region, from its start to its end, if the mark is set.
+    pub fn region(&self) -> Option<((usize, usize), (usize, usize))> {
+        let mark = self.mark?;
+        let point = (self.row, self.col);
+        Some((mark.min(point), mark.max(point)))
+    }
+
+    /// The columns of line `row` in the region: past its last character
+    /// when the region goes on past its end, as what `C-w` cuts takes the
+    /// line's end too.
+    pub fn marked(&self, row: usize) -> std::ops::Range<usize> {
+        match self.region() {
+            Some(((r0, c0), (r1, c1))) if (r0..=r1).contains(&row) => {
+                let start = if row == r0 { c0 } else { 0 };
+                let end = if row == r1 {
+                    c1
+                } else {
+                    self.lines[row].chars().count() + 1
+                };
+                start..end
+            }
+            _ => 0..0,
+        }
+    }
+
+    /// What the search being typed says of itself, as Emacs says it.
+    pub fn searching(&self) -> Option<String> {
+        let s = self.search.as_ref()?;
+        let failing = if s.failing { "Failing " } else { "" };
+        let way = if s.backward {
+            "I-search backward"
+        } else {
+            "I-search"
+        };
+        Some(format!("{failing}{way}: {}", s.query))
     }
 
     pub fn text(&self) -> String {
@@ -71,7 +139,23 @@ impl Buffer {
         &self.lines[self.row]
     }
 
+    /// The text changes: the mark is let go, as Emacs lets it go.
+    fn edited(&mut self) {
+        self.mark = None;
+    }
+
+    /// `killed`, as what `C-y` puts back: added to the last kill when that
+    /// was a kill too.
+    fn add_kill(&mut self, killed: String, append: bool) {
+        if append {
+            self.kill.push_str(&killed);
+        } else {
+            self.kill = killed;
+        }
+    }
+
     fn insert(&mut self, c: char) {
+        self.edited();
         let col = self.col;
         let line = &mut self.lines[self.row];
         let at = byte_at(line, col);
@@ -81,6 +165,7 @@ impl Buffer {
     }
 
     fn newline(&mut self) {
+        self.edited();
         let col = self.col;
         let line = &mut self.lines[self.row];
         let at = byte_at(line, col);
@@ -93,6 +178,7 @@ impl Buffer {
     }
 
     fn backspace(&mut self) {
+        self.edited();
         if self.col > 0 {
             self.col -= 1;
             self.delete_char();
@@ -111,6 +197,7 @@ impl Buffer {
 
     /// `C-d`: the character after point, or the line's end when there.
     fn delete_forward(&mut self) {
+        self.edited();
         if self.col < self.line().chars().count() {
             self.delete_char();
             return;
@@ -176,6 +263,7 @@ impl Buffer {
     /// `C-k`: from point to the end of the line, or the newline when point
     /// is already there, added to the last kill when that was a kill too.
     fn kill_line(&mut self, append: bool) {
+        self.edited();
         let col = self.col;
         let n = self.line().chars().count();
         let killed = if col < n {
@@ -191,11 +279,7 @@ impl Buffer {
         } else {
             return;
         };
-        if append {
-            self.kill.push_str(&killed);
-        } else {
-            self.kill = killed;
-        }
+        self.add_kill(killed, append);
     }
 
     fn yank(&mut self) {
@@ -212,6 +296,7 @@ impl Buffer {
     }
 
     fn insert_str(&mut self, s: &str) {
+        self.edited();
         if s.is_empty() {
             return;
         }
@@ -269,13 +354,8 @@ impl Buffer {
         self.forward_word();
         let end = (self.row, self.col);
         let killed = self.take(start, end);
-        if killed.is_empty() {
-            return;
-        }
-        if append {
-            self.kill.push_str(&killed);
-        } else {
-            self.kill = killed;
+        if !killed.is_empty() {
+            self.add_kill(killed, append);
         }
     }
 
@@ -300,34 +380,192 @@ impl Buffer {
         if start >= end {
             return String::new();
         }
-        let (r0, c0) = start;
-        let (r1, c1) = end;
-        if r0 == r1 {
-            let line = &mut self.lines[r0];
-            let a = byte_at(line, c0);
-            let b = byte_at(line, c1);
-            let killed = line[a..b].to_string();
-            line.replace_range(a..b, "");
-            self.row = r0;
-            self.col = c0;
-            return killed;
-        }
-        let mut killed = String::new();
-        killed.push_str(&self.lines[r0][byte_at(&self.lines[r0], c0)..]);
-        for line in &self.lines[r0 + 1..r1] {
-            killed.push('\n');
-            killed.push_str(line);
-        }
-        killed.push('\n');
-        killed.push_str(&self.lines[r1][..byte_at(&self.lines[r1], c1)]);
+        self.edited();
+        let killed = self.text_between(start, end);
+        let ((r0, c0), (r1, c1)) = (start, end);
         let tail = self.lines[r1][byte_at(&self.lines[r1], c1)..].to_string();
         let at = byte_at(&self.lines[r0], c0);
         self.lines[r0].truncate(at);
         self.lines[r0].push_str(&tail);
         self.lines.drain(r0 + 1..=r1);
-        self.row = r0;
-        self.col = c0;
+        self.place(r0, c0);
         killed
+    }
+
+    /// The text from `start` to `end`, its lines' ends as newlines.
+    fn text_between(&self, (r0, c0): (usize, usize), (r1, c1): (usize, usize)) -> String {
+        let (first, last) = (&self.lines[r0], &self.lines[r1]);
+        if r0 == r1 {
+            return first[byte_at(first, c0)..byte_at(first, c1)].to_string();
+        }
+        let mut text = first[byte_at(first, c0)..].to_string();
+        for line in &self.lines[r0 + 1..r1] {
+            text.push('\n');
+            text.push_str(line);
+        }
+        text.push('\n');
+        text.push_str(&last[..byte_at(last, c1)]);
+        text
+    }
+
+    /// `C-w`: the region, killed, added to the last kill when that was a
+    /// kill too; nothing without a mark.
+    fn kill_region(&mut self, append: bool) {
+        if let Some((start, end)) = self.region() {
+            let killed = self.take(start, end);
+            self.add_kill(killed, append);
+            self.mark = None;
+        }
+    }
+
+    /// `M-w`: the region, copied to be yanked; the mark let go.
+    fn copy_region(&mut self) {
+        if let Some((start, end)) = self.region() {
+            self.kill = self.text_between(start, end);
+            self.mark = None;
+        }
+    }
+
+    /// Begin searching as you type, forward or `backward`.
+    fn begin_search(&mut self, backward: bool) {
+        self.search = Some(Search {
+            query: String::new(),
+            origin: (self.row, self.col),
+            backward,
+            found: None,
+            failing: false,
+        });
+    }
+
+    /// `C-g`: the search let go, point back where it began; else the mark.
+    /// Whether there was either to let go.
+    fn quit(&mut self) -> bool {
+        if let Some(s) = self.search.take() {
+            self.place(s.origin.0, s.origin.1);
+            return true;
+        }
+        self.mark.take().is_some()
+    }
+
+    /// Find the query, looking `from` where it says, the way the search
+    /// goes. Point goes to the end of what is found going forward, its
+    /// start going back; failing, it stays.
+    fn find(&mut self, from: From) {
+        let Some(s) = &mut self.search else { return };
+        if s.query.is_empty() {
+            (s.found, s.failing) = (None, false);
+            let (row, col) = s.origin;
+            self.place(row, col);
+            return;
+        }
+        let n = s.query.chars().count();
+        // Where a match may start: going forward, at or after; going back,
+        // at or before, none on that line when the column is none.
+        let (row, col) = match (from, s.found) {
+            (From::Past, Some((r, c))) if s.backward => (r, c.checked_sub(1)),
+            (From::Past, Some((r, c))) => (r, Some(c + 1)),
+            (From::At, Some((r, c))) => (r, Some(c)),
+            _ if s.backward => (s.origin.0, s.origin.1.checked_sub(n)),
+            _ => (s.origin.0, Some(s.origin.1)),
+        };
+        let (backward, query) = (s.backward, s.query.clone());
+        let hit = self.locate(&query, row, col, backward);
+        let s = self.search.as_mut().expect("searching");
+        s.failing = hit.is_none();
+        if let Some((r, c)) = hit {
+            s.found = hit;
+            self.place(r, if backward { c } else { c + n });
+        }
+    }
+
+    /// Where `query` starts, the nearest to line `row`, column `col`, the
+    /// way the search goes: at or after it going forward, at or before it
+    /// going back. A capital is looked for as it is; otherwise case is let go.
+    fn locate(
+        &self,
+        query: &str,
+        row: usize,
+        col: Option<usize>,
+        backward: bool,
+    ) -> Option<(usize, usize)> {
+        let fold = !query.chars().any(char::is_uppercase);
+        let norm = |c: char| {
+            if fold {
+                c.to_lowercase().next().unwrap_or(c)
+            } else {
+                c
+            }
+        };
+        let q: Vec<char> = query.chars().map(norm).collect();
+        let starts = |r: usize| -> Vec<usize> {
+            let line: Vec<char> = self.lines[r].chars().map(norm).collect();
+            (0..line.len())
+                .filter(|&i| line[i..].starts_with(&q))
+                .collect()
+        };
+        if backward {
+            col.and_then(|c| starts(row).into_iter().rev().find(|&i| i <= c))
+                .map(|i| (row, i))
+                .or_else(|| (0..row).rev().find_map(|r| Some((r, *starts(r).last()?))))
+        } else {
+            let c = col.unwrap_or(0);
+            starts(row)
+                .into_iter()
+                .find(|&i| i >= c)
+                .map(|i| (row, i))
+                .or_else(|| {
+                    (row + 1..self.lines.len()).find_map(|r| Some((r, *starts(r).first()?)))
+                })
+        }
+    }
+
+    /// A key while searching: whether it was the search's. A key that is
+    /// not ends the search where it is, and is then what it is.
+    fn search_key(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(s) = &mut self.search else {
+            return false;
+        };
+        match key.code {
+            // Some terminals say a letter with Ctrl in upper case.
+            KeyCode::Char(c @ ('s' | 'S' | 'r' | 'R')) if ctrl => {
+                let backward = c.eq_ignore_ascii_case(&'r');
+                let turned = s.backward != backward;
+                s.backward = backward;
+                let from = if s.query.is_empty() {
+                    s.query = self.last_search.clone();
+                    From::Origin
+                } else if turned {
+                    From::At
+                } else {
+                    From::Past
+                };
+                self.find(from);
+            }
+            KeyCode::Enter => self.end_search(),
+            KeyCode::Backspace => {
+                s.query.pop();
+                self.find(From::Origin);
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                s.query.push(c);
+                self.find(From::Origin);
+            }
+            _ => {
+                self.end_search();
+                return false;
+            }
+        }
+        true
+    }
+
+    fn end_search(&mut self) {
+        if let Some(s) = self.search.take()
+            && !s.query.is_empty()
+        {
+            self.last_search = s.query;
+        }
     }
 }
 
@@ -362,9 +600,15 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
         *prefix = true;
         return Done::Stay;
     }
+    // C-g lets the search go, else the mark, as Emacs does, before it
+    // leaves the message.
     if ctrl && matches!(key.code, KeyCode::Char('g' | 'G')) {
         buf.killing = false;
-        return Done::Cancel;
+        return if buf.quit() { Done::Stay } else { Done::Cancel };
+    }
+    if buf.search_key(key) {
+        buf.killing = false;
+        return Done::Stay;
     }
     let append = buf.killing;
     let mut killing = false;
@@ -384,6 +628,15 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
             killing = true;
         }
         KeyCode::Char('y') if ctrl => buf.yank(),
+        // C-SPC, which some terminals say as C-@.
+        KeyCode::Char(' ' | '@') if ctrl => buf.mark = Some((buf.row, buf.col)),
+        KeyCode::Char('w') if ctrl => {
+            buf.kill_region(append);
+            killing = true;
+        }
+        KeyCode::Char('w') if alt => buf.copy_region(),
+        KeyCode::Char('s') if ctrl => buf.begin_search(false),
+        KeyCode::Char('r') if ctrl => buf.begin_search(true),
         KeyCode::Char('f') if alt => buf.word(1),
         KeyCode::Char('b') if alt => buf.word(-1),
         KeyCode::Char('d') if alt => {

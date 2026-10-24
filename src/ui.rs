@@ -581,7 +581,10 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .skip(scroll)
         .take(rows)
-        .map(|(i, line)| compose_line(line, i == cursor_row, cursor_col, width, t))
+        .map(|(i, line)| {
+            let region = compose.buffer.marked(i);
+            compose_line(line, i == cursor_row, cursor_col, width, t, region)
+        })
         .collect();
     while (lines.len() as u16) < body.height {
         lines.push(Line::raw(""));
@@ -590,12 +593,18 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::new().bg(t.page).fg(t.text)),
         body,
     );
-    let mode_line = Line::from(vec![
-        Span::styled(" Compose ", Style::new().fg(t.side).bg(t.title).bold()),
-        Span::styled(
-            "  C-c C-c send   C-c C-k or C-g cancel",
+    // Searching, the mode line says what is searched for, as Emacs's
+    // echo area does.
+    let said = match compose.buffer.searching() {
+        Some(s) => Span::styled(format!("  {s}"), Style::new().fg(t.title).bold()),
+        None => Span::styled(
+            "  C-c C-c send   C-c C-k or C-g cancel   C-SPC mark   C-s search",
             Style::new().fg(t.dim),
         ),
+    };
+    let mode_line = Line::from(vec![
+        Span::styled(" Compose ", Style::new().fg(t.side).bg(t.title).bold()),
+        said,
     ]);
     f.render_widget(
         Paragraph::new(mode_line).style(Style::new().bg(t.side)),
@@ -603,7 +612,16 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn compose_line(line: &str, cursor: bool, col: usize, width: usize, t: Theme) -> Line<'static> {
+/// A line of the message being written: the cursor reversed, and the
+/// columns in `region` marked as the region, its end too when it goes on.
+fn compose_line(
+    line: &str,
+    cursor: bool,
+    col: usize,
+    width: usize,
+    t: Theme,
+    region: std::ops::Range<usize>,
+) -> Line<'static> {
     let chars: Vec<char> = line.chars().collect();
     let widths: Vec<usize> = chars
         .iter()
@@ -626,6 +644,8 @@ fn compose_line(line: &str, cursor: bool, col: usize, width: usize, t: Theme) ->
     while i < chars.len() && x + widths[i] <= width {
         let style = if cursor && i == col {
             Style::new().add_modifier(Modifier::REVERSED)
+        } else if region.contains(&i) {
+            Style::new().fg(t.title).bg(t.focus)
         } else if quoted {
             Style::new().fg(t.dim)
         } else {
@@ -640,6 +660,9 @@ fn compose_line(line: &str, cursor: bool, col: usize, width: usize, t: Theme) ->
             " ",
             Style::new().add_modifier(Modifier::REVERSED),
         ));
+    } else if region.end > chars.len() && x < width {
+        // The line's end is in the region, as what it cuts takes it too.
+        spans.push(Span::styled(" ", Style::new().bg(t.focus)));
     }
     Line::from(spans)
 }
@@ -1338,9 +1361,11 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         let list = [
             ("C-c C-c", "send"),
             ("C-g", "cancel"),
-            ("C-a/e", "line"),
-            ("C-k", "kill"),
+            ("C-SPC", "mark"),
+            ("C-w/M-w", "cut/copy"),
             ("C-y", "yank"),
+            ("C-s/C-r", "search"),
+            ("C-k", "kill"),
         ];
         return lay(&list, width);
     }
@@ -1437,6 +1462,14 @@ fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
         (
             "C-c C-c",
             "send the message being written; C-g or C-c C-k leaves it unsent",
+        ),
+        (
+            "C-SPC",
+            "in the message being written, set the mark: C-w cuts from it to the cursor, M-w copies, C-y puts it back",
+        ),
+        (
+            "C-s C-r",
+            "in the message being written, search forward, or back, as you type; C-s again finds the next, ⏎ stays, C-g goes back",
         ),
         ("o", "open the message in the browser, as its HTML"),
         (

@@ -141,8 +141,12 @@ for `n`. `e` replies to all in any terminal.
 `c` opens a message to write, `C-r` a reply, in a pane edited as Emacs
 edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
-back, `M-f` `M-b` `M-d` by word. `C-c C-c` sends it, `C-g` or `C-c C-k`
-leaves it. Outside that pane `C-c` still quits. The arrows do the same as
+back, `M-f` `M-b` `M-d` by word. `C-SPC` sets the mark: `C-w` kills the
+region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
+forward and back as you type, case let go unless a capital is typed; `C-s`
+again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
+it, `C-c C-k` leaves it, and so does `C-g` once no mark is set and no
+search is under way. Outside that pane `C-c` still quits. The arrows do the same as
 the movement keys.
 
 `d` moves the message to the account's Trash folder. In Trash, `d` puts

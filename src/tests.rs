@@ -2794,3 +2794,165 @@ fn a_forwards_files_keep_each_its_own_type() {
     assert_eq!(types, ["image/png", "image/jpeg"]);
     assert!(files.iter().all(|f| !f.mime.is_empty()));
 }
+
+// ---- the mark, the region, and searching as you type, in compose ----
+
+/// Press `keys`, as `app::keys` names them, in `buffer`; what the last did.
+fn edit_keys(buffer: &mut crate::edit::Buffer, keys: &[&str]) -> crate::edit::Done {
+    let mut prefix = false;
+    let mut done = crate::edit::Done::Stay;
+    for key in keys.iter().flat_map(|k| app::keys(k)) {
+        done = crate::edit::handle(buffer, &mut prefix, key);
+    }
+    done
+}
+
+#[test]
+fn the_region_from_the_mark_is_cut_with_c_w_and_copied_with_m_w() {
+    use crate::edit::{Buffer, Done};
+    let mut buffer = Buffer::from_text("hello world");
+    edit_keys(&mut buffer, &["<c- >"]);
+    assert_eq!(buffer.region(), Some(((0, 0), (0, 0))));
+    edit_keys(&mut buffer, &["<m-f>"]);
+    assert_eq!(buffer.region(), Some(((0, 0), (0, 5))));
+    edit_keys(&mut buffer, &["<c-w>"]);
+    assert_eq!(buffer.text(), " world\n");
+    assert_eq!(buffer.region(), None, "the mark goes with the region");
+    edit_keys(&mut buffer, &["<c-e>", "<c-y>"]);
+    assert_eq!(buffer.text(), " worldhello\n");
+
+    // M-w copies: the text stays, and C-y puts the copy at point.
+    let mut buffer = Buffer::from_text("abc");
+    edit_keys(&mut buffer, &["<c-@>", "<c-e>"]);
+    edit_keys(&mut buffer, &["<m-w>"]);
+    assert_eq!(buffer.text(), "abc\n");
+    assert_eq!(buffer.region(), None);
+    edit_keys(&mut buffer, &["<c-y>"]);
+    assert_eq!(buffer.text(), "abcabc\n");
+
+    // Across lines.
+    let mut buffer = Buffer::from_text("one\ntwo\nthree");
+    edit_keys(&mut buffer, &["<c-f>", "<c- >", "<c-n>", "<c-n>", "<c-w>"]);
+    assert_eq!(buffer.text(), "ohree\n");
+
+    // With no mark, C-w cuts nothing.
+    let mut buffer = Buffer::from_text("keep");
+    edit_keys(&mut buffer, &["<c-e>", "<c-w>"]);
+    assert_eq!(buffer.text(), "keep\n");
+
+    // C-g lets the mark go before it leaves the message.
+    let mut buffer = Buffer::from_text("x");
+    assert_eq!(edit_keys(&mut buffer, &["<c- >", "<c-g>"]), Done::Stay);
+    assert_eq!(buffer.region(), None);
+    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Cancel);
+}
+
+#[test]
+fn c_s_and_c_r_search_as_you_type() {
+    use crate::edit::{Buffer, Done};
+    let mut buffer = Buffer::from_text("one two\none Two");
+    edit_keys(&mut buffer, &["<c-s>", "t", "w", "o"]);
+    assert_eq!((buffer.row(), buffer.col()), (0, 7), "after the first");
+    assert_eq!(buffer.searching(), Some("I-search: two".to_string()));
+    edit_keys(&mut buffer, &["<c-s>"]);
+    assert_eq!(
+        (buffer.row(), buffer.col()),
+        (1, 7),
+        "case is ignored in lower case"
+    );
+    // ⏎ ends the search where it is; what is typed then is typed.
+    edit_keys(&mut buffer, &["<enter>"]);
+    assert_eq!(buffer.searching(), None);
+    assert_eq!((buffer.row(), buffer.col()), (1, 7));
+
+    // A capital is looked for as it is; failing, it says so.
+    let mut buffer = Buffer::from_text("one two\none Two");
+    edit_keys(&mut buffer, &["<c-s>", "T", "w", "o"]);
+    assert_eq!((buffer.row(), buffer.col()), (1, 7));
+    edit_keys(&mut buffer, &["<c-s>"]);
+    assert_eq!(
+        buffer.searching(),
+        Some("Failing I-search: Two".to_string())
+    );
+    // ⌫ takes a letter back, searching again from where it began.
+    edit_keys(
+        &mut buffer,
+        &["<backspace>", "<backspace>", "<backspace>", "o"],
+    );
+    assert_eq!((buffer.row(), buffer.col()), (0, 1));
+
+    // C-g goes back to where the search began.
+    let mut buffer = Buffer::from_text("one two");
+    edit_keys(&mut buffer, &["<c-e>", "<c-r>", "o", "n"]);
+    assert_eq!(
+        (buffer.row(), buffer.col()),
+        (0, 0),
+        "C-r lands at its start"
+    );
+    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Stay);
+    assert_eq!(buffer.searching(), None);
+    assert_eq!((buffer.row(), buffer.col()), (0, 7));
+
+    // Another key ends the search and does what it does.
+    let mut buffer = Buffer::from_text("abc");
+    edit_keys(&mut buffer, &["<c-s>", "b", "<c-a>"]);
+    assert_eq!((buffer.searching(), buffer.col()), (None, 0));
+}
+
+#[test]
+fn the_search_shows_in_the_compose_panes_mode_line() {
+    let mut app = demo();
+    press(&mut app, &["c", "<c-s>", "S", "u", "b"]);
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("I-search: Sub"), "{screen}");
+}
+
+#[test]
+fn the_search_and_the_region_keep_to_emacs_in_the_corners() {
+    use crate::edit::{Buffer, Done, handle};
+    let shout = |c: char| {
+        KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )
+    };
+    // C-G, as some terminals say C-g, ends the search, not the message.
+    let mut buffer = Buffer::from_text("one two");
+    edit_keys(&mut buffer, &["<c-s>", "t"]);
+    assert_eq!(handle(&mut buffer, &mut false, shout('G')), Done::Stay);
+    assert_eq!((buffer.searching(), buffer.col()), (None, 0));
+    // Turned about, the search lands on the other end of what it found.
+    let mut buffer = Buffer::from_text("one two");
+    edit_keys(&mut buffer, &["<c-s>", "t", "w", "o"]);
+    assert_eq!(buffer.col(), 7);
+    edit_keys(&mut buffer, &["<c-r>"]);
+    assert_eq!(
+        (
+            buffer.col(),
+            buffer.searching().unwrap().starts_with("I-search")
+        ),
+        (4, true)
+    );
+    // Going back, what is found ends at or before point.
+    let mut buffer = Buffer::from_text("abcdef");
+    edit_keys(&mut buffer, &["<c-f>", "<c-r>", "a", "b"]);
+    assert!(buffer.searching().unwrap().starts_with("Failing"));
+    // A search taken back to nothing leaves C-n aiming where it began.
+    let mut buffer = Buffer::from_text("ab\nabcdefgh\nabcdefgh");
+    edit_keys(
+        &mut buffer,
+        &["<c-s>", "h", "<backspace>", "<enter>", "<c-n>"],
+    );
+    assert_eq!((buffer.row(), buffer.col()), (1, 0));
+    // After C-w, C-n aims from where the cut left point.
+    let mut buffer = Buffer::from_text("hello world\nabcdefghijkl");
+    edit_keys(&mut buffer, &["<c- >", "<m-f>", "<c-w>", "<c-n>"]);
+    assert_eq!((buffer.row(), buffer.col()), (1, 0));
+    // C-w then C-k: one kill, put back together.
+    let mut buffer = Buffer::from_text("abc def");
+    edit_keys(
+        &mut buffer,
+        &["<c- >", "<c-f>", "<c-f>", "<c-w>", "<c-k>", "<c-y>"],
+    );
+    assert_eq!(buffer.text(), "abc def\n");
+}

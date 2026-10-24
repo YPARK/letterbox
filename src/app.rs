@@ -3282,7 +3282,12 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
 pub fn keys(spec: &str) -> Vec<KeyEvent> {
     // `<c-s-r>` is `C-S-r`, `<enter>` is `enter`, as the foot names them.
     if let Some(name) = spec.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
-        && let Some(key) = key_named(&name.replace("c-", "C-").replace("s-", "S-"))
+        && let Some(key) = key_named(
+            &name
+                .replace("c-", "C-")
+                .replace("s-", "S-")
+                .replace("m-", "M-"),
+        )
     {
         return vec![key];
     }
@@ -3292,8 +3297,8 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
 }
 
 /// The key a name stands for, as the foot and the help name them: `⏎`,
-/// `␣`, `esc`, a character, or one after `C-` or `C-S-`; none for a name
-/// that stands for two, as `j/k`.
+/// `␣`, `esc`, a character, or one after `C-`, `C-S-` or `M-`; none for a
+/// name that stands for two, as `j/k`.
 pub fn key_named(name: &str) -> Option<KeyEvent> {
     let none = KeyModifiers::NONE;
     let named = match name {
@@ -3317,6 +3322,8 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
         (k, KeyModifiers::CONTROL | KeyModifiers::SHIFT, true)
     } else if let Some(k) = name.strip_prefix("C-") {
         (k, KeyModifiers::CONTROL, false)
+    } else if let Some(k) = name.strip_prefix("M-") {
+        (k, KeyModifiers::ALT, false)
     } else {
         (name, none, false)
     };
