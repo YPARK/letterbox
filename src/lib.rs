@@ -8,6 +8,7 @@ mod config;
 mod demo;
 mod edit;
 mod imap;
+mod keymap;
 mod mail;
 mod mcp;
 mod net;

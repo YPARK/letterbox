@@ -6,6 +6,7 @@ use crate::compose;
 use crate::compose::{Respond, Thread};
 use crate::config::{self, Auth};
 use crate::edit::{self, Done};
+use crate::keymap::{self, Act};
 use crate::mail::{self, Attachment, Folder, Message, Role, Summary};
 use crate::oauth;
 use crate::secret::Keeper;
@@ -523,6 +524,80 @@ pub struct Files {
     pub note: Option<String>,
 }
 
+/// What is asked over the screen, one thing at a time: the keys' help,
+/// scrolled so far; the form to add an account; the message's files and
+/// links; which folder is Trash; whether to remove an account; what to
+/// call one, as typed so far.
+#[derive(Default)]
+pub enum Dialog {
+    #[default]
+    Closed,
+    Help(usize),
+    Form(Box<Form>),
+    Files(Files),
+    Trash(TrashPick),
+    Remove(usize),
+    Rename(usize, String),
+}
+
+impl Dialog {
+    pub fn is_open(&self) -> bool {
+        !matches!(self, Dialog::Closed)
+    }
+
+    pub fn form(&self) -> Option<&Form> {
+        match self {
+            Dialog::Form(form) => Some(form),
+            _ => None,
+        }
+    }
+
+    fn form_mut(&mut self) -> Option<&mut Form> {
+        match self {
+            Dialog::Form(form) => Some(form),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn files(&self) -> Option<&Files> {
+        match self {
+            Dialog::Files(files) => Some(files),
+            _ => None,
+        }
+    }
+
+    fn files_mut(&mut self) -> Option<&mut Files> {
+        match self {
+            Dialog::Files(files) => Some(files),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn trash_mut(&mut self) -> Option<&mut TrashPick> {
+        match self {
+            Dialog::Trash(pick) => Some(pick),
+            _ => None,
+        }
+    }
+
+    /// Move in it: scroll the help, or pick another item, or field.
+    fn step(&mut self, by: isize) {
+        let (at, len) = match self {
+            Dialog::Help(scroll) => {
+                *scroll = scroll.saturating_add_signed(by);
+                return;
+            }
+            Dialog::Form(form) if !form.checking => return form.step(by),
+            Dialog::Files(files) => (&mut files.at, files.items.len()),
+            Dialog::Trash(pick) => (&mut pick.at, pick.folders.len()),
+            _ => return,
+        };
+        *at = at.saturating_add_signed(by).min(len.saturating_sub(1));
+    }
+}
+
 /// What the terminal is given over to, or the system asked to do, once
 /// the screen is drawn: a document presented by ohp, which takes the
 /// terminal until it quits; a file opened by the system; a page in the
@@ -628,9 +703,6 @@ pub struct App {
     pub focus: Focus,
     pub theme: Theme,
     pub status: String,
-    pub help: bool,
-    /// How far the keys' help is scrolled.
-    pub help_scroll: usize,
     pub targets: Vec<(Rect, Target)>,
     /// Whether to mark a message read when it is shown.
     pub mark_read: bool,
@@ -643,15 +715,8 @@ pub struct App {
     pub keep: setup::Keep,
     /// How a page is opened in the browser, as Microsoft's to sign in on.
     pub browse: fn(&str),
-    /// An account being added, or one about to be removed.
-    pub form: Option<Box<Form>>,
-    pub removing: Option<usize>,
-    /// An account being renamed, and its name as typed so far.
-    pub renaming: Option<(usize, String)>,
-    /// The message's attachments and links, listed to open.
-    pub files: Option<Files>,
-    /// Which existing folder should be Trash, while that is being asked.
-    pub picking: Option<TrashPick>,
+    /// What is asked over the screen, if anything.
+    pub dialog: Dialog,
     /// A message being written, over the list and the message read.
     pub compose: Option<Compose>,
     pub(crate) ledger: trash::Ledger,
@@ -807,8 +872,6 @@ impl App {
             focus: Focus::List,
             theme: Theme::of(theme::Name::default()),
             status,
-            help: false,
-            help_scroll: 0,
             targets: Vec::new(),
             mark_read: true,
             config,
@@ -816,11 +879,7 @@ impl App {
             keepers: crate::secret::keepers,
             keep: crate::secret::store,
             browse: oauth::browse,
-            form: None,
-            removing: None,
-            renaming: None,
-            files: None,
-            picking: None,
+            dialog: Dialog::Closed,
             compose: None,
             ledger,
             held: None,
@@ -939,7 +998,7 @@ impl App {
         let a = reply.account;
         // How to sign in comes while signing in, not in answer to an ask.
         if let Answer::Waiting(waiting) = reply.answer {
-            if let Some(form) = &mut self.form {
+            if let Some(form) = self.dialog.form_mut() {
                 form.note = None;
                 form.waiting = Some(waiting);
             }
@@ -960,12 +1019,12 @@ impl App {
         if let Answer::Fetched(got) = reply.answer {
             match got {
                 Ok(path) => {
-                    if let Some(files) = &mut self.files {
+                    if let Some(files) = self.dialog.files_mut() {
                         files.note = None;
                     }
                     self.launch = Some(Launch::Ohp(path));
                 }
-                Err(e) => match &mut self.files {
+                Err(e) => match self.dialog.files_mut() {
                     Some(files) => files.note = Some(e),
                     None => self.status = first_line(&e).to_string(),
                 },
@@ -973,7 +1032,7 @@ impl App {
             return;
         }
         if let Answer::Realm { email, microsoft } = reply.answer {
-            if let Some(form) = &mut self.form
+            if let Some(form) = self.dialog.form_mut()
                 && microsoft
                 && form.fields[EMAIL].trim() == email
                 && !form.checking
@@ -1359,13 +1418,15 @@ impl App {
         }
         self.searching = false;
         let keepers = (self.keepers)();
-        self.form = Some(Box::new(Form::new(keepers)));
+        self.dialog = Dialog::Form(Box::new(Form::new(keepers)));
     }
 
     /// Sign in with what the form holds, on a thread of its own; the
     /// account is added if it can.
     fn submit(&mut self) {
-        let Some(form) = &mut self.form else { return };
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
         let f = &form.fields;
         let microsoft = form.auth == Auth::Microsoft;
         let missing = [EMAIL, NAME, SERVER, PASSWORD]
@@ -1469,7 +1530,9 @@ impl App {
     /// Ask Microsoft, on a thread of its own, whether the address in the
     /// form signs in with it, unless it was asked already.
     fn ask_microsoft(&mut self) {
-        let Some(form) = &mut self.form else { return };
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
         let email = form.fields[EMAIL].trim().to_string();
         if !email.contains('@') || form.asked.as_ref() == Some(&email) {
             return;
@@ -1495,7 +1558,9 @@ impl App {
                 store,
                 folders,
             }) => {
-                self.form = None;
+                if self.dialog.form().is_some() {
+                    self.dialog = Dialog::Closed;
+                }
                 let a = self.join(name.clone(), store);
                 self.accounts[a].folders = folders;
                 self.accounts[a].state = State::Ready;
@@ -1520,7 +1585,7 @@ impl App {
                 }
                 self.status = format!("added {name}");
             }
-            Err(e) => match &mut self.form {
+            Err(e) => match self.dialog.form_mut() {
                 Some(form) => {
                     form.checking = false;
                     form.failed = Some(Failure::Refused);
@@ -1571,18 +1636,20 @@ impl App {
     fn form_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let browse = self.browse;
-        let Some(form) = &mut self.form else { return };
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
         if form.checking {
             if key.code == KeyCode::Esc {
                 form.stop.store(true, Ordering::Relaxed);
-                self.form = None;
+                self.dialog = Dialog::Closed;
                 self.status = "stopped adding the account".into();
             }
             return;
         }
         let before = form.at;
         match key.code {
-            KeyCode::Esc => self.form = None,
+            KeyCode::Esc => self.dialog = Dialog::Closed,
             KeyCode::Tab | KeyCode::Down => form.step(1),
             KeyCode::BackTab | KeyCode::Up => form.step(-1),
             KeyCode::Enter if form.last() => self.submit(),
@@ -1607,7 +1674,9 @@ impl App {
                 }
             }
         }
-        let Some(form) = &mut self.form else { return };
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
         if form.at == EMAIL && !form.checking {
             form.failed = None;
             form.fill();
@@ -1909,53 +1978,12 @@ impl App {
         if self.compose.is_some() {
             return self.compose_key(key);
         }
-        if self.picking.is_some() {
-            return self.pick_key(key);
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        if ctrl && key.code == KeyCode::Char('c') {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
         }
-        if self.help {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => self.help_scroll += 1,
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1)
-                }
-                KeyCode::Char(' ') | KeyCode::PageDown => self.help_scroll += 10,
-                _ => self.help = false,
-            }
-            return;
-        }
-        if self.form.is_some() {
-            return self.form_key(key);
-        }
-        if self.files.is_some() {
-            return self.files_key(key);
-        }
-        if let Some((a, typed)) = &mut self.renaming {
-            match key.code {
-                KeyCode::Esc => self.renaming = None,
-                KeyCode::Enter => {
-                    let (a, typed) = (*a, typed.clone());
-                    self.renaming = None;
-                    self.rename(a, &typed);
-                }
-                _ => {
-                    edit_line(typed, key);
-                }
-            }
-            return;
-        }
-        if let Some(a) = self.removing.take() {
-            if key.code == KeyCode::Char('y') {
-                self.remove(a);
-            } else {
-                self.status = format!("kept {}", self.accounts[a].name);
-            }
-            return;
+        if self.dialog.is_open() {
+            return self.dialog_key(key);
         }
         if self.searching {
             match key.code {
@@ -1978,46 +2006,51 @@ impl App {
             self.narrow();
             return;
         }
+        if let Some(act) = keymap::act(key) {
+            self.act(act);
+        }
+    }
+
+    /// Do what a key in the table does, where the focus is.
+    fn act(&mut self, act: Act) {
         let page = self.height.saturating_sub(2).max(1) as isize;
-        match key.code {
-            KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('?') => {
-                self.help = true;
-                self.help_scroll = 0;
-            }
-            KeyCode::Char('/') => {
+        match act {
+            Act::Quit => self.quit = true,
+            Act::Help => self.dialog = Dialog::Help(0),
+            Act::Search => {
                 self.searching = true;
                 if self.focus == Focus::Side {
                     self.focus = Focus::List;
                 }
             }
-            KeyCode::Esc if self.focus == Focus::Reader => self.focus = Focus::List,
-            KeyCode::Esc if !self.query.is_empty() => {
+            Act::Back if self.focus == Focus::Reader => self.focus = Focus::List,
+            Act::Back if !self.query.is_empty() => {
                 self.query.clear();
                 self.found = None;
                 self.narrow();
             }
-            KeyCode::Tab => {
+            Act::Back => {}
+            Act::NextPane => {
                 self.focus = match self.focus {
                     Focus::Side => Focus::List,
                     Focus::List if self.reading.is_some() => Focus::Reader,
                     Focus::List | Focus::Reader => Focus::Side,
                 }
             }
-            KeyCode::BackTab => {
+            Act::PreviousPane => {
                 self.focus = match self.focus {
                     Focus::Side if self.reading.is_some() => Focus::Reader,
                     Focus::Side | Focus::Reader => Focus::List,
                     Focus::List => Focus::Side,
                 }
             }
-            KeyCode::Char('h') | KeyCode::Left => {
+            Act::Left => {
                 self.focus = match self.focus {
                     Focus::Reader => Focus::List,
                     _ => Focus::Side,
                 }
             }
-            KeyCode::Char('l') | KeyCode::Right => match self.focus {
+            Act::Right => match self.focus {
                 Focus::Side => {
                     self.open_folder();
                     self.focus = Focus::List;
@@ -2029,7 +2062,7 @@ impl App {
                     }
                 }
             },
-            KeyCode::Enter => match self.focus {
+            Act::Open => match self.focus {
                 Focus::Side if self.rows.get(self.row) == Some(&Row::Add) => self.open_form(),
                 Focus::Side => {
                     self.due = None;
@@ -2042,43 +2075,134 @@ impl App {
                     self.focus = Focus::Reader;
                 }
             },
-            KeyCode::Char('j') | KeyCode::Down => self.step(1),
-            KeyCode::Char('k') | KeyCode::Up => self.step(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') if self.focus != Focus::Side => {
-                self.scroll_by(page)
-            }
-            KeyCode::PageUp | KeyCode::Char('b') if self.focus != Focus::Side => {
-                self.scroll_by(-page)
-            }
-            KeyCode::PageDown => self.step(5),
-            KeyCode::PageUp => self.step(-5),
-            KeyCode::Char('g') | KeyCode::Home => self.jump(false),
-            KeyCode::Char('G') | KeyCode::End => self.jump(true),
-            // Some terminals say Shift's letter in upper case, some not.
-            KeyCode::Char('r' | 'R') if ctrl && shift => self.respond(Respond::All),
-            KeyCode::Char('r') if ctrl => self.respond(Respond::Reply),
-            KeyCode::Char('f') if ctrl => self.respond(Respond::Forward),
-            KeyCode::Char('n' | 'N') if ctrl => {
+            Act::Down => self.step(1),
+            Act::Up => self.step(-1),
+            Act::PageDown if self.focus == Focus::Side => self.step(5),
+            Act::PageUp if self.focus == Focus::Side => self.step(-5),
+            Act::ScreenDown | Act::ScreenUp if self.focus == Focus::Side => {}
+            Act::PageDown | Act::ScreenDown => self.scroll_by(page),
+            Act::PageUp | Act::ScreenUp => self.scroll_by(-page),
+            Act::Top => self.jump(false),
+            Act::End => self.jump(true),
+            Act::ReplyAll => self.respond(Respond::All),
+            Act::Reply => self.respond(Respond::Reply),
+            Act::Forward => self.respond(Respond::Forward),
+            Act::NewMail => {
                 self.refresh();
                 self.status = "looking for new mail…".to_string();
             }
-            KeyCode::Char('e') => self.respond(Respond::All),
-            KeyCode::Char('n') => self.next(1),
-            KeyCode::Char('p') => self.next(-1),
-            KeyCode::Char('u') => self.toggle(Flag::Seen),
-            KeyCode::Char('s') => self.toggle(Flag::Flagged),
-            KeyCode::Char('r') => {
-                self.status = "reply is C-r, to all e or C-S-r; C-n looks for new mail".to_string();
+            Act::NextMessage => self.next(1),
+            Act::PreviousMessage => self.next(-1),
+            Act::Seen => self.toggle(Flag::Seen),
+            Act::Flag => self.toggle(Flag::Flagged),
+            Act::ReplyHint => {
+                let say = |act| keymap::keys_for(act).join(" or ");
+                self.status = format!(
+                    "reply is {}, to all {}; {} looks for new mail",
+                    say(Act::Reply),
+                    say(Act::ReplyAll),
+                    say(Act::NewMail)
+                );
             }
-            KeyCode::Char('o') => self.open_in_browser(),
-            KeyCode::Char('a') => self.save_attachments(),
-            KeyCode::Char('f') => self.list_files(),
-            KeyCode::Char('A') => self.open_form(),
-            KeyCode::Char('D') => self.ask_to_remove(),
-            KeyCode::Char('d') => self.delete(),
-            KeyCode::Char('c') => self.compose_new(),
-            KeyCode::Char('R') => self.ask_to_rename(),
-            _ => {}
+            Act::Browser => self.open_in_browser(),
+            Act::SaveFiles => self.save_attachments(),
+            Act::Files => self.list_files(),
+            Act::AddAccount => self.open_form(),
+            Act::Remove => self.ask_to_remove(),
+            Act::Trash => self.delete(),
+            Act::Compose => self.compose_new(),
+            Act::Rename => self.ask_to_rename(),
+        }
+    }
+
+    /// Take a key in the dialog open.
+    fn dialog_key(&mut self, key: KeyEvent) {
+        match &mut self.dialog {
+            Dialog::Closed => {}
+            Dialog::Help(_) => match keymap::act(key) {
+                Some(Act::Down) => self.dialog.step(1),
+                Some(Act::Up) => self.dialog.step(-1),
+                Some(Act::ScreenDown | Act::PageDown) => self.dialog.step(10),
+                _ => self.dialog = Dialog::Closed,
+            },
+            Dialog::Form(_) => self.form_key(key),
+            Dialog::Files(_) => self.files_key(key),
+            Dialog::Trash(_) => match keymap::act(key) {
+                Some(Act::Down) => self.dialog.step(1),
+                Some(Act::Up) => self.dialog.step(-1),
+                Some(Act::Open) => self.choose_trash(),
+                Some(Act::Back) => self.cancel_trash(),
+                _ => {}
+            },
+            Dialog::Rename(a, typed) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Closed,
+                KeyCode::Enter => {
+                    let (a, typed) = (*a, std::mem::take(typed));
+                    self.dialog = Dialog::Closed;
+                    self.rename(a, &typed);
+                }
+                _ => {
+                    edit_line(typed, key);
+                }
+            },
+            &mut Dialog::Remove(a) => {
+                self.dialog = Dialog::Closed;
+                if key.code == KeyCode::Char('y') {
+                    self.remove(a);
+                } else {
+                    self.status = format!("kept {}", self.accounts[a].name);
+                }
+            }
+        }
+    }
+
+    /// Take a click in the dialog open: on it, or away from it.
+    fn dialog_click(&mut self, at: Option<Target>) {
+        match (&mut self.dialog, at) {
+            (_, Some(Target::Popup)) => {}
+            // A key at the foot, pressed.
+            (_, Some(Target::Key(key))) => self.dialog_key(key),
+            (Dialog::Closed, _) => {}
+            // Away from help, or from renaming, closes it, the name left
+            // as it is.
+            (Dialog::Help(_) | Dialog::Rename(..), _) => self.dialog = Dialog::Closed,
+            (Dialog::Trash(pick), Some(Target::Item(i))) => {
+                pick.at = i;
+                self.choose_trash();
+            }
+            (Dialog::Trash(_), _) => self.cancel_trash(),
+            (Dialog::Files(files), Some(Target::Item(i))) => {
+                files.at = i;
+                self.open_item();
+            }
+            (Dialog::Files(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::Form(form), Some(Target::Field(i))) if !form.checking => {
+                if i == KEEP && form.at == KEEP {
+                    form.turn(1);
+                }
+                if i == SIGN_IN && form.at == SIGN_IN {
+                    form.flip();
+                }
+                let left = form.at == EMAIL && i != EMAIL;
+                form.at = i;
+                if left {
+                    self.ask_microsoft();
+                }
+            }
+            (Dialog::Form(form), Some(Target::Button(Button::Add))) if !form.checking => {
+                self.submit()
+            }
+            (Dialog::Form(_), Some(Target::Button(Button::Cancel))) => {
+                self.form_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            }
+            (Dialog::Form(_), _) => {}
+            (Dialog::Remove(_), Some(Target::Button(Button::Remove))) => {
+                self.dialog_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            }
+            (Dialog::Remove(_), Some(Target::Button(Button::Keep))) => {
+                self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            }
+            (Dialog::Remove(_), _) => {}
         }
     }
 
@@ -2102,7 +2226,7 @@ impl App {
             return;
         };
         if self.editable {
-            self.removing = Some(a);
+            self.dialog = Dialog::Remove(a);
         } else {
             self.status = "the demo's account is made up: it cannot be removed".to_string();
         }
@@ -2115,7 +2239,7 @@ impl App {
             return;
         };
         if self.editable {
-            self.renaming = Some((a, self.accounts[a].name.clone()));
+            self.dialog = Dialog::Rename(a, self.accounts[a].name.clone());
         } else {
             self.status = "the demo's account is made up: it cannot be renamed".to_string();
         }
@@ -2242,33 +2366,9 @@ impl App {
             MouseEventKind::ScrollUp => -1,
             _ => return,
         };
-        // Asked a question, nothing behind it scrolls.
-        if self.removing.is_some() || self.renaming.is_some() {
-            return;
-        }
-        if self.help {
-            self.help_scroll = self.help_scroll.saturating_add_signed(by);
-            return;
-        }
-        if let Some(pick) = &mut self.picking {
-            pick.at = pick
-                .at
-                .saturating_add_signed(by)
-                .min(pick.folders.len().saturating_sub(1));
-            return;
-        }
-        if let Some(files) = &mut self.files {
-            files.at = files
-                .at
-                .saturating_add_signed(by)
-                .min(files.items.len().saturating_sub(1));
-            return;
-        }
-        if let Some(form) = &mut self.form {
-            if !form.checking {
-                form.step(by);
-            }
-            return;
+        // A dialog open, nothing behind it scrolls.
+        if self.dialog.is_open() {
+            return self.dialog.step(by);
         }
         match at {
             Some(Target::Side | Target::Row(_)) => {
@@ -2284,75 +2384,8 @@ impl App {
     }
 
     fn click(&mut self, at: Option<Target>) {
-        // A click away from help, or from renaming, closes it, the name
-        // left as it is.
-        if self.help || self.renaming.is_some() {
-            if at != Some(Target::Popup) {
-                self.help = false;
-                self.renaming = None;
-            }
-            return;
-        }
-        if self.picking.is_some() {
-            match at {
-                Some(Target::Item(i)) => {
-                    if let Some(pick) = &mut self.picking {
-                        pick.at = i;
-                    }
-                    self.choose_trash();
-                }
-                Some(Target::Popup) => {}
-                _ => self.cancel_trash(),
-            }
-            return;
-        }
-        if let Some(files) = &mut self.files {
-            match at {
-                Some(Target::Item(i)) => {
-                    files.at = i;
-                    self.open_item();
-                }
-                Some(Target::Popup) => {}
-                _ => self.files = None,
-            }
-            return;
-        }
-        if let Some(form) = &mut self.form {
-            match at {
-                Some(Target::Field(i)) if !form.checking => {
-                    if i == KEEP && form.at == KEEP {
-                        form.turn(1);
-                    }
-                    if i == SIGN_IN && form.at == SIGN_IN {
-                        form.flip();
-                    }
-                    let left = form.at == EMAIL && i != EMAIL;
-                    form.at = i;
-                    if left {
-                        self.ask_microsoft();
-                    }
-                }
-                Some(Target::Button(Button::Add)) if !form.checking => self.submit(),
-                Some(Target::Button(Button::Cancel)) => {
-                    self.form_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-                }
-                _ => {}
-            }
-            return;
-        }
-        if let Some(a) = self.removing {
-            match at {
-                Some(Target::Button(Button::Remove)) => {
-                    self.removing = None;
-                    self.remove(a);
-                }
-                Some(Target::Button(Button::Keep)) => {
-                    self.removing = None;
-                    self.status = format!("kept {}", self.accounts[a].name);
-                }
-                _ => {}
-            }
-            return;
+        if self.dialog.is_open() {
+            return self.dialog_click(at);
         }
         self.searching = false;
         match at {
@@ -2447,7 +2480,7 @@ impl App {
             self.status = "no attachments or links".to_string();
             return;
         }
-        self.files = Some(Files {
+        self.dialog = Dialog::Files(Files {
             items,
             at: 0,
             note: None,
@@ -2455,19 +2488,20 @@ impl App {
     }
 
     fn files_key(&mut self, key: KeyEvent) {
-        let Some(files) = &mut self.files else { return };
-        let last = files.items.len().saturating_sub(1);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => files.at = (files.at + 1).min(last),
-            KeyCode::Char('k') | KeyCode::Up => files.at = files.at.saturating_sub(1),
-            KeyCode::Enter | KeyCode::Char('o') => self.open_item(),
-            KeyCode::Char('s') => self.save_item(),
-            KeyCode::Char('y') => {
+        let Some(files) = self.dialog.files_mut() else {
+            return;
+        };
+        match (keymap::act(key), key.code) {
+            (Some(Act::Down), _) => self.dialog.step(1),
+            (Some(Act::Up), _) => self.dialog.step(-1),
+            (Some(Act::Open), _) | (_, KeyCode::Char('o')) => self.open_item(),
+            (_, KeyCode::Char('s')) => self.save_item(),
+            (_, KeyCode::Char('y')) => {
                 if let Some(Item::Link(url)) = files.items.get(files.at) {
                     self.launch = Some(Launch::Copy(url.clone()));
                 }
             }
-            _ => self.files = None,
+            _ => self.dialog = Dialog::Closed,
         }
     }
 
@@ -2475,7 +2509,7 @@ impl App {
     /// linked PDF downloaded first; else by the system, or in the browser.
     fn open_item(&mut self) {
         let m = self.message().cloned();
-        let (Some(files), Some(m)) = (&mut self.files, m) else {
+        let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
             return;
         };
         match files.items.get(files.at).cloned() {
@@ -2514,7 +2548,7 @@ impl App {
     /// yet taken there.
     fn save_item(&mut self) {
         let m = self.message().cloned();
-        let (Some(files), Some(m)) = (&mut self.files, m) else {
+        let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
             return;
         };
         let Some(Item::File { at, name, .. }) = files.items.get(files.at).cloned() else {
@@ -2630,7 +2664,7 @@ impl App {
             uid: summary.uid,
             message_id: summary.message_id,
         });
-        self.picking = Some(TrashPick {
+        self.dialog = Dialog::Trash(TrashPick {
             account,
             folders,
             at: 0,
@@ -2638,26 +2672,8 @@ impl App {
         self.status = "which folder should be Trash?".to_string();
     }
 
-    fn pick_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                if let Some(pick) = &mut self.picking {
-                    pick.at = (pick.at + 1).min(pick.folders.len().saturating_sub(1));
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if let Some(pick) = &mut self.picking {
-                    pick.at = pick.at.saturating_sub(1);
-                }
-            }
-            KeyCode::Enter => self.choose_trash(),
-            KeyCode::Esc => self.cancel_trash(),
-            _ => {}
-        }
-    }
-
     fn cancel_trash(&mut self) {
-        self.picking = None;
+        self.dialog = Dialog::Closed;
         self.held = None;
         self.status = "not moved".to_string();
     }
@@ -2665,7 +2681,7 @@ impl App {
     /// The folder highlighted is Trash from now on, and the delete that
     /// was waiting is moved there.
     fn choose_trash(&mut self) {
-        let Some(pick) = self.picking.take() else {
+        let Dialog::Trash(pick) = std::mem::take(&mut self.dialog) else {
             return;
         };
         let Some((path, _)) = pick.folders.get(pick.at).cloned() else {
@@ -2730,7 +2746,7 @@ impl App {
         }
         let Some(trash) = self.trash_of(account) else {
             // Still waiting on which folder that is.
-            if self.picking.is_some() {
+            if matches!(self.dialog, Dialog::Trash(_)) {
                 self.held = Some(held);
             } else {
                 self.status = "no Trash folder".to_string();
@@ -2930,7 +2946,9 @@ impl App {
     ) {
         let mut buffer = edit::Buffer::from_text(&text);
         buffer.place(row, col);
-        self.help = false;
+        if matches!(self.dialog, Dialog::Help(_)) {
+            self.dialog = Dialog::Closed;
+        }
         self.searching = false;
         self.compose = Some(Compose {
             buffer,
@@ -3282,7 +3300,7 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
 pub fn keys(spec: &str) -> Vec<KeyEvent> {
     // `<c-s-r>` is `C-S-r`, `<enter>` is `enter`, as the foot names them.
     if let Some(name) = spec.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
-        && let Some(key) = key_named(
+        && let Some(key) = keymap::key_named(
             &name
                 .replace("c-", "C-")
                 .replace("s-", "S-")
@@ -3294,45 +3312,4 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
     spec.chars()
         .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
         .collect()
-}
-
-/// The key a name stands for, as the foot and the help name them: `⏎`,
-/// `␣`, `esc`, a character, or one after `C-`, `C-S-` or `M-`; none for a
-/// name that stands for two, as `j/k`.
-pub fn key_named(name: &str) -> Option<KeyEvent> {
-    let none = KeyModifiers::NONE;
-    let named = match name {
-        "⏎" | "enter" => Some(KeyCode::Enter),
-        "␣" | "space" => Some(KeyCode::Char(' ')),
-        "esc" => Some(KeyCode::Esc),
-        "tab" => Some(KeyCode::Tab),
-        "up" => Some(KeyCode::Up),
-        "down" => Some(KeyCode::Down),
-        "left" => Some(KeyCode::Left),
-        "right" => Some(KeyCode::Right),
-        "backspace" => Some(KeyCode::Backspace),
-        _ => None,
-    };
-    if let Some(code) = named {
-        return Some(KeyEvent::new(code, none));
-    }
-    // Ctrl and Shift, as a terminal that tells them apart says them: the
-    // letter in upper case.
-    let (rest, with, upper) = if let Some(k) = name.strip_prefix("C-S-") {
-        (k, KeyModifiers::CONTROL | KeyModifiers::SHIFT, true)
-    } else if let Some(k) = name.strip_prefix("C-") {
-        (k, KeyModifiers::CONTROL, false)
-    } else if let Some(k) = name.strip_prefix("M-") {
-        (k, KeyModifiers::ALT, false)
-    } else {
-        (name, none, false)
-    };
-    let mut chars = rest.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), None) if upper => {
-            Some(KeyEvent::new(KeyCode::Char(c.to_ascii_uppercase()), with))
-        }
-        (Some(c), None) => Some(KeyEvent::new(KeyCode::Char(c), with)),
-        _ => None,
-    }
 }

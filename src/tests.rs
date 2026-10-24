@@ -837,7 +837,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     let cache = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     press(&mut app, &["f"]);
-    let files = app.files.as_ref().expect("listed");
+    let files = app.dialog.files().expect("listed");
     assert_eq!(files.items.len(), 2, "two attachments, no links");
     press(&mut app, &["j", "s"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
@@ -861,7 +861,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         assert_eq!(mode & 0o777, 0o600, "only yours");
     }
     press(&mut app, &["<esc>"]);
-    assert!(app.files.is_none());
+    assert!(app.dialog.files().is_none());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }
 
@@ -1037,18 +1037,18 @@ fn an_account_is_added_from_the_tui_once_it_signs_in_and_removed() {
     let mut app = empty_app(path.clone());
     assert!(app::screen(&mut app, 120, 30).contains("Press A to add one"));
     press(&mut app, &["A", "me@example.com"]);
-    let form = app.form.as_ref().unwrap();
+    let form = app.dialog.form().unwrap();
     assert_eq!(form.fields[1], "example.com");
     assert_eq!(form.fields[2], "imap.example.com");
     assert_eq!(form.fields[4], "me@example.com");
     press(&mut app, &["<esc>"]);
-    assert!(app.form.is_none());
+    assert!(app.dialog.form().is_none());
 
     fill_form(&mut app, account.port.unwrap(), "secret");
     assert!(
-        app.form.is_none(),
+        app.dialog.form().is_none(),
         "{:?}",
-        app.form.as_ref().and_then(|f| f.note.clone())
+        app.dialog.form().and_then(|f| f.note.clone())
     );
     assert_eq!(app.status, "added example.com");
     assert_eq!(app.folder_name(), "Inbox");
@@ -1077,7 +1077,7 @@ fn an_account_that_cannot_sign_in_is_not_added() {
     let path = dir.path().join("accounts.toml");
     let mut app = empty_app(path.clone());
     fill_form(&mut app, account.port.unwrap(), "wrong");
-    let form = app.form.as_ref().expect("the form stays open");
+    let form = app.dialog.form().expect("the form stays open");
     assert_eq!(form.failed, Some(app::Failure::Refused));
     assert!(
         form.note.as_ref().unwrap().contains("cannot sign in"),
@@ -1124,7 +1124,7 @@ fn a_failed_sign_in_still_says_where_an_app_password_is_made() {
     let mut app = empty_app(dir.path().join("accounts.toml"));
     fill_gmail_form(&mut app, account.port.unwrap());
     press(&mut app, &["wrong", "<enter>"]);
-    let form = app.form.as_ref().expect("the form stays open");
+    let form = app.dialog.form().expect("the form stays open");
     assert_eq!(form.failed, Some(app::Failure::Refused));
     let screen = app::screen(&mut app, 100, 40);
     assert!(screen.contains("cannot sign in"), "{screen}");
@@ -1180,7 +1180,7 @@ fn ctrl_o_opens_the_page_an_app_password_is_made_on() {
     );
     assert!(app.status.contains("opened"), "{}", app.status);
     assert_eq!(
-        app.form.as_ref().unwrap().fields[app::NAME],
+        app.dialog.form().unwrap().fields[app::NAME],
         "gmail.com",
         "nothing typed"
     );
@@ -1191,7 +1191,7 @@ fn the_demos_account_is_not_changed() {
     let mut app = demo();
     app.fix_accounts();
     press(&mut app, &["A"]);
-    assert!(app.form.is_none());
+    assert!(app.dialog.form().is_none());
     assert!(app.status.contains("without --demo"));
     assert!(!app.rows.contains(&app::Row::Add));
 }
@@ -1343,7 +1343,7 @@ fn the_forms_fields_and_buttons_are_clicked() {
     let mut app = empty_app(path.clone());
     press(&mut app, &["A", "me@example.com"]);
     click_at(&mut app, app::Target::Field(2));
-    assert_eq!(app.form.as_ref().unwrap().at, 2);
+    assert_eq!(app.dialog.form().unwrap().at, 2);
     press(&mut app, &["<c-u>", "127.0.0.1", "<tab>", "<c-u>"]);
     press(&mut app, &[&account.port.unwrap().to_string()]);
     click_at(&mut app, app::Target::Field(4));
@@ -1351,13 +1351,13 @@ fn the_forms_fields_and_buttons_are_clicked() {
     click_at(&mut app, app::Target::Field(7));
     click_at(&mut app, app::Target::Field(7));
     assert_eq!(
-        app.form.as_ref().unwrap().keeper,
+        app.dialog.form().unwrap().keeper,
         1,
         "a second click picks the vault"
     );
     click_at(&mut app, app::Target::Field(7));
     assert_eq!(
-        app.form.as_ref().unwrap().keeper,
+        app.dialog.form().unwrap().keeper,
         0,
         "and a third the keyring again"
     );
@@ -1365,15 +1365,15 @@ fn the_forms_fields_and_buttons_are_clicked() {
     press(&mut app, &["secret"]);
     click_at(&mut app, app::Target::Button(app::Button::Add));
     assert!(
-        app.form.is_none(),
+        app.dialog.form().is_none(),
         "{:?}",
-        app.form.as_ref().and_then(|f| f.note.clone())
+        app.dialog.form().and_then(|f| f.note.clone())
     );
     assert_eq!(crate::config::load(&path).unwrap().len(), 1);
 
     press(&mut app, &["h", "D"]);
     click_at(&mut app, app::Target::Button(app::Button::Keep));
-    assert!(app.removing.is_none());
+    assert!(!matches!(app.dialog, app::Dialog::Remove(_)));
     assert_eq!(crate::config::load(&path).unwrap().len(), 1);
     press(&mut app, &["D"]);
     click_at(&mut app, app::Target::Button(app::Button::Remove));
@@ -1387,7 +1387,7 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
         &mut app,
         app::Target::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
     );
-    assert!(app.help);
+    assert!(matches!(app.dialog, app::Dialog::Help(_)));
     let screen = app::screen(&mut app, 60, 12);
     assert!(screen.contains("j/k or the wheel scroll"), "{screen}");
     let (rect, _) = *app
@@ -1399,7 +1399,7 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
         app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
     }
     let _ = app::screen(&mut app, 60, 12);
-    assert_eq!(app.help_scroll, 3);
+    assert!(matches!(app.dialog, app::Dialog::Help(3)));
     // The wheel does not run it off its end.
     for _ in 0..100 {
         app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
@@ -1410,7 +1410,7 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
         KeyCode::Esc,
         KeyModifiers::NONE,
     ));
-    assert!(!app.help);
+    assert!(!matches!(app.dialog, app::Dialog::Help(_)));
     click_at(
         &mut app,
         app::Target::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
@@ -1452,7 +1452,7 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
             &port, "<tab>", "<c-u>", "me", "<tab>", "<tab>", "secret", "<tab>", "<right>",
         ],
     );
-    let form = app.form.as_ref().unwrap();
+    let form = app.dialog.form().unwrap();
     assert_eq!(form.kept(), Some(Keeper::Vault));
     assert_eq!(
         form.shown(),
@@ -1469,14 +1469,14 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
             "<enter>",
         ],
     );
-    let form = app.form.as_ref().expect("still open");
+    let form = app.dialog.form().expect("still open");
     assert_eq!(form.note.as_deref(), Some("the two passphrases differ"));
     assert!(!vault_at.exists());
     press(&mut app, &["<c-u>", "correct horse", "<enter>"]);
     assert!(
-        app.form.is_none(),
+        app.dialog.form().is_none(),
         "{:?}",
-        app.form.as_ref().and_then(|f| f.note.clone())
+        app.dialog.form().and_then(|f| f.note.clone())
     );
     assert_eq!(app.shown.len(), 3);
 
@@ -1695,7 +1695,7 @@ fn an_outlook_account_is_signed_into_in_the_browser() {
         PAGES.lock().unwrap().push(page);
     };
     press(&mut app, &["A", "me@ubc.example", "<tab>"]);
-    let form = app.form.as_ref().unwrap();
+    let form = app.dialog.form().unwrap();
     assert_eq!(
         form.auth,
         crate::config::Auth::Microsoft,
@@ -1713,9 +1713,9 @@ fn an_outlook_account_is_signed_into_in_the_browser() {
     );
     press(&mut app, &["<tab>", "<c-u>", "me", "<tab>", "<enter>"]);
     assert!(
-        app.form.is_none(),
+        app.dialog.form().is_none(),
         "{:?}",
-        app.form.as_ref().and_then(|f| f.note.clone())
+        app.dialog.form().and_then(|f| f.note.clone())
     );
     assert_eq!(app.status, "added ubc.example");
     assert_eq!(app.shown.len(), 3, "signed in to IMAP with the token");
@@ -1984,7 +1984,7 @@ fn a_folder_is_chosen_as_trash_when_the_server_names_none() {
         }
     }
     press(&mut app, &["d", "<esc>"]);
-    assert!(app.picking.is_none());
+    assert!(!matches!(app.dialog, app::Dialog::Trash(_)));
     assert!(app.status.contains("not moved"), "{}", app.status);
     assert!(app.shown.iter().any(|s| s.from == "Ada Lovelace"));
 
@@ -1995,16 +1995,24 @@ fn a_folder_is_chosen_as_trash_when_the_server_names_none() {
         "{screen}"
     );
     let at = app
-        .picking
-        .as_ref()
+        .dialog
+        .trash_mut()
         .unwrap()
         .folders
         .iter()
         .position(|(_, name)| name == "Archive")
         .unwrap();
-    app.picking.as_mut().unwrap().at = at;
-    press(&mut app, &["<enter>"]);
-    assert!(app.picking.is_none(), "{}", app.status);
+    app.dialog.trash_mut().unwrap().at = at;
+    // ⏎ at the foot, clicked, chooses it as ⏎ does.
+    click_at(
+        &mut app,
+        app::Target::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
+    assert!(
+        !matches!(app.dialog, app::Dialog::Trash(_)),
+        "{}",
+        app.status
+    );
     assert!(app.status.contains("moved to Archive"), "{}", app.status);
     assert!(app.shown.iter().all(|s| s.from != "Ada Lovelace"));
     let file = std::fs::read_to_string(&path).unwrap();
@@ -2545,7 +2553,7 @@ fn the_account_removed_from_folders_together_is_the_one_of_the_message_picked() 
     let mut app = two_accounts();
     list_row(&mut app, app::Row::All(Role::Inbox));
     press(&mut app, &["D"]);
-    assert_eq!(app.removing, Some(1));
+    assert!(matches!(app.dialog, app::Dialog::Remove(1)));
     press(&mut app, &["n"]);
 }
 
@@ -2722,7 +2730,7 @@ fn an_account_is_renamed_from_the_sidebar() {
     let path = dir.path().join("accounts.toml");
     let mut app = empty_app(path.clone());
     fill_form(&mut app, account.port.unwrap(), "secret");
-    assert!(app.form.is_none());
+    assert!(app.dialog.form().is_none());
     press(&mut app, &["h", "R"]);
     assert!(app::screen(&mut app, 120, 40).contains("Rename"));
     press(&mut app, &["<c-u>", "Personal", "<enter>"]);
@@ -2733,7 +2741,7 @@ fn an_account_is_renamed_from_the_sidebar() {
     assert_eq!(app.accounts[0].name, "Personal");
     press(&mut app, &["R"]);
     click_at(&mut app, app::Target::Side);
-    assert!(app.renaming.is_none());
+    assert!(!matches!(app.dialog, app::Dialog::Rename(..)));
     assert_eq!(app.accounts[0].name, "Personal");
 }
 
@@ -2955,4 +2963,134 @@ fn the_search_and_the_region_keep_to_emacs_in_the_corners() {
         &["<c- >", "<c-f>", "<c-f>", "<c-w>", "<c-k>", "<c-y>"],
     );
     assert_eq!(buffer.text(), "abc def\n");
+}
+
+// ---- the key table ----
+
+#[test]
+fn every_key_in_the_table_is_read_and_bound_once() {
+    use crate::keymap::{KEYS, key_named};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut seen = std::collections::HashSet::new();
+    for (name, act) in KEYS.iter().flat_map(|b| b.keys) {
+        let key = key_named(name).unwrap_or_else(|| panic!("{name} is no key"));
+        assert_eq!(crate::keymap::act(key), Some(*act), "{name}");
+        assert!(
+            seen.insert(crate::keymap::chord(key)),
+            "{name} is bound twice"
+        );
+    }
+    // Shift's letter, as terminals say it or not.
+    let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+    for key in [
+        KeyEvent::new(KeyCode::Char('r'), ctrl_shift),
+        KeyEvent::new(KeyCode::Char('R'), ctrl_shift),
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::CONTROL),
+    ] {
+        assert_eq!(
+            crate::keymap::act(key),
+            crate::keymap::act(key_named("e").unwrap()),
+        );
+    }
+    assert_eq!(
+        crate::keymap::act(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+        crate::keymap::act(key_named("end").unwrap()),
+    );
+    assert_eq!(
+        crate::keymap::act(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+        None,
+        "C-e is not e"
+    );
+}
+
+#[test]
+fn the_readme_names_every_key_the_help_does() {
+    let readme = include_str!("../README.md");
+    let said = crate::keymap::KEYS
+        .iter()
+        .filter(|b| !b.help.is_empty() || !b.foot.is_empty());
+    for b in said {
+        for key in b.name.split(' ') {
+            assert!(readme.contains(&format!("`{key}`")), "`{key}` in README");
+        }
+    }
+}
+
+#[test]
+fn the_foot_and_the_help_come_from_the_table() {
+    let mut app = demo();
+    let foot = app::screen(&mut app, 120, 30);
+    for h in crate::keymap::foot(crate::keymap::Pane::List) {
+        let hint = format!(" {} {}", h.key, h.what);
+        assert!(foot.contains(&hint), "{hint} in {foot}");
+    }
+    press(&mut app, &["?"]);
+    let help = app::screen(&mut app, 100, 80);
+    for (name, _) in crate::keymap::help() {
+        assert!(help.contains(name), "{name} in {help}");
+    }
+}
+
+#[test]
+fn the_wheel_moves_in_the_dialog_open_and_not_behind_it() {
+    let mut app = demo();
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(&mut app, &["<enter>", "f"]);
+    let _ = app::screen(&mut app, 120, 40);
+    for _ in 0..3 {
+        app.mouse(mouse(MouseEventKind::ScrollDown, 1, 1));
+    }
+    assert_eq!(app.dialog.files().expect("listed").at, 1, "the last of two");
+    press(&mut app, &["<esc>"]);
+
+    // A question asked, the list behind it stays where it is.
+    app.dialog = app::Dialog::Rename(0, "Demo".to_string());
+    let before = app.list.selected();
+    let _ = app::screen(&mut app, 120, 40);
+    app.mouse(mouse(MouseEventKind::ScrollDown, 60, 10));
+    assert_eq!(app.list.selected(), before);
+    assert!(matches!(app.dialog, app::Dialog::Rename(..)));
+}
+
+#[test]
+fn space_pages_the_message_and_leaves_the_sidebar_alone() {
+    let mut app = demo();
+    press(&mut app, &["h"]);
+    let (row, picked) = (app.row, app.list.selected());
+    press(&mut app, &[" "]);
+    assert_eq!(app.row, row, "space does not move the folders");
+    assert_eq!(app.list.selected(), picked, "nor the messages");
+    press(&mut app, &["<pgdn>"]);
+    assert_ne!(app.row, row, "the page key does");
+}
+
+#[test]
+fn r_says_the_keys_the_table_gives_reply() {
+    let mut app = demo();
+    press(&mut app, &["r"]);
+    for name in crate::keymap::keys_for(crate::keymap::Act::ReplyAll) {
+        assert!(app.status.contains(name), "{name} in {}", app.status);
+    }
+}
+
+#[test]
+fn a_narrow_foot_leaves_hints_out_but_help_and_quit() {
+    let mut app = demo();
+    let screen = app::screen(&mut app, 40, 20);
+    assert!(
+        screen.contains(" ? help") && screen.contains(" q quit"),
+        "{screen}"
+    );
+    assert!(!screen.contains("new mail"), "{screen}");
+    // Writing, the foot fits in its two lines too.
+    press(&mut app, &["c"]);
+    let screen = app::screen(&mut app, 40, 20);
+    let lines: Vec<&str> = screen.lines().collect();
+    assert!(lines[lines.len() - 3].contains("Compose"), "{screen}");
+    assert!(lines[lines.len() - 2].contains("send"), "{screen}");
 }

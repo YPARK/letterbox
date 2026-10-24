@@ -4,10 +4,11 @@
 //! in two, one of them at a time.
 
 use crate::app::{
-    AGAIN, App, Body, Button, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP, PASSPHRASE,
-    PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, View, ohp_reads,
+    AGAIN, App, Body, Button, Dialog, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP,
+    PASSPHRASE, PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, View, ohp_reads,
 };
 use crate::config::{self, Auth};
+use crate::keymap::{self, Pane};
 use crate::mail::{Message, Role};
 use crate::secret::Keeper;
 use crate::theme::Theme;
@@ -100,24 +101,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     keys(f, app, foot_area, foot_lines, spots);
-    let popup = if app.help {
-        let (area, scroll) = help(f, &t, app.help_scroll);
-        app.help_scroll = scroll;
-        Some((area, Vec::new()))
-    } else if let Some(form) = &app.form {
-        Some(form_dialog(f, &t, form))
-    } else if let Some(files) = &app.files {
-        Some(files_dialog(f, &t, files))
-    } else if let Some(pick) = &app.picking {
-        Some(trash_dialog(f, &t, pick))
-    } else {
-        app.removing
-            .map(|a| removing(f, &t, &app.accounts[a].name))
-            .or_else(|| {
-                app.renaming
-                    .as_ref()
-                    .map(|(a, typed)| renaming(f, &t, &app.accounts[*a].name, typed))
-            })
+    let popup = match &app.dialog {
+        Dialog::Closed => None,
+        &Dialog::Help(scroll) => {
+            let (area, scroll) = help(f, &t, scroll);
+            app.dialog = Dialog::Help(scroll);
+            Some((area, Vec::new()))
+        }
+        Dialog::Form(form) => Some(form_dialog(f, &t, form)),
+        Dialog::Files(files) => Some(files_dialog(f, &t, files)),
+        Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
+        &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
+        Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
     };
     if let Some((area, targets)) = popup {
         app.targets.push((area, Target::Popup));
@@ -1278,11 +1273,6 @@ fn size(bytes: usize) -> String {
 /// Where a key's hint is at the foot: its line, how far along, how wide.
 type Spot = (usize, u16, u16, KeyEvent);
 
-/// The key a hint stands for, to press it when it is clicked.
-fn code(key: &str) -> Option<KeyEvent> {
-    crate::app::key_named(key)
-}
-
 /// The foot: what happened, at the right of the keys where there is room,
 /// else on a line of its own above them; the keys; and where each key's
 /// hint is, by its line, how far along and how wide, to be clicked.
@@ -1295,7 +1285,7 @@ fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
         let mut x = 0u16;
         for (k, what) in items {
             let w = (k.width() + what.width()) as u16;
-            if let Some(code) = code(k.trim()) {
+            if let Some(code) = keymap::key_named(k.trim()) {
                 spots.push((y, x, w, code));
             }
             x += w;
@@ -1353,72 +1343,29 @@ fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spo
 /// foot takes on a screen `width` wide: hints left out to fit, but help and
 /// quit.
 fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
-    if app.picking.is_some() {
-        let list = [("j/k", "move"), ("⏎", "this folder"), ("esc", "cancel")];
-        return lay(&list, width);
-    }
-    if app.compose.is_some() {
-        let list = [
-            ("C-c C-c", "send"),
-            ("C-g", "cancel"),
-            ("C-SPC", "mark"),
-            ("C-w/M-w", "cut/copy"),
-            ("C-y", "yank"),
-            ("C-s/C-r", "search"),
-            ("C-k", "kill"),
-        ];
-        return lay(&list, width);
-    }
-    let mut list: Vec<(&str, &str)> = match app.focus {
-        Focus::Side => vec![
-            ("⏎", "open"),
-            ("j/k", "move"),
-            ("A", "add account"),
-            ("R", "rename"),
-            ("D", "remove"),
-            ("C-n", "new mail"),
-        ],
-        Focus::List => vec![
-            ("⏎", "read"),
-            ("d", "trash"),
-            ("c", "compose"),
-            ("C-r", "reply"),
-            ("e", "reply all"),
-            ("C-f", "forward"),
-            ("/", "search"),
-            ("u", "read/unread"),
-            ("s", "flag"),
-            ("C-n", "new mail"),
-        ],
-        Focus::Reader => vec![
-            ("␣", "page"),
-            ("n/p", "next/previous"),
-            ("d", "trash"),
-            ("C-r", "reply"),
-            ("e", "reply all"),
-            ("C-f", "forward"),
-            ("u", "unread"),
-            ("s", "flag"),
-            ("f", "files & links"),
-            ("o", "browser"),
-            ("a", "save files"),
-            ("esc", "back"),
-        ],
+    let pane = match app.focus {
+        _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
+        _ if app.compose.is_some() => Pane::Writing,
+        Focus::Side => Pane::Side,
+        Focus::List => Pane::List,
+        Focus::Reader => Pane::Reader,
     };
-    list.extend([("?", "help"), ("q", "quit")]);
+    let mut list = keymap::foot(pane);
     let mut lines = lay(&list, width);
-    while lines.len() > FOOT && list.len() > 2 {
-        list.remove(list.len() - 3);
+    while lines.len() > FOOT
+        && let Some(last) = list.iter().rposition(|h| !h.kept)
+    {
+        list.remove(last);
         lines = lay(&list, width);
     }
     lines
 }
 
-fn lay(list: &[(&str, &str)], width: u16) -> Vec<Vec<(String, String)>> {
+fn lay(list: &[keymap::Hint], width: u16) -> Vec<Vec<(String, String)>> {
     let mut lines: Vec<Vec<(String, String)>> = vec![Vec::new()];
     let mut w = 0;
-    for (k, what) in list {
-        let (k, what) = (format!(" {k} "), format!("{what} "));
+    for h in list {
+        let (k, what) = (format!(" {} ", h.key), format!("{} ", h.what));
         let iw = k.width() + what.width();
         if w + iw > width as usize && w > 0 {
             lines.push(Vec::new());
@@ -1431,68 +1378,7 @@ fn lay(list: &[(&str, &str)], width: u16) -> Vec<Vec<(String, String)>> {
 }
 
 fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
-    let rows = [
-        ("j k ↑ ↓", "move; in a message, scroll"),
-        (
-            "h l tab",
-            "move between folders, messages and the message read",
-        ),
-        ("⏎", "open the folder, or read the message"),
-        ("space b", "a page down, or up, in the message"),
-        ("n p", "read the next message, or the one before"),
-        ("g G", "go to the top, or the end"),
-        (
-            "/",
-            "search the messages listed as you type; ⏎ searches the server",
-        ),
-        ("esc", "back to the list; clear the search"),
-        ("u", "mark read, or unread"),
-        ("s", "flag, or unflag"),
-        (
-            "d",
-            "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
-        ),
-        ("c", "write a message"),
-        ("C-r", "reply to the sender"),
-        (
-            "e C-S-r",
-            "reply to all: the sender, and the others it went to, copied",
-        ),
-        ("C-f", "forward it, its files with it"),
-        (
-            "C-c C-c",
-            "send the message being written; C-g or C-c C-k leaves it unsent",
-        ),
-        (
-            "C-SPC",
-            "in the message being written, set the mark: C-w cuts from it to the cursor, M-w copies, C-y puts it back",
-        ),
-        (
-            "C-s C-r",
-            "in the message being written, search forward, or back, as you type; C-s again finds the next, ⏎ stays, C-g goes back",
-        ),
-        ("o", "open the message in the browser, as its HTML"),
-        (
-            "f",
-            "its files and links: PDFs and markdown in ohp, a linked PDF downloaded first",
-        ),
-        ("a", "save its attachments to Downloads"),
-        (
-            "C-n",
-            "look for new mail now; it is looked for every two minutes",
-        ),
-        ("A", "add an account: its address and password"),
-        (
-            "R",
-            "rename an account: the one picked in the sidebar, else the one listed",
-        ),
-        (
-            "D",
-            "remove an account: the one picked in the sidebar, else the one listed",
-        ),
-        ("click", "pick; the wheel scrolls"),
-        ("q", "quit"),
-    ];
+    let rows = keymap::help().chain([("click", "pick; the wheel scrolls")]);
     // Each key's line wrapped under itself, past the keys' column.
     let width = f.area().width.min(80);
     let room = (width as usize).saturating_sub(4 + KEY);

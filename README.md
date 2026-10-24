@@ -110,12 +110,14 @@ letterbox search grant report --account Work
 
 | Key | |
 |---|---|
-| `j` / `k`, arrows | move; in a message, scroll |
-| `h` / `l`, `tab` | between folders, messages and the message read |
+| `j` / `k`, the arrows | move; in a message, scroll |
+| `h` / `l`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
 | `space` / `b` | a page down, or up, in the message |
 | `n` / `p` | read the next message, or the one before |
+| `g` / `G` | go to the top, or the end |
 | `/` | search the messages listed as you type; `enter` searches the server |
+| `esc` | back to the list; clear the search |
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
@@ -126,7 +128,7 @@ letterbox search grant report --account Work
 | `o` | open the message in the browser, as its HTML |
 | `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
-| `C-n` | look for new mail now; it is looked for every two minutes |
+| `C-n`, `C-S-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed |
 | `D` | remove the account picked in the sidebar, or the one listed |
