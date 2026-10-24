@@ -91,7 +91,7 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
 }
 
 /// The name an account is given by default: its address's domain, as
-/// `ubc.ca`.
+/// `example.edu`.
 pub fn name_for(email: &str) -> String {
     email
         .rsplit_once('@')

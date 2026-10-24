@@ -1165,7 +1165,7 @@ fn ctrl_o_opens_the_page_an_app_password_is_made_on() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = empty_app(dir.path().join("accounts.toml"));
     app.browse = |url| OPENED.lock().unwrap().push(url.to_string());
-    press(&mut app, &["A", "me@ubc.ca", "<c-o>"]);
+    press(&mut app, &["A", "me@example.edu", "<c-o>"]);
     assert!(
         OPENED.lock().unwrap().is_empty(),
         "no page for an unknown provider"
@@ -1205,7 +1205,13 @@ fn the_accounts_file_keeps_its_comments_as_accounts_come_and_go() {
         "# my mail\n[[account]]\nname = \"Home\" # the old one\nemail = \"a@b.c\"\nhost = \"imap.b.c\"\n",
     )
     .unwrap();
-    let mut work = crate::setup::account("Work", "me@ubc.ca", "imap.ubc.ca", 993, "me@ubc.ca");
+    let mut work = crate::setup::account(
+        "Work",
+        "me@example.edu",
+        "imap.example.edu",
+        993,
+        "me@example.edu",
+    );
     work.password_command = Some("pass mail".to_string());
     crate::config::add(&path, &work).unwrap();
     assert!(crate::config::add(&path, &work).is_err(), "a name twice");
@@ -1232,14 +1238,20 @@ fn providers_servers_are_guessed_from_the_address() {
     use crate::config::guess;
     assert_eq!(guess("x@gmail.com").0, "imap.gmail.com");
     assert!(guess("x@gmail.com").1.unwrap().contains("app password"));
-    assert_eq!(guess("x@ubc.ca"), ("imap.ubc.ca".to_string(), None));
+    assert_eq!(
+        guess("x@example.edu"),
+        ("imap.example.edu".to_string(), None)
+    );
     assert_eq!(guess("nothing").0, "");
     assert_eq!(crate::config::guess_smtp("x@gmail.com"), "smtp.gmail.com");
     assert_eq!(
         crate::config::guess_smtp("x@outlook.com"),
         "smtp.office365.com"
     );
-    assert_eq!(crate::config::guess_smtp("x@ubc.ca"), "smtp.ubc.ca");
+    assert_eq!(
+        crate::config::guess_smtp("x@example.edu"),
+        "smtp.example.edu"
+    );
 }
 
 #[test]
@@ -1253,13 +1265,16 @@ fn an_app_password_page_is_known_for_the_providers_that_take_one() {
     assert!(page("x@icloud.com", "").is_some());
     assert!(page("x@yahoo.com", "").is_some());
     // An address of its own domain, on Gmail's server, is Gmail's.
-    assert_eq!(page("x@ubc.ca", "imap.gmail.com"), page("x@gmail.com", ""));
+    assert_eq!(
+        page("x@example.edu", "imap.gmail.com"),
+        page("x@gmail.com", "")
+    );
     assert_eq!(
         page("x@outlook.com", ""),
         None,
         "it signs in in the browser"
     );
-    assert_eq!(page("x@ubc.ca", "imap.ubc.ca"), None);
+    assert_eq!(page("x@example.edu", "imap.example.edu"), None);
 }
 
 #[test]
@@ -1291,7 +1306,7 @@ fn an_app_password_is_taken_with_its_spaces_or_without() {
     assert_eq!(app_password(gmail, "my pass word"), "my pass word");
     // Elsewhere a space may be in a password.
     assert_eq!(
-        app_password("imap.ubc.ca", "abcd efgh ijkl mnop"),
+        app_password("imap.example.edu", "abcd efgh ijkl mnop"),
         "abcd efgh ijkl mnop"
     );
 }
@@ -1530,7 +1545,7 @@ fn the_systems_store_keeps_a_password() {
 // ---- Microsoft, as letterbox signs in with it ----
 
 /// A stand-in for Microsoft's sign-in, on this machine, which letterbox is
-/// pointed at in every test: an address at `ubc.example` is its own; a code
+/// pointed at in every test: an address at `uni.example` is its own; a code
 /// is taken from the browser if its verifier answers the challenge the
 /// browser was given; a device's code is taken on the second time it is
 /// asked; tokens are renewed.
@@ -1598,7 +1613,7 @@ fn answer_as_microsoft(tcp: TcpStream) {
     let target = first.split_whitespace().nth(1).unwrap_or_default();
     let tokens = r#"{"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600}"#;
     let json = if target.starts_with("/getuserrealm.srf") {
-        let ours = target.contains("ubc.example");
+        let ours = target.contains("uni.example");
         format!(
             r#"{{"NameSpaceType":"{}"}}"#,
             if ours { "Managed" } else { "Unknown" }
@@ -1694,7 +1709,7 @@ fn an_outlook_account_is_signed_into_in_the_browser() {
         let page = come_back(url, "code=code-1");
         PAGES.lock().unwrap().push(page);
     };
-    press(&mut app, &["A", "me@ubc.example", "<tab>"]);
+    press(&mut app, &["A", "me@uni.example", "<tab>"]);
     let form = app.dialog.form().unwrap();
     assert_eq!(
         form.auth,
@@ -1717,7 +1732,7 @@ fn an_outlook_account_is_signed_into_in_the_browser() {
         "{:?}",
         app.dialog.form().and_then(|f| f.note.clone())
     );
-    assert_eq!(app.status, "added ubc.example");
+    assert_eq!(app.status, "added uni.example");
     assert_eq!(app.shown.len(), 3, "signed in to IMAP with the token");
     let file = std::fs::read_to_string(&path).unwrap();
     assert!(file.contains("auth = \"microsoft\""), "{file}");
@@ -1734,7 +1749,7 @@ fn an_outlook_account_is_signed_into_with_a_code_on_another_device() {
     let stop = std::sync::atomic::AtomicBool::new(false);
     let mut shown = None;
     let tokens = crate::oauth::sign_in(
-        "me@ubc.example",
+        "me@uni.example",
         "common",
         crate::oauth::CLIENT_ID,
         &stop,
@@ -1760,7 +1775,7 @@ fn a_sign_in_refused_in_the_browser_is_said() {
     microsoft();
     let stop = std::sync::atomic::AtomicBool::new(false);
     let e = crate::oauth::sign_in(
-        "me@ubc.example",
+        "me@uni.example",
         "common",
         crate::oauth::CLIENT_ID,
         &stop,
@@ -1781,7 +1796,7 @@ fn a_sign_in_refused_in_the_browser_is_said() {
 #[test]
 fn a_token_running_out_is_renewed() {
     microsoft();
-    let mut a = crate::setup::account("O", "me@ubc.example", "outlook.example", 993, "me");
+    let mut a = crate::setup::account("O", "me@uni.example", "outlook.example", 993, "me");
     a.auth = crate::config::Auth::Microsoft;
     a.password_command = Some("echo unused".to_string());
     crate::oauth::remember(
