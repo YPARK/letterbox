@@ -3,11 +3,11 @@
 //! parsed from their RFC 5322 bytes, whatever store they came from.
 
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const PREVIEW_CHARS: usize = 240;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Inbox,
@@ -215,7 +215,7 @@ fn decode_utf16_base64(s: &str) -> Option<String> {
     String::from_utf16(&units).ok()
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
     pub seen: bool,
     pub flagged: bool,
@@ -272,7 +272,10 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
         .map(clean)
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| address.clone());
-    let preview: String = m.body_text(0).map(|t| preview(&t)).unwrap_or_default();
+    let preview: String = m
+        .body_text(0)
+        .map(|t| preview(&t, PREVIEW_CHARS))
+        .unwrap_or_default();
     Summary {
         uid,
         from,
@@ -292,15 +295,16 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
     }
 }
 
-/// The text's first words, on one line, without what it quotes.
-fn preview(text: &str) -> String {
+/// The text's first words, no more than `chars` of them, on one line, without
+/// what it quotes.
+pub fn preview(text: &str, chars: usize) -> String {
     let words = text
         .lines()
         .filter(|l| !l.trim_start().starts_with('>'))
         .flat_map(str::split_whitespace);
     let mut out = String::new();
     for w in words {
-        if out.chars().count() + w.chars().count() > PREVIEW_CHARS {
+        if out.chars().count() + w.chars().count() > chars {
             break;
         }
         if !out.is_empty() {

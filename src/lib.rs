@@ -8,6 +8,9 @@ mod config;
 mod demo;
 mod edit;
 mod imap;
+// What the map is to read is written before the map that reads it.
+#[allow(dead_code)]
+mod index;
 mod keymap;
 mod mail;
 mod mcp;

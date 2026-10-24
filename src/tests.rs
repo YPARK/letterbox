@@ -3258,3 +3258,282 @@ fn unread_a_flag_and_the_accounts_are_told_apart_by_hue() {
         }
     }
 }
+
+// ---- the map's index: its journals and its key ----
+
+use crate::index::{self, Cached, Index, Kept, Lens};
+
+/// A record of the account `a@b.c`, as fetched from INBOX, known by `id`.
+fn record(id: &str, subject: &str) -> index::Record {
+    let indexed = index::record::Indexed {
+        uid: 1,
+        size: 100,
+        raw: raw(
+            "Ada Lovelace <ada@analytical.example>",
+            subject,
+            "",
+            "Hello.\r\n",
+        ),
+        ..Default::default()
+    };
+    let mut r = index::Record::of("a@b.c", "INBOX", 7, &indexed, 1_000);
+    r.key.id = id.to_string();
+    r
+}
+
+fn identity() -> age::x25519::Identity {
+    age::x25519::Identity::generate()
+}
+
+#[test]
+fn the_journals_give_back_what_was_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let (a, b) = (record("a", "Notes on the engine"), record("b", "Photo 51"));
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![
+                Cached::Upsert(Box::new(a.clone())),
+                Cached::Upsert(Box::new(b.clone())),
+                Cached::Flags {
+                    key: b.key.clone(),
+                    flags: mail::Flags {
+                        seen: true,
+                        ..Default::default()
+                    },
+                },
+            ])
+            .unwrap();
+        index
+            .keep(vec![
+                Kept::Label {
+                    key: a.key.clone(),
+                    label: "Grant".into(),
+                    on: true,
+                },
+                Kept::Layout {
+                    lens: Lens::Both,
+                    at: vec![(a.key.clone(), 1.5, -2.0)],
+                },
+                Kept::Looked { at: 42 },
+            ])
+            .unwrap();
+        index.flush().unwrap();
+    }
+    let index = Index::open_with(dir.path(), &id);
+    assert!(index.fault.is_none(), "{:?}", index.fault);
+    assert_eq!(index.records.len(), 2);
+    assert_eq!(index.records[&a.key], a);
+    assert!(index.records[&b.key].flags.seen);
+    assert_eq!(index.keep.labels[&a.key], ["Grant"]);
+    assert_eq!(index.keep.layouts[&Lens::Both][&a.key], (1.5, -2.0));
+    assert_eq!(index.keep.looked, 42);
+    // Encrypted: nothing of the mail is in the files.
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("Photo") && !text.contains("Grant"));
+        assert!(text.starts_with("age-encryption.org/v1"));
+    }
+    // Another key reads nothing, and says so.
+    let other = Index::open_with(dir.path(), &identity());
+    assert!(other.records.is_empty());
+    assert!(other.keep_fault().is_some());
+}
+
+#[test]
+fn new_mail_is_written_with_the_public_key_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let a = record("a", "Notes on the engine");
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![Cached::Upsert(Box::new(a.clone()))])
+            .unwrap();
+    }
+    let b = record("b", "Photo 51");
+    {
+        let mut writer = Index::writer(dir.path(), id.to_public());
+        writer
+            .cache(vec![Cached::Upsert(Box::new(b.clone()))])
+            .unwrap();
+        writer.flush().unwrap();
+    }
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!(index.records.len(), 2, "{:?}", index.fault);
+    assert_eq!(index.records[&b.key].subject, "Photo 51");
+}
+
+#[test]
+fn a_base_written_and_its_logs_not_yet_removed_is_read_once() {
+    use crate::index::journal::Journal;
+    let dir = tempfile::tempdir().unwrap();
+    let aside = tempfile::tempdir().unwrap();
+    let id = identity();
+    let open = || Journal::<u32>::open(dir.path(), "cache", id.to_public(), Some(&id));
+    {
+        let (mut j, _) = open();
+        for n in 0..3 {
+            j.push(n).unwrap();
+            j.flush().unwrap();
+        }
+        assert_eq!(j.logs(), 3);
+    }
+    let copy = |from: &std::path::Path, to: &std::path::Path| {
+        for entry in std::fs::read_dir(from).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::copy(&path, to.join(path.file_name().unwrap())).unwrap();
+        }
+    };
+    copy(dir.path(), aside.path());
+    {
+        let (mut j, all) = open();
+        assert_eq!(all, [0, 1, 2]);
+        j.compact(&all).unwrap();
+        assert_eq!(j.logs(), 0);
+    }
+    // As if letterbox stopped once the base was written, before the files
+    // it takes the place of were removed.
+    copy(aside.path(), dir.path());
+    let (mut j, all) = open();
+    assert_eq!(all, [0, 1, 2], "the new base alone");
+    j.push(3).unwrap();
+    j.flush().unwrap();
+    drop(j);
+    assert_eq!(open().1, [0, 1, 2, 3]);
+}
+
+#[test]
+fn a_journal_with_many_logs_is_written_again_as_one_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let many = crate::index::journal::LOGS + 1;
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        for n in 0..many {
+            let r = record(&n.to_string(), "Photo 51");
+            index.cache(vec![Cached::Upsert(Box::new(r))]).unwrap();
+            index.flush().unwrap();
+        }
+    }
+    let files = || std::fs::read_dir(dir.path()).unwrap().count();
+    assert_eq!(files(), many);
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!(index.records.len(), many);
+    assert_eq!(files(), 1, "one base, the cache's; keep has nothing");
+    drop(index);
+    assert_eq!(Index::open_with(dir.path(), &id).records.len(), many);
+}
+
+/// Spoil the first file of `name` in `dir`, as a disk might; where it is.
+fn spoil(dir: &std::path::Path, name: &str) -> PathBuf {
+    let path = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(name))
+        .unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    let at = bytes.len() - 5;
+    bytes[at] ^= 0xff;
+    std::fs::write(&path, &bytes).unwrap();
+    path
+}
+
+#[test]
+fn a_cache_that_cannot_be_read_is_begun_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        let r = record("a", "Photo 51");
+        index.cache(vec![Cached::Upsert(Box::new(r))]).unwrap();
+    }
+    spoil(dir.path(), "cache.");
+    let index = Index::open_with(dir.path(), &id);
+    assert!(index.records.is_empty());
+    let fault = index.fault.clone().unwrap();
+    assert!(fault.contains("made again from the servers"), "{fault}");
+    drop(index);
+    let index = Index::open_with(dir.path(), &id);
+    assert!(index.fault.is_none(), "{:?}", index.fault);
+}
+
+#[test]
+fn a_keep_that_cannot_be_read_is_not_written_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let key = record("a", "Photo 51").key;
+    let label = |on| Kept::Label {
+        key: key.clone(),
+        label: "Grant".into(),
+        on,
+    };
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index.keep(vec![label(true)]).unwrap();
+    }
+    let path = spoil(dir.path(), "keep.");
+    let before = std::fs::read(&path).unwrap();
+    let mut index = Index::open_with(dir.path(), &id);
+    assert!(index.keep_fault().is_some());
+    let e = index.keep(vec![label(false)]).unwrap_err();
+    assert!(e.to_string().contains("cannot read"), "{e}");
+    index.flush().unwrap();
+    drop(index);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+/// Where a test keeps the map's key: here, the system's store left alone.
+static KEPT_KEY: Mutex<Option<(Keeper, String)>> = Mutex::new(None);
+
+fn keep_key(keeper: Keeper, host: &str, user: &str, secret: &str) -> anyhow::Result<()> {
+    assert_eq!((host, user), ("map", "identity"));
+    *KEPT_KEY.lock().unwrap() = Some((keeper, secret.to_string()));
+    Ok(())
+}
+
+fn find_key(keeper: Keeper, _: &str, _: &str) -> anyhow::Result<String> {
+    match KEPT_KEY.lock().unwrap().clone() {
+        Some((k, secret)) if k == keeper => Ok(secret),
+        _ => anyhow::bail!("no such key"),
+    }
+}
+
+fn refuse_key(_: Keeper, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+    anyhow::bail!("the store is closed")
+}
+
+#[test]
+fn the_maps_key_is_kept_before_it_is_named() {
+    use crate::index::key;
+    let dir = tempfile::tempdir().unwrap();
+    // Nowhere to keep it: no map.toml names a key that is not kept.
+    let e = Index::open(dir.path(), || vec![Keeper::Keyring], find_key, refuse_key)
+        .err()
+        .unwrap();
+    assert!(e.contains("the store is closed"), "{e}");
+    assert!(key::card(dir.path()).unwrap().is_none());
+
+    let r = record("a", "Photo 51");
+    {
+        let mut index =
+            Index::open(dir.path(), || vec![Keeper::Keyring], find_key, keep_key).unwrap();
+        index
+            .cache(vec![Cached::Upsert(Box::new(r.clone()))])
+            .unwrap();
+    }
+    let card = key::card(dir.path()).unwrap().unwrap();
+    assert_eq!((card.version, card.keeper), (key::VERSION, Keeper::Keyring));
+    let secret = KEPT_KEY.lock().unwrap().clone().unwrap().1;
+    assert!(secret.starts_with("AGE-SECRET-KEY-"));
+    let written = std::fs::read_to_string(dir.path().join("map.toml")).unwrap();
+    assert!(!written.contains(&secret), "{written}");
+    // Opened again, the key is found where the card says, and reads it.
+    let index = Index::open(dir.path(), || vec![Keeper::Vault], find_key, refuse_key).unwrap();
+    assert_eq!(index.records[&r.key].subject, "Photo 51");
+    let found = key::identity(&card, find_key).unwrap();
+    assert!(key::export(&found).contains(&secret));
+}
