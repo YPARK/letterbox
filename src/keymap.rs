@@ -371,14 +371,21 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-c",
         hint: "C-c C-c",
         foot: &[(Writing, "send")],
-        help: "send the message being written; C-g or C-c C-k leaves it unsent",
+        help: "send the message being written",
+    },
+    Binding {
+        keys: &[],
+        name: "C-c C-k",
+        hint: "C-c C-k",
+        foot: &[(Writing, "discard")],
+        help: "in the message being written, let it go unsent; changed, it asks first, as Emacs does",
     },
     Binding {
         keys: &[],
         name: "C-g",
         hint: "C-g",
-        foot: &[(Writing, "cancel")],
-        help: "",
+        foot: &[],
+        help: "in the message being written, let go of a search, the mark, or C-c, as Emacs's C-g does; never the message",
     },
     Binding {
         keys: &[],
@@ -445,8 +452,8 @@ pub const KEYS: &[Binding] = &[
         help: "",
     },
     Binding {
-        keys: &[("?", Help)],
-        name: "?",
+        keys: &[("?", Help), ("F1", Help)],
+        name: "? F1",
         hint: "?",
         foot: &[
             (Side, "help"),
@@ -556,6 +563,7 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
         "home" => Some(KeyCode::Home),
         "end" => Some(KeyCode::End),
         "backspace" => Some(KeyCode::Backspace),
+        "F1" => Some(KeyCode::F(1)),
         _ => None,
     };
     if let Some(code) = named {

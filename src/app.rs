@@ -517,7 +517,20 @@ pub struct Compose {
     /// Said that what is attached is more than most servers take: a send
     /// asked again sends it.
     pub warned: bool,
+    /// The text it was opened with, to tell whether it has been changed.
+    original: String,
+    /// `C-c C-k` was pressed on a message changed: whether to let it go is
+    /// asked, as Emacs asks.
+    pub asking: bool,
 }
+
+/// What `C-c C-k` asks of a message changed, as Emacs's message-mode asks,
+/// and what each answer does.
+pub const KILL_ANYWAY: &str =
+    "Message modified; kill anyway? (y or n) · y discards it, n goes on writing";
+/// What `C-g` says when it had nothing to let go: that the message stays,
+/// and how it is sent or let go.
+const QUIT: &str = "Quit · the message stays: C-c C-c sends it, C-c C-k discards it";
 
 /// How much attached most servers take, in bytes.
 const LARGE: usize = 25 * 1024 * 1024;
@@ -2307,8 +2320,13 @@ impl App {
     pub fn key(&mut self, key: KeyEvent) {
         let key = capital(key);
         if self.compose.is_some() {
-            if matches!(self.dialog, Dialog::Attach(_)) {
-                return self.attach_key(key);
+            if matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
+                return self.dialog_key(key);
+            }
+            // F1, as Emacs has it: every key, over the message.
+            if key.code == KeyCode::F(1) {
+                self.dialog = Dialog::Help(0);
+                return;
             }
             return self.compose_key(key);
         }
@@ -2743,8 +2761,8 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
-        // Writing, only the files being picked are clicked.
-        if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_)) {
+        // Writing, only the files being picked, or the help, are clicked.
+        if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
             return;
         }
         let at = self
@@ -3352,6 +3370,7 @@ impl App {
     ) {
         let mut buffer = edit::Buffer::from_text(&text);
         buffer.place(row, col);
+        let original = buffer.text();
         if matches!(self.dialog, Dialog::Help(_)) {
             self.dialog = Dialog::Closed;
         }
@@ -3365,6 +3384,8 @@ impl App {
             sending: false,
             files,
             warned: false,
+            original,
+            asking: false,
         });
     }
 
@@ -3385,9 +3406,24 @@ impl App {
         if compose.sending {
             return;
         }
+        if compose.asking {
+            compose.asking = false;
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
+                self.compose = None;
+                self.status = "discarded, not sent".to_string();
+            } else {
+                self.status = "kept · C-c C-c sends it".to_string();
+            }
+            return;
+        }
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
         match done {
             Done::Stay => {}
+            Done::Quit => self.status = QUIT.to_string(),
+            Done::Cancel if compose.buffer.text() != compose.original => {
+                compose.asking = true;
+                self.status = KILL_ANYWAY.to_string();
+            }
             Done::Cancel => {
                 self.compose = None;
                 self.status = "not sent".to_string();

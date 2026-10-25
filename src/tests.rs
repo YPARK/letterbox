@@ -2579,8 +2579,8 @@ fn replying_opens_the_message_and_the_demo_keeps_what_is_sent() {
         "{text}"
     );
     assert!(text.contains("Subject: Re: Notes on the engine"), "{text}");
-    press(&mut app, &["<c-g>"]);
-    assert!(app.compose.is_none());
+    press(&mut app, &["<c-c>", "<c-k>"]);
+    assert!(app.compose.is_none(), "unchanged, it goes at once");
     assert!(app.status.contains("not sent"), "{}", app.status);
 
     press(
@@ -3079,7 +3079,7 @@ fn reply_forward_and_new_mail_have_their_keys() {
         press(&mut app, &keys);
         let text = app.compose.as_ref().unwrap().buffer.text();
         assert!(text.contains(subject), "{keys:?}: {text}");
-        press(&mut app, &["<c-g>"]);
+        press(&mut app, &["<c-c>", "<c-k>"]);
         assert!(app.compose.is_none());
     }
     let help = {
@@ -3089,6 +3089,55 @@ fn reply_forward_and_new_mail_have_their_keys() {
     for key in ["C-r", "f C-f", "C-n", "R"] {
         assert!(help.contains(key), "{key} in {help}");
     }
+}
+
+#[test]
+fn c_g_never_loses_the_message_and_c_c_c_k_asks_once_it_is_changed() {
+    let mut app = demo();
+    press(&mut app, &["c", "ada@analytical.example"]);
+    // As often as it is pressed, C-g keeps it, and says how to go on.
+    press(&mut app, &["<c-g>", "<c-g>", "<c-g>"]);
+    assert!(app.compose.is_some());
+    assert!(app.status.contains("C-c C-k discards it"), "{}", app.status);
+    // Changed, C-c C-k asks, on the message's own mode line too.
+    press(&mut app, &["<c-c>", "<c-k>"]);
+    assert!(app.compose.as_ref().unwrap().asking);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("kill anyway? (y or n)"), "{screen}");
+    // Anything but y goes on writing, the text as it was.
+    press(&mut app, &["n"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.starts_with("To: ada@analytical.example\n"), "{text}");
+    assert!(app.status.contains("C-c C-c sends it"), "{}", app.status);
+    press(&mut app, &["<c-c>", "<c-k>", "<c-g>"]);
+    assert!(app.compose.is_some());
+    press(&mut app, &["<c-c>", "<c-k>", "y"]);
+    assert!(app.compose.is_none());
+    assert!(app.status.contains("discarded"), "{}", app.status);
+}
+
+#[test]
+fn writing_says_how_it_goes_and_f1_lists_every_key() {
+    let mut app = demo();
+    press(&mut app, &["c", "ada@analytical.example"]);
+    let screen = app::screen(&mut app, 150, 40);
+    for said in [
+        "C-c C-c send",
+        "C-c C-k discard",
+        "never losing it",
+        "F1: every key",
+    ] {
+        assert!(screen.contains(said), "{said} in {screen}");
+    }
+    app.key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+    assert!(matches!(app.dialog, app::Dialog::Help(_)));
+    let screen = app::screen(&mut app, 150, 60);
+    assert!(screen.contains("C-c C-k"), "{screen}");
+    // Closed, the message is as it was, and keys write in it again.
+    press(&mut app, &["<esc>", "!"]);
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.starts_with("To: ada@analytical.example!"), "{text}");
 }
 
 #[test]
@@ -3406,11 +3455,12 @@ fn the_region_from_the_mark_is_cut_with_c_w_and_copied_with_m_w() {
     edit_keys(&mut buffer, &["<c-e>", "<c-w>"]);
     assert_eq!(buffer.text(), "keep\n");
 
-    // C-g lets the mark go before it leaves the message.
+    // C-g lets the mark go, and then only says it quit: never the message.
     let mut buffer = Buffer::from_text("x");
     assert_eq!(edit_keys(&mut buffer, &["<c- >", "<c-g>"]), Done::Stay);
     assert_eq!(buffer.region(), None);
-    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Cancel);
+    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Quit);
+    assert_eq!(edit_keys(&mut buffer, &["<c-c>", "<c-k>"]), Done::Cancel);
 }
 
 #[test]
@@ -5320,7 +5370,7 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
         text.contains("Subject: Re: Aims page, third pass"),
         "{text}"
     );
-    press(&mut app, &["<c-g>"]);
+    press(&mut app, &["<c-c>", "<c-k>"]);
     // e archives it, as it archives in the list.
     press(&mut app, &["e"]);
     let (_, inbox) = dot_labels(&app, "Aims page, third pass");

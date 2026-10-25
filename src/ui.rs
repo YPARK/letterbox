@@ -528,6 +528,13 @@ fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -> (Rect, Ta
             ),
             Span::styled("▏", Style::new().fg(t.accent)),
         ]),
+        Line::styled(
+            clip(
+                "type to narrow, or a path from /; ␣ marks several to attach",
+                room,
+            ),
+            Style::new().fg(t.faint),
+        ),
         Line::raw(""),
     ];
     let top = lines.len();
@@ -807,15 +814,43 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let t = app.theme;
     let mode_h = 1u16.min(area.height);
+    // Two lines of how it goes, where there is room for them.
+    let guide_h = if area.height >= 14 { 2 } else { 0 };
     let body = Rect {
-        height: area.height.saturating_sub(mode_h),
+        height: area.height.saturating_sub(mode_h + guide_h),
+        ..area
+    };
+    let guide = Rect {
+        y: area.y + body.height,
+        height: guide_h,
         ..area
     };
     let mode = Rect {
-        y: area.y + body.height,
-        height: area.height - body.height,
+        y: area.y + body.height + guide_h,
+        height: area.height - body.height - guide_h,
         ..area
     };
+    if guide_h > 0 {
+        let key = Style::new().fg(t.soft).bold();
+        let say = Style::new().fg(t.dim);
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("  C-c C-c", key),
+                Span::styled(" send   ", say),
+                Span::styled("C-c C-a", key),
+                Span::styled(" attach   ", say),
+                Span::styled("C-c C-k", key),
+                Span::styled(" discard   ", say),
+                Span::styled("C-g", key),
+                Span::styled(" stops, never losing it", say),
+            ]),
+            Line::styled(
+                "  C-c is Ctrl+c, so C-c C-c is Ctrl+c twice. The arrows move. F1: every key.",
+                say,
+            ),
+        ];
+        f.render_widget(Paragraph::new(lines).style(Style::new().bg(t.page)), guide);
+    }
     let rows = (body.height as usize).max(1);
     if compose.buffer.row() < compose.scroll {
         compose.scroll = compose.buffer.row();
@@ -864,9 +899,13 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     // Searching, the mode line says what is searched for, as Emacs's
     // echo area does.
     let said = match compose.buffer.searching() {
+        _ if compose.asking => Span::styled(
+            format!("  {}", crate::app::KILL_ANYWAY),
+            Style::new().fg(t.title).bold(),
+        ),
         Some(s) => Span::styled(format!("  {s}"), Style::new().fg(t.title).bold()),
         None => Span::styled(
-            "  C-c C-c send   C-c C-a attach   C-c C-k or C-g cancel   C-SPC mark   C-s search",
+            "  C-SPC mark   C-w cut   C-y yank   C-s search   F1 all keys",
             Style::new().fg(t.dim),
         ),
     };

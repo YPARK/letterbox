@@ -140,7 +140,7 @@ letterbox search grant report --account Work
 | `y` / `Y` / `-` | once filed, the label's first suggestion filed too, or all of them; `-` says the first is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
-| `?` | all the keys |
+| `?`, `F1` | all the keys; `F1` while writing too |
 | `q` | quit |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
@@ -157,9 +157,24 @@ back, `M-f` `M-b` `M-d` by word. `C-SPC` sets the mark: `C-w` kills the
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
 again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
-it, `C-c C-k` leaves it, and so does `C-g` once no mark is set and no
-search is under way. Outside it `C-c` still quits. The arrows do the same
-as the movement keys.
+it. `C-c C-k` discards it, asking first if you changed it, as Emacs's
+message-mode asks: `y` discards it, any other key goes on writing. `C-g`
+lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
+never of the message. Outside it `C-c` still quits.
+
+If Emacs is new to you, this is all you need:
+
+| To | Press |
+|---|---|
+| move, and go to a line's ends | the arrows, `Home`, `End` |
+| send it | `C-c C-c`: Ctrl and c, twice |
+| attach a file | `C-c C-a`, then type part of its name and `⏎` |
+| stop writing, unsent | `C-c C-k`, then `y` if it asks |
+| get out of anything half done | `C-g`, which never loses what you wrote |
+
+The same guide is under the message as you write, `F1` lists every key,
+and the foot says what each key did and what to press next. The file
+picker says how to narrow and mark under what is typed.
 
 `C-c C-a` attaches files, picked a folder at a time as
 [senna](https://github.com/causalpathlab/senna-rs) picks them: it begins where you
