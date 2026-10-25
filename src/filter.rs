@@ -31,8 +31,10 @@ pub struct Taught {
 
 /// How many of each it is to have been taught before it says anything.
 pub const READY: u32 = 20;
-/// How sure it is to be, at least, to say a message would be thrown away.
-pub const SURE: f32 = 0.8;
+/// How sure it is to be, at least, to say a message would be thrown away:
+/// at 80%, graded on real mail, it would have thrown away one kept message
+/// in 27; at 90%, one in 160, catching two in three of those thrown away.
+pub const SURE: f32 = 0.9;
 /// How far each step goes, and how many a decision takes.
 const RATE: f32 = 0.5;
 const STEPS: usize = 3;

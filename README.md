@@ -311,7 +311,7 @@ archive, answer, flag, keep in the Inbox looked through, or put back from
 the Trash, that it is not. Like is by who sent it, from where, by which
 list, and its words, never its subject alone, so that a sender you always
 throw away is known by a subject never seen. Once it has been taught twenty
-of each, a message in the Inbox it is sure of, 80% or more, comes to be
+of each, a message in the Inbox it is sure of, 90% or more, comes to be
 looked through with `[?] discard 92%` suggested; nothing is thrown away
 unless you choose it and `$` does it.
 What it learns is written down, encrypted with the map's index, as the
@@ -327,7 +327,7 @@ letterbox filter forget   # forget what was learnt from them, then check
 what it would have said from those before it alone, before learning it,
 so it is never graded on what it has already seen. It counts how many of
 what you threw away it would have caught, and how many you kept it would
-have thrown away, sure to 70%, 80% and 90%, and names the ones kept,
+have thrown away, sure to 70%, 80%, 90% and 95%, and names the ones kept,
 which matter most. `filter learn` reads, on each account's server, the
 newest 500 messages (`--limit`) of its Trash that were never read, as
 thrown away, and the newest 500 filed under your labels, as kept, oldest

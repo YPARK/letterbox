@@ -7268,10 +7268,13 @@ fn what_you_throw_away_is_learnt_by_who_sent_it_not_its_subject() {
     assert!(!few.ready());
     let new_deal = sent_by("x", "deals@shop.example", "A brand new offer, never seen");
     assert_eq!(few.would_throw(&new_deal), None);
-    // Enough: the shop's new mail, of a subject never seen, would be thrown
-    // away; Ada's would not.
-    let f = taught(25);
+    // Enough: the shop's new mail, of a subject never seen, leans to thrown
+    // away, its words never seen weighing nothing; once taught more, sure
+    // enough to say so. Ada's would not be.
+    let f = taught(40);
     assert!(f.ready());
+    assert!(f.odds(&crate::filter::Filter::tokens(&new_deal)) > 0.8);
+    let f = taught(100);
     let p = f.would_throw(&new_deal).expect("thrown away");
     assert!(p >= crate::filter::SURE, "{p}");
     let from_ada = sent_by(
@@ -7282,7 +7285,7 @@ fn what_you_throw_away_is_learnt_by_who_sent_it_not_its_subject() {
     assert_eq!(f.would_throw(&from_ada), None);
     assert!(f.odds(&crate::filter::Filter::tokens(&from_ada)) < 0.5);
     // The same taught in the same order: the same odds.
-    let again = taught(25);
+    let again = taught(100);
     assert_eq!(
         f.odds(&crate::filter::Filter::tokens(&new_deal)),
         again.odds(&crate::filter::Filter::tokens(&new_deal))
@@ -7504,7 +7507,7 @@ fn in_the_list_a_message_is_filed_as_in_the_map() {
 
 #[test]
 fn the_filter_is_graded_on_each_decision_before_it_is_learnt() {
-    let mut f = taught(25);
+    let mut f = taught(40);
     // A message from the shop you kept, last: it would have been thrown
     // away, and is graded so, not as what it taught.
     let kept = sent_by("k", "deals@shop.example", "Your receipt");

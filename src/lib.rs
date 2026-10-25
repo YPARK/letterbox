@@ -516,7 +516,7 @@ fn check(index: &index::Index) -> String {
             100.0 * a as f32 / b as f32
         }
     };
-    for level in [0.7, 0.8, 0.9] {
+    for level in [0.7, 0.8, 0.9, 0.95] {
         let g = filter::grade(&said, level);
         let mark = if level == filter::SURE {
             "  (as it is)"
