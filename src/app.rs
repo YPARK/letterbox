@@ -6098,18 +6098,17 @@ pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
 }
 
 /// The path of a `file://` address, after its `file://`: its escapes
-/// read; on `windows`, the drive's, without the root's slash before it.
+/// read; on `windows`, the drive's, without the root's slash before it,
+/// its folders parted by backslashes.
 pub(crate) fn file_address(rest: &str, windows: bool) -> String {
     let path = unescaped(rest);
-    let drive = |p: &str| {
-        let b = p.as_bytes();
-        b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':'
-    };
-    if windows && drive(&path) {
-        path[1..].to_string()
-    } else {
-        path
+    if !windows {
+        return path;
     }
+    let b = path.as_bytes();
+    let drive = b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':';
+    let path = if drive { &path[1..] } else { &path[..] };
+    path.replace('/', "\\")
 }
 
 /// `s` with each `%` and two hex digits the byte they stand for.

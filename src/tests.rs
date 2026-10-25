@@ -3436,9 +3436,11 @@ fn a_dropped_path_is_read_as_the_terminal_of_each_system_writes_it() {
         crate::app::file_address("/Users/a/a%20draft.txt", false),
         "/Users/a/a draft.txt"
     );
+    // On Windows, its folders parted as Windows parts them, so that it is
+    // the same path as the file dropped.
     assert_eq!(
         crate::app::file_address("/C:/Users/a/a%20draft.txt", true),
-        "C:/Users/a/a draft.txt"
+        r"C:\Users\a\a draft.txt"
     );
 }
 
