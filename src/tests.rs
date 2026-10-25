@@ -4371,3 +4371,257 @@ fn the_demo_files_as_a_server_of_keywords_does() {
         ["Projects", "Funding"]
     );
 }
+
+// ---- the model, on the demo's mail ----
+
+/// The demo's mail, as the index has it.
+fn demo_index() -> Index {
+    let demo = Demo::new();
+    let mut twin = demo.twin().unwrap();
+    let index = Mutex::new(Index::memory());
+    sync_once(twin.as_mut(), &index);
+    index.into_inner().unwrap()
+}
+
+/// The model of `index`, read by `lens`.
+fn model_of(index: &Index, lens: Lens) -> crate::model::Model {
+    let given: Vec<crate::model::Given> = index
+        .records
+        .values()
+        .map(|r| (r, index.labels(&r.key)))
+        .collect();
+    crate::model::Model::build(&given, &index.keep.not_it, lens)
+}
+
+/// The grant's mail, by subject.
+const GRANT_MAIL: [&str; 8] = [
+    "R01 resubmission: internal deadline 3 November",
+    "Aims page, third pass",
+    "Budget justification: the sequencing line",
+    "Subaward paperwork for the second site",
+    "Letter of support, signed",
+    "Re: Aim 2 and the spatial data",
+    "Annual progress report due 15 November",
+    "Biosketch format changed again",
+];
+
+fn at_subject(index: &Index, m: &crate::model::Model, subject: &str) -> usize {
+    m.keys
+        .iter()
+        .position(|k| index.records[k].subject == subject)
+        .unwrap_or_else(|| panic!("no {subject}"))
+}
+
+#[test]
+fn the_grant_mail_clusters_together() {
+    let index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let c = crate::model::cluster(&m, &[], 1);
+    let aims = c.of[at_subject(&index, &m, "Aims page, third pass")];
+    let together = GRANT_MAIL
+        .iter()
+        .filter(|s| c.of[at_subject(&index, &m, s)] == aims)
+        .count();
+    assert!(together >= 6, "{together} of the grant's 8 together");
+    assert_eq!(c.clusters[aims].label.as_deref(), Some("Grant"));
+    // The robots' mail is a cluster of its own, the grant's apart from it.
+    let build = c.of[at_subject(&index, &m, "Build failed: letterbox main (clippy)")];
+    let passed = c.of[at_subject(&index, &m, "Build passed: letterbox main")];
+    assert_eq!(build, passed);
+    assert_ne!(build, aims);
+    // A cluster keeps its number from one clustering to the next.
+    let before: Vec<_> = c
+        .clusters
+        .iter()
+        .map(|cl| {
+            let keys = cl.members.iter().map(|&i| m.keys[i].clone()).collect();
+            (cl.id, cl.centre, keys)
+        })
+        .collect();
+    let again = crate::model::cluster(&m, &before, 1);
+    let ids =
+        |c: &crate::model::Clustering| -> Vec<u32> { c.clusters.iter().map(|x| x.id).collect() };
+    assert_eq!(ids(&again), ids(&c));
+    assert_eq!(
+        again.clusters[again.of[at_subject(&index, &m, "Aims page, third pass")]].id,
+        c.clusters[aims].id
+    );
+}
+
+#[test]
+fn the_same_seed_lays_out_the_same_map() {
+    let index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let a = crate::model::layout(&m, None, 1);
+    let b = crate::model::layout(&m, None, 1);
+    let bits = |p: &[crate::model::Point]| -> Vec<u32> {
+        p.iter()
+            .flat_map(|q| [q[0].to_bits(), q[1].to_bits()])
+            .collect()
+    };
+    assert_eq!(bits(&a), bits(&b));
+    assert_ne!(bits(&a), bits(&crate::model::layout(&m, None, 2)));
+    // Faithful to the angles: most of each message's nearest are near it
+    // on the map too, far more than chance would have it.
+    let f = crate::model::faithfulness(&m, &a);
+    let chance = 10.0 / (m.len() - 1) as f32;
+    assert!(
+        f > 2.5 * chance,
+        "faithfulness {f}, against {chance} by chance"
+    );
+    // Begun from where it was, it moves little.
+    let start: Vec<Option<crate::model::Point>> = a.iter().copied().map(Some).collect();
+    let gentle = crate::model::layout(&m, Some(&start), 1);
+    let fitted = crate::model::procrustes(&gentle, &a, &gentle);
+    let spread: f32 = a.iter().map(|p| p[0].abs() + p[1].abs()).sum::<f32>() / a.len() as f32;
+    let moved: f32 = fitted
+        .iter()
+        .zip(&a)
+        .map(|(p, q)| (p[0] - q[0]).abs() + (p[1] - q[1]).abs())
+        .sum::<f32>()
+        / a.len() as f32;
+    assert!(
+        moved < spread,
+        "moved {moved}, against a spread of {spread}"
+    );
+}
+
+#[test]
+fn a_new_message_lands_among_its_kind() {
+    let mut index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let laid = crate::model::layout(&m, None, 1);
+    // A build that failed, new: placed among the others, by its nearest.
+    let indexed = index::record::Indexed {
+        uid: 999,
+        size: 300,
+        raw: raw(
+            "CI <ci@runner.example>",
+            "Build failed: letterbox main (test)",
+            "Content-Type: text/plain; charset=utf-8\r\nList-Id: <ci.runner.example>\r\n",
+            "test map::cells failed.\r\n",
+        ),
+        ..Default::default()
+    };
+    let r = index::Record::of("demo", "INBOX", 1, &indexed, 0);
+    let key = r.key.clone();
+    index.cache(vec![Cached::Upsert(Box::new(r))]).unwrap();
+    let m2 = model_of(&index, Lens::Both);
+    let known: Vec<(usize, crate::model::Point)> = m
+        .keys
+        .iter()
+        .zip(&laid)
+        .map(|(k, &p)| (m2.keys.iter().position(|x| x == k).unwrap(), p))
+        .collect();
+    let new = m2.keys.iter().position(|k| *k == key).unwrap();
+    let at = crate::model::place(&m2, new, &known);
+    let mut by_place: Vec<(f32, usize)> = known
+        .iter()
+        .map(|&(i, p)| ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2), i))
+        .collect();
+    by_place.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let nearest = &index.records[&m2.keys[by_place[0].1]];
+    assert_eq!(nearest.address, "ci@runner.example", "{}", nearest.subject);
+}
+
+#[test]
+fn filing_one_grant_message_makes_the_others_suggestions() {
+    let mut index = demo_index();
+    let before = model_of(&index, Lens::Both);
+    let r01 = before.keys[at_subject(&index, &before, GRANT_MAIL[0])].clone();
+    let budget = at_subject(&index, &before, GRANT_MAIL[2]);
+    index
+        .keep(vec![Kept::Pending {
+            key: r01.clone(),
+            label: "Grant".into(),
+            on: true,
+            at: 0,
+        }])
+        .unwrap();
+    let m = model_of(&index, Lens::Both);
+    let not_it = index.keep.not_it.clone();
+    let said: Vec<&str> = m
+        .suggestions("Grant", &not_it)
+        .iter()
+        .map(|&(i, _)| index.records[&m.keys[i]].subject.as_str())
+        .collect();
+    assert!(!said.contains(&GRANT_MAIL[0]), "filed, not suggested");
+    for s in [GRANT_MAIL[1], GRANT_MAIL[2]] {
+        assert!(said.contains(&s), "{s} in {said:?}");
+    }
+    // Your answer to Mira about the biosketch is the grant's too.
+    let grant = said
+        .iter()
+        .take(2)
+        .filter(|s| GRANT_MAIL.contains(s) || s.contains("Biosketch"))
+        .count();
+    assert_eq!(grant, 2, "the nearest are the grant's: {said:?}");
+    let now = crate::model::degrees(&m.vectors[budget], &m.label_vectors["grant"].1);
+    // Said not to be: no longer suggested, and pushed away.
+    let budget_key = m.keys[budget].clone();
+    index
+        .keep(vec![Kept::NotIt {
+            key: budget_key,
+            label: "Grant".into(),
+        }])
+        .unwrap();
+    let m = model_of(&index, Lens::Both);
+    let said: Vec<&str> = m
+        .suggestions("Grant", &index.keep.not_it)
+        .iter()
+        .map(|&(i, _)| index.records[&m.keys[i]].subject.as_str())
+        .collect();
+    assert!(!said.contains(&GRANT_MAIL[2]), "{said:?}");
+    let pushed = crate::model::degrees(&m.vectors[budget], &m.label_vectors["grant"].1);
+    assert!(pushed > now, "pushed away: {now} to {pushed}");
+}
+
+#[test]
+fn two_rebuilds_are_byte_identical() {
+    let build = || {
+        let index = demo_index();
+        let m = model_of(&index, Lens::Both);
+        let c = crate::model::cluster(&m, &[], 1);
+        let laid = crate::model::layout(&m, None, 1);
+        let hues = crate::model::hues(&m.vectors);
+        let mut bytes = Vec::new();
+        for (i, p) in laid.iter().enumerate() {
+            bytes.extend(p[0].to_le_bytes());
+            bytes.extend(p[1].to_le_bytes());
+            bytes.extend(hues[i].to_le_bytes());
+            bytes.extend((c.of[i] as u32).to_le_bytes());
+        }
+        bytes
+    };
+    assert_eq!(build(), build());
+}
+
+#[test]
+fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
+    let index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let hues = crate::model::hues(&m.vectors);
+    assert!(hues.iter().all(|h| (0.0..360.0).contains(h)));
+    let a = at_subject(&index, &m, "Build failed: letterbox main (clippy)");
+    let b = at_subject(&index, &m, "Build failed: faba (test timeout)");
+    let apart = (hues[a] - hues[b]).abs();
+    assert!(
+        apart.min(360.0 - apart) < 60.0,
+        "{} and {}",
+        hues[a],
+        hues[b]
+    );
+    // Turned, mirrored, grown and moved: laid back where it was.
+    let old: Vec<crate::model::Point> = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 2.0], [3.0, 1.0]];
+    let new: Vec<crate::model::Point> = old
+        .iter()
+        .map(|p| [2.0 * p[1] + 5.0, 2.0 * p[0] - 1.0])
+        .collect();
+    let back = crate::model::procrustes(&new, &old, &new);
+    for (p, q) in back.iter().zip(&old) {
+        assert!(
+            (p[0] - q[0]).abs() < 1e-4 && (p[1] - q[1]).abs() < 1e-4,
+            "{p:?} {q:?}"
+        );
+    }
+}

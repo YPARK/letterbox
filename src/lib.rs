@@ -16,6 +16,9 @@ mod index;
 mod keymap;
 mod mail;
 mod mcp;
+// Drawn on the map, which follows.
+#[allow(dead_code)]
+mod model;
 mod net;
 mod oauth;
 mod secret;
