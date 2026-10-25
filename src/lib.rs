@@ -7,6 +7,7 @@ mod compose;
 mod config;
 mod demo;
 mod edit;
+mod filter;
 mod forest;
 mod imap;
 mod index;

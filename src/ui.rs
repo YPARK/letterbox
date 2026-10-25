@@ -2871,7 +2871,10 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 suggested == Choice::Keep,
             ),
             (
-                "discard".to_string(),
+                match s.dots[i].thrown {
+                    Some(p) => format!("discard {:.0}%", p * 100.0),
+                    None => "discard".to_string(),
+                },
                 chosen == Choice::Discard,
                 t.error,
                 t.on_accent,

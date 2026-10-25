@@ -298,7 +298,18 @@ discards it, and `y` takes what is suggested; each goes on to the next.
 moved to the Trash, at once. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
-list, and `u` and `s` mark the one picked. The map has no sidebar beside it, as its
+list, and `u` and `s` mark the one picked.
+
+letterbox learns what you throw away. Each message you trash, however it
+is trashed, teaches it that mail like it is thrown away; each you file,
+flag, or keep in the Inbox looked through when something else was
+suggested, that it is not. Like is by who sent it, from where, by which
+list, and its words, never its subject alone, so that a sender you always
+throw away is known by a subject never seen. Once it has been taught twenty
+of each, a message in the Inbox it is sure of, 80% or more, comes to be
+looked through with `discard 92%` picked; nothing is thrown away until `$`.
+What it learns is written down, encrypted with the map's index, as the
+journal `taught`, and learnt again as letterbox starts. The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages
 that fit nowhere; `M-l` lists the cluster the map is narrowed to.

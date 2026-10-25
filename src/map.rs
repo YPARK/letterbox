@@ -131,6 +131,9 @@ pub struct Dot {
     pub places: Vec<Place>,
     /// Whether another account has it too, by its `Message-ID`.
     pub twin: bool,
+    /// How likely it is to be thrown away, as learnt from what you threw
+    /// away, if it is in an Inbox and that is sure enough to say.
+    pub thrown: Option<f32>,
 }
 
 /// A cluster as the map and the sidebar show it.
@@ -269,6 +272,9 @@ pub struct Input {
     layout_wanted: bool,
     last: Option<Last>,
     corpus: Option<Corpus>,
+    /// How likely each message in an Inbox is to be thrown away, where it
+    /// is sure enough to say.
+    thrown: BTreeMap<Key, f32>,
 }
 
 /// A message as it is drawn from: its record, its labels, whether it has
@@ -310,6 +316,12 @@ pub fn input(
             (r.clone(), index.labels(&r.key), mine, index.system(&r.key))
         })
         .collect();
+    let thrown = index
+        .records
+        .values()
+        .filter(|r| index.system(&r.key).inbox)
+        .filter_map(|r| Some((r.key.clone(), index.filter.would_throw(r)?)))
+        .collect();
     let last = last.filter(|s| s.lens == lens);
     let before = last
         .map(|s| {
@@ -340,6 +352,7 @@ pub fn input(
             not_it: s.not_it.clone(),
         }),
         corpus,
+        thrown,
     }
 }
 
@@ -464,6 +477,7 @@ pub fn compute(input: Input) -> Snapshot {
         .map(|i| {
             let (r, labels, mine, system, twin) =
                 records[i].take().expect("each record a dot once");
+            let thrown = input.thrown.get(&r.key).copied();
             Dot {
                 key: r.key,
                 from: r.from,
@@ -481,6 +495,7 @@ pub fn compute(input: Input) -> Snapshot {
                 system,
                 places: r.places,
                 twin,
+                thrown,
             }
         })
         .collect();

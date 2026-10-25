@@ -258,6 +258,9 @@ pub struct Index {
     pub keep: Keep,
     cache: Option<Journal<Cached>>,
     kept: Option<Journal<Kept>>,
+    /// What you throw away, as learnt, and its journal.
+    pub filter: crate::filter::Filter,
+    taught: Option<Journal<crate::filter::Taught>>,
     /// What changes with every event taken in, so that what is drawn from
     /// the index knows to look again.
     pub version: u64,
@@ -274,6 +277,8 @@ impl Index {
             keep: Keep::default(),
             cache: None,
             kept: None,
+            filter: crate::filter::Filter::default(),
+            taught: None,
             version: 0,
             fault: None,
         }
@@ -286,8 +291,12 @@ impl Index {
     pub fn open_with(dir: &Path, identity: &Identity) -> Index {
         let recipient = identity.to_public();
         let (cache, cached) = Journal::open(dir, "cache", recipient.clone(), Some(identity));
-        let (kept, keeps) = Journal::open(dir, "keep", recipient, Some(identity));
+        let (kept, keeps) = Journal::open(dir, "keep", recipient.clone(), Some(identity));
+        let (taught, decisions) = Journal::open(dir, "taught", recipient, Some(identity));
         let mut index = Index::memory();
+        for t in decisions {
+            index.filter.learn(t);
+        }
         let mut faults = Vec::new();
         if let Some(why) = cache.fault() {
             faults.push(format!("{why}; the map is made again from the servers"));
@@ -302,8 +311,12 @@ impl Index {
         if let Some(why) = kept.fault() {
             faults.push(format!("{why}; nothing is written to it until it can be"));
         }
+        if let Some(why) = taught.fault() {
+            faults.push(format!("{why}; nothing more is learnt until it can be"));
+        }
         index.cache = Some(cache);
         index.kept = Some(kept);
+        index.taught = Some(taught);
         index.fault = (!faults.is_empty()).then(|| faults.join("; "));
         index.compact();
         index
@@ -314,10 +327,12 @@ impl Index {
     #[cfg(test)]
     pub fn writer(dir: &Path, recipient: age::x25519::Recipient) -> Index {
         let (cache, _) = Journal::open(dir, "cache", recipient.clone(), None);
-        let (kept, _) = Journal::open(dir, "keep", recipient, None);
+        let (kept, _) = Journal::open(dir, "keep", recipient.clone(), None);
+        let (taught, _) = Journal::open(dir, "taught", recipient, None);
         Index {
             cache: Some(cache),
             kept: Some(kept),
+            taught: Some(taught),
             ..Index::memory()
         }
     }
@@ -379,6 +394,47 @@ impl Index {
         {
             self.fault = Some(format!("{e:#}"));
         }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+            && taught.logs() > journal::LOGS
+            && let Err(e) = taught.compact(&self.filter.taught)
+        {
+            self.fault = Some(format!("{e:#}"));
+        }
+    }
+
+    /// Learn from what was done with the message `key`: thrown away, or
+    /// kept; and write it down. Nothing is learnt of a message not indexed,
+    /// or while the journal could not be read.
+    pub fn teach(&mut self, key: &Key, thrown: bool) -> anyhow::Result<()> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            return Ok(());
+        }
+        let Some(r) = self.records.get(key) else {
+            return Ok(());
+        };
+        let t = crate::filter::Taught {
+            key: key.clone(),
+            thrown,
+            tokens: crate::filter::Filter::tokens(r),
+        };
+        self.filter.learn(t.clone());
+        self.version += 1;
+        if let Some(taught) = &mut self.taught {
+            taught.push(t)?;
+        }
+        Ok(())
+    }
+
+    /// The message of `account` at `uid` in `folder`, by its key.
+    pub fn key_at(&self, account: &str, folder: &str, uid: u32) -> Option<Key> {
+        self.records
+            .values()
+            .find(|r| {
+                r.key.account == account
+                    && r.places.iter().any(|p| p.folder == folder && p.uid == uid)
+            })
+            .map(|r| r.key.clone())
     }
 
     /// The cache, as events to write a base of.
@@ -452,6 +508,11 @@ impl Index {
         {
             kept.flush()?;
         }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+        {
+            taught.flush()?;
+        }
         Ok(())
     }
 
@@ -464,6 +525,11 @@ impl Index {
             && kept.fault().is_none()
         {
             kept.tick()?;
+        }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+        {
+            taught.tick()?;
         }
         Ok(())
     }

@@ -7138,3 +7138,165 @@ fn the_keys_of_the_inbox_looked_through_lose_nothing_and_act_on_the_one_picked()
     let s = app.map.snapshot.clone().unwrap();
     assert_ne!(s.dots[picked].flags.seen, seen);
 }
+
+// ---- What you throw away, learnt ----
+
+/// A message from `address` about `subject`, by `id`.
+fn sent_by(id: &str, address: &str, subject: &str) -> index::Record {
+    let mut r = record(id, subject);
+    r.address = address.to_string();
+    r.from = address.to_string();
+    r.preview = String::new();
+    r
+}
+
+/// What `n` mails from a shop and `n` from colleagues teach, each a subject
+/// of its own.
+fn taught(n: usize) -> crate::filter::Filter {
+    let mut f = crate::filter::Filter::default();
+    for k in 0..n {
+        for (address, subject, thrown) in [
+            (
+                "deals@shop.example",
+                format!("Save {k} percent on item {k}"),
+                true,
+            ),
+            (
+                "ada@analytical.example",
+                format!("Engine notes, part {k}"),
+                false,
+            ),
+        ] {
+            let r = sent_by(&format!("{k}{thrown}"), address, &subject);
+            f.learn(crate::filter::Taught {
+                key: r.key.clone(),
+                thrown,
+                tokens: crate::filter::Filter::tokens(&r),
+            });
+        }
+    }
+    f
+}
+
+#[test]
+fn what_you_throw_away_is_learnt_by_who_sent_it_not_its_subject() {
+    // Too little taught: nothing said.
+    let few = taught(crate::filter::READY as usize - 1);
+    assert!(!few.ready());
+    let new_deal = sent_by("x", "deals@shop.example", "A brand new offer, never seen");
+    assert_eq!(few.would_throw(&new_deal), None);
+    // Enough: the shop's new mail, of a subject never seen, would be thrown
+    // away; Ada's would not.
+    let f = taught(25);
+    assert!(f.ready());
+    let p = f.would_throw(&new_deal).expect("thrown away");
+    assert!(p >= crate::filter::SURE, "{p}");
+    let from_ada = sent_by(
+        "y",
+        "ada@analytical.example",
+        "A brand new offer, never seen",
+    );
+    assert_eq!(f.would_throw(&from_ada), None);
+    assert!(f.odds(&crate::filter::Filter::tokens(&from_ada)) < 0.5);
+    // The same taught in the same order: the same odds.
+    let again = taught(25);
+    assert_eq!(
+        f.odds(&crate::filter::Filter::tokens(&new_deal)),
+        again.odds(&crate::filter::Filter::tokens(&new_deal))
+    );
+}
+
+#[test]
+fn what_was_learnt_is_written_down_and_learnt_again_as_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let deal = sent_by("d", "deals@shop.example", "Save now");
+    let note = sent_by("n", "ada@analytical.example", "Engine notes");
+    let odds;
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![
+                Cached::Upsert(Box::new(deal.clone())),
+                Cached::Upsert(Box::new(note.clone())),
+            ])
+            .unwrap();
+        for _ in 0..3 {
+            index.teach(&deal.key, true).unwrap();
+            index.teach(&note.key, false).unwrap();
+        }
+        // One not indexed teaches nothing.
+        index.teach(&record("gone", "Gone").key, true).unwrap();
+        assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
+        odds = index.filter.odds(&crate::filter::Filter::tokens(&deal));
+        index.flush().unwrap();
+    }
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
+    assert_eq!(
+        index.filter.odds(&crate::filter::Filter::tokens(&deal)),
+        odds
+    );
+    // Its key, by where it is.
+    assert!(index.key_at("a@b.c", "INBOX", 1).is_some());
+}
+
+#[test]
+fn trashing_teaches_and_the_inbox_looked_through_says_what_would_be_thrown_away() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    // d on the map: thrown away, and learnt.
+    let ci = s
+        .dots
+        .iter()
+        .position(|d| d.subject.starts_with("Build passed"))
+        .unwrap();
+    app.map.cursor = Some(s.dots[ci].key.clone());
+    press(&mut app, &["d"]);
+    assert_eq!(app.index.lock().unwrap().filter.thrown, 1);
+    // Taught enough that the CI's mail is thrown away, and the rest kept.
+    let (ci_keys, kept_keys): (Vec<_>, Vec<_>) = {
+        let index = app.index.lock().unwrap();
+        let ci: Vec<_> = index
+            .records
+            .values()
+            .filter(|r| r.from == "CI")
+            .map(|r| r.key.clone())
+            .collect();
+        let kept: Vec<_> = index
+            .records
+            .values()
+            .filter(|r| r.from != "CI")
+            .map(|r| r.key.clone())
+            .take(25)
+            .collect();
+        (ci, kept)
+    };
+    {
+        let mut index = app.index.lock().unwrap();
+        for k in 0..25 {
+            index.teach(&ci_keys[k % ci_keys.len()], true).unwrap();
+            index.teach(&kept_keys[k], false).unwrap();
+        }
+    }
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 170, 40);
+    app.settle(Duration::from_secs(5));
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    let failed = rows
+        .iter()
+        .copied()
+        .find(|&i| s.dots[i].from == "CI")
+        .expect("the CI's mail in the Inbox");
+    assert!(
+        s.dots[failed].thrown.is_some(),
+        "{:?}",
+        s.dots[failed].thrown
+    );
+    assert_eq!(app.choice(failed), app::Choice::Discard);
+    let screen = app::screen(&mut app, 170, 60);
+    assert!(screen.contains("✓ discard "), "{screen}");
+    assert!(screen.contains('%'), "{screen}");
+}

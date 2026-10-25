@@ -1660,6 +1660,10 @@ impl App {
             messages.iter_mut().for_each(&mut set);
         }
         self.index_flag(account, folder, uid, flag, on);
+        // Flagged, it is kept: learnt as not thrown away.
+        if changed && flag == Flag::Flagged && on {
+            self.teach_at(account, folder, uid, false);
+        }
         if changed
             && flag == Flag::Seen
             && let Some(f) = self.folder_mut(account, folder)
@@ -3378,6 +3382,27 @@ impl App {
         }
     }
 
+    /// Learn from what was done with the message of `account` at `uid` in
+    /// `folder`: thrown away, or kept.
+    fn teach_at(&mut self, account: usize, folder: &str, uid: u32, thrown: bool) {
+        let Some(ident) = self.accounts.get(account).map(|a| a.ident.clone()) else {
+            return;
+        };
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(key) = index.key_at(&ident, folder, uid) {
+            let _ = index.teach(&key, thrown);
+        }
+    }
+
+    /// Learn from what was done with the messages `keys`: thrown away, or
+    /// kept.
+    fn teach(&mut self, keys: &[crate::index::Key], thrown: bool) {
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        for key in keys {
+            let _ = index.teach(key, thrown);
+        }
+    }
+
     fn move_to_trash(
         &mut self,
         account: usize,
@@ -3386,6 +3411,8 @@ impl App {
         message_id: String,
         trash: String,
     ) {
+        // Thrown away: what is learnt of what you throw away.
+        self.teach_at(account, &from, uid, true);
         let name = self.folder_label(account, &trash);
         self.drop_listed(account, &from, uid);
         self.status = format!("moved to {name} · d there puts it back, for 7 days");
@@ -4732,6 +4759,8 @@ impl App {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
+        // Filed, it is kept: learnt as not thrown away.
+        self.teach(&keys, false);
         let at = jiff::Timestamp::now().as_second();
         let mut filed = 0;
         let mut pending = Vec::new();
@@ -5086,9 +5115,13 @@ impl App {
         rows
     }
 
-    /// What is suggested for the message `i` of `s`: filed where it would
-    /// go, else kept.
+    /// What is suggested for the message `i` of `s`: discarded, if mail
+    /// like it is thrown away, as learnt; else filed where it would go;
+    /// else kept.
     pub fn suggested(s: &map::Snapshot, i: usize) -> Choice {
+        if s.dots[i].thrown.is_some() {
+            return Choice::Discard;
+        }
         s.suggestion(i)
             .map_or(Choice::Keep, |l| Choice::Move(l.to_string()))
     }
@@ -5456,14 +5489,22 @@ impl App {
         let mut moves: std::collections::BTreeMap<String, Vec<crate::index::Key>> =
             std::collections::BTreeMap::new();
         let mut discard = Vec::new();
+        let mut kept = Vec::new();
         for i in self.review_rows() {
             let key = s.dots[i].key.clone();
+            let chosen = self
+                .review
+                .as_ref()
+                .is_some_and(|r| r.chosen.contains_key(&key));
             match self.choice(i) {
                 Choice::Move(label) => moves.entry(label).or_default().push(key),
                 Choice::Discard => discard.push(key),
+                // Kept by choice, not as it was: learnt as not thrown away.
+                Choice::Keep if chosen => kept.push(key),
                 Choice::Keep => {}
             }
         }
+        self.teach(&kept, false);
         if let Some(r) = &mut self.review {
             r.relabel = None;
             r.chosen.clear();
