@@ -488,6 +488,8 @@ pub enum Button {
 /// its attachments, or a link.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// The message itself, as its HTML, in the browser.
+    Page,
     File {
         at: usize,
         name: String,
@@ -572,6 +574,8 @@ pub enum Dialog {
     RenameLabel(String, String),
     /// Files to attach to the message being written, as they are picked.
     Attach(Box<crate::pick::Picker>),
+    /// What the map shows, and how, to be changed: `keymap::VIEW`.
+    View,
 }
 
 impl Dialog {
@@ -1860,6 +1864,46 @@ impl App {
         self.shown.get(self.list.selected()?)
     }
 
+    /// The message picked: on the map, where it is looked at, else in the
+    /// list.
+    fn picked(&self) -> Option<Listed> {
+        if self.map.mode == Mode::Map && self.focus == Focus::List {
+            return self.listed_dot(&self.dot()?);
+        }
+        self.current().cloned()
+    }
+
+    /// Archive the message picked: out of the Inbox, to Archive.
+    fn archive(&mut self) {
+        let Some(Listed {
+            account,
+            folder,
+            summary,
+        }) = self.picked()
+        else {
+            self.status = "no message to archive".to_string();
+            return;
+        };
+        let archived = self.accounts[account]
+            .folders
+            .iter()
+            .any(|f| f.path == folder && f.role == Role::Archive);
+        if archived {
+            self.status = "in Archive already".to_string();
+            return;
+        }
+        self.drop_listed(account, &folder, summary.uid);
+        self.status = "archived, out of the Inbox".to_string();
+        self.ask(
+            account,
+            Ask::Archive {
+                folder,
+                uid: summary.uid,
+                message_id: summary.message_id,
+            },
+        );
+    }
+
     /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     fn open_folder(&mut self) {
@@ -2388,28 +2432,20 @@ impl App {
             Act::PreviousMessage => self.next(-1),
             Act::Seen => self.toggle(Flag::Seen),
             Act::Flag => self.toggle(Flag::Flagged),
-            Act::ShowRead if self.map.mode == Mode::Map => {
-                self.map.hide_read = !self.map.hide_read;
-                self.status = if self.map.hide_read {
-                    "read mail hidden: r shows it".to_string()
-                } else {
-                    "read mail shown".to_string()
-                };
-            }
-            Act::ShowSent => {
-                self.map.hide_sent = !self.map.hide_sent;
-                self.status = if self.map.hide_sent {
-                    "sent mail hidden: S shows it".to_string()
-                } else {
-                    "sent mail shown".to_string()
-                };
-            }
+            Act::Lens
+            | Act::Since
+            | Act::Colours
+            | Act::NewOnly
+            | Act::ShowRead
+            | Act::ShowSent => self.view(act),
+            Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
             Act::Mark => self.mark_cluster(),
             Act::Move
             | Act::NewLabel
             | Act::FileFirst
             | Act::FileAll
             | Act::NotIt
+            | Act::View
             | Act::Relayout => {
                 self.status = "M-g shows the map, where mail is filed".to_string();
             }
@@ -2417,42 +2453,8 @@ impl App {
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
-            Act::Lens => {
-                self.map.lens = match self.map.lens {
-                    crate::index::Lens::Both => crate::index::Lens::Words,
-                    crate::index::Lens::Words => crate::index::Lens::People,
-                    crate::index::Lens::People => crate::index::Lens::Both,
-                };
-                self.status = format!("the map laid out by {}", self.map.lens.name());
-            }
-            Act::Since => {
-                self.map.since = self.map.since.next();
-                self.status = format!("the map of {}", self.map.since.name());
-            }
-            Act::Colours => {
-                self.map.colour = self.map.colour.next();
-                self.status = self.map.colour.explain().to_string();
-            }
-            Act::NewOnly => {
-                self.map.new_only = !self.map.new_only;
-                self.status = if self.map.new_only {
-                    "areas with nothing new dimmed".to_string()
-                } else {
-                    "every area as bright as it is".to_string()
-                };
-            }
-            Act::ShowRead => {
-                let say = |act| keymap::keys_for(act).join(" or ");
-                self.status = format!(
-                    "reply is {}, to all {}; {} looks for new mail",
-                    say(Act::Reply),
-                    say(Act::ReplyAll),
-                    say(Act::NewMail)
-                );
-            }
-            Act::Browser => self.open_in_browser(),
-            Act::SaveFiles => self.save_attachments(),
             Act::Files => self.list_files(),
+            Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),
             Act::Remove => self.ask_to_remove(),
             Act::Trash => self.delete(),
@@ -2474,6 +2476,7 @@ impl App {
             Dialog::Form(_) => self.form_key(key),
             Dialog::Files(_) => self.files_key(key),
             Dialog::Attach(_) => self.attach_key(key),
+            Dialog::View => self.view_key(key),
             Dialog::Trash(_) => match keymap::act(key) {
                 Some(Act::Down) => self.dialog.step(1),
                 Some(Act::Up) => self.dialog.step(-1),
@@ -2551,6 +2554,12 @@ impl App {
             (Dialog::Files(_), _) => self.dialog = Dialog::Closed,
             (Dialog::Attach(picker), Some(Target::Item(i))) => picker.click(i),
             (Dialog::Attach(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::View, Some(Target::Item(i))) => {
+                if let Some(&(_, act, _)) = keymap::VIEW.get(i) {
+                    self.view(act);
+                }
+            }
+            (Dialog::View, _) => self.dialog = Dialog::Closed,
             (Dialog::Form(form), Some(Target::Field(i))) if !form.checking => {
                 if i == KEEP && form.at == KEEP {
                     form.turn(1);
@@ -2859,25 +2868,19 @@ impl App {
             self.status = "nothing to list: ⏎ reads the message picked".to_string();
             return;
         };
-        let mut items: Vec<Item> = m
-            .attachments
-            .iter()
-            .enumerate()
-            .map(|(at, a)| Item::File {
-                at,
-                name: a.name.clone(),
-                mime: a.mime.clone(),
-                size: a.size,
-            })
-            .collect();
+        let mut items: Vec<Item> = vec![Item::Page];
+        items.extend(m.attachments.iter().enumerate().map(|(at, a)| Item::File {
+            at,
+            name: a.name.clone(),
+            mime: a.mime.clone(),
+            size: a.size,
+        }));
         items.extend(m.links.iter().cloned().map(Item::Link));
-        if items.is_empty() {
-            self.status = "no attachments or links".to_string();
-            return;
-        }
+        // On its first file, if it has one; else on the message itself.
+        let at = usize::from(items.len() > 1);
         self.dialog = Dialog::Files(Files {
             items,
-            at: 0,
+            at,
             note: None,
         });
     }
@@ -2891,6 +2894,10 @@ impl App {
             (Some(Act::Up), _) => self.dialog.step(-1),
             (Some(Act::Open), _) | (_, KeyCode::Char('o')) => self.open_item(),
             (_, KeyCode::Char('s')) => self.save_item(),
+            (_, KeyCode::Char('S')) => {
+                self.dialog = Dialog::Closed;
+                self.save_attachments();
+            }
             (_, KeyCode::Char('y')) => {
                 if let Some(Item::Link(url)) = files.items.get(files.at) {
                     self.launch = Some(Launch::Copy(url.clone()));
@@ -2908,6 +2915,10 @@ impl App {
             return;
         };
         match files.items.get(files.at).cloned() {
+            Some(Item::Page) => {
+                self.dialog = Dialog::Closed;
+                self.open_in_browser();
+            }
             Some(Item::File { at, name, .. }) => {
                 let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
                     return;
@@ -3286,11 +3297,11 @@ impl App {
     /// Answer the message picked, as `how` says; read first, if it was
     /// not.
     fn respond(&mut self, how: Respond) {
-        let Some(summary) = self.current() else {
+        let Some(summary) = self.picked() else {
             self.status = "no message to answer".to_string();
             return;
         };
-        let (account, folder, uid) = (summary.account, summary.folder.clone(), summary.uid);
+        let (account, folder, uid) = (summary.account, summary.folder, summary.summary.uid);
         if let Some(message) = self.cached(account, &folder, uid) {
             self.open_reply(account, &folder, &message, how);
             return;
@@ -3609,7 +3620,7 @@ impl App {
                 Act::Seen => return self.region_flag(Flag::Seen),
                 Act::Flag => return self.region_flag(Flag::Flagged),
                 Act::Trash => return self.region_trash(),
-                Act::SaveFiles => return self.region_archive(),
+                Act::Archive => return self.region_archive(),
                 Act::Back => {
                     self.map.region = None;
                     self.status = "let go".to_string();
@@ -3627,7 +3638,7 @@ impl App {
             Act::Seen => self.dot_flag(Flag::Seen),
             Act::Flag => self.dot_flag(Flag::Flagged),
             Act::Trash => self.delete_dot(),
-            Act::SaveFiles => {
+            Act::Archive => {
                 if let Some(dot) = self.dot() {
                     self.mark(vec![dot.key], None);
                     self.region_archive();
@@ -3646,6 +3657,74 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// A key in the map's view menu: what it shows changed, the menu kept
+    /// open to change more; or the map laid out again; any other key
+    /// closes it.
+    fn view_key(&mut self, key: KeyEvent) {
+        let row = match key.code {
+            KeyCode::Char(c) => keymap::VIEW.iter().find(|v| v.0 == c),
+            _ => None,
+        };
+        match row {
+            Some(&(_, act, _)) => self.view(act),
+            None => self.dialog = Dialog::Closed,
+        }
+    }
+
+    /// Change what the map shows, or how, as `act` says.
+    fn view(&mut self, act: Act) {
+        self.status = match act {
+            Act::Lens => {
+                self.map.lens = match self.map.lens {
+                    crate::index::Lens::Both => crate::index::Lens::Words,
+                    crate::index::Lens::Words => crate::index::Lens::People,
+                    crate::index::Lens::People => crate::index::Lens::Both,
+                };
+                format!("the map laid out by {}", self.map.lens.name())
+            }
+            Act::Since => {
+                self.map.since = self.map.since.next();
+                format!("the map of {}", self.map.since.name())
+            }
+            Act::Colours => {
+                self.map.colour = self.map.colour.next();
+                self.map.colour.explain().to_string()
+            }
+            Act::ShowRead => {
+                self.map.hide_read = !self.map.hide_read;
+                if self.map.hide_read {
+                    "read mail hidden"
+                } else {
+                    "read mail shown"
+                }
+                .to_string()
+            }
+            Act::ShowSent => {
+                self.map.hide_sent = !self.map.hide_sent;
+                if self.map.hide_sent {
+                    "sent mail hidden"
+                } else {
+                    "sent mail shown"
+                }
+                .to_string()
+            }
+            Act::NewOnly => {
+                self.map.new_only = !self.map.new_only;
+                if self.map.new_only {
+                    "areas with nothing new dimmed"
+                } else {
+                    "every area as bright as it is"
+                }
+                .to_string()
+            }
+            Act::Relayout => {
+                self.dialog = Dialog::Closed;
+                return self.relayout();
+            }
+            _ => return,
+        };
     }
 
     /// Move the map's cursor that way, and read what it picks once moving

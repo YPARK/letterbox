@@ -1218,7 +1218,8 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         app.message().unwrap().subject,
         "Computable numbers: the paper, and the figures"
     );
-    press(&mut app, &["a", "a"]);
+    // All of them, twice, from what o opens: S.
+    press(&mut app, &["o", "S", "o", "S"]);
     assert!(dir.path().join("states.txt").is_file());
     assert!(
         dir.path().join("states (2).txt").is_file(),
@@ -1230,9 +1231,14 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     // One of them, from the list of its files and links.
     let cache = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
-    press(&mut app, &["f"]);
+    press(&mut app, &["o"]);
     let files = app.dialog.files().expect("listed");
-    assert_eq!(files.items.len(), 2, "two attachments, no links");
+    assert_eq!(
+        files.items.len(),
+        3,
+        "the message, two attachments, no links"
+    );
+    assert_eq!(files.at, 1, "begun on the first file");
     press(&mut app, &["j", "s"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
 
@@ -1243,7 +1249,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     };
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
     assert!(pdf.starts_with(cache.path()));
-    click_at(&mut app, app::Target::Item(0));
+    click_at(&mut app, app::Target::Item(1));
     let Some(app::Launch::Open(text)) = app.launch.take() else {
         panic!("not for the system: {:?}", app.launch);
     };
@@ -3060,26 +3066,27 @@ fn a_message_with_files_is_sent_in_parts_each_as_it_was() {
 #[test]
 fn reply_forward_and_new_mail_have_their_keys() {
     let mut app = demo();
-    // r is not reply: it says what is.
-    press(&mut app, &["r"]);
-    assert!(app.compose.is_none());
-    assert!(app.status.contains("C-r"), "{}", app.status);
     press(&mut app, &["<c-n>"]);
     assert!(app.status.contains("new mail"), "{}", app.status);
-    press(&mut app, &["<c-r>"]);
-    let text = app.compose.as_ref().unwrap().buffer.text();
-    assert!(text.contains("Subject: Re: "), "{text}");
-    press(&mut app, &["<c-g>", "e"]);
-    assert!(app.compose.is_some(), "e replies to all");
-    press(&mut app, &["<c-g>", "<c-f>"]);
-    let text = app.compose.as_ref().unwrap().buffer.text();
-    assert!(text.contains("Subject: Fwd: "), "{text}");
-    press(&mut app, &["<c-g>"]);
+    // As in Gmail: r replies, a to all, f forwards; C-r and C-f too.
+    for (keys, subject) in [
+        (["r"], "Subject: Re: "),
+        (["<c-r>"], "Subject: Re: "),
+        (["a"], "Subject: Re: "),
+        (["f"], "Subject: Fwd: "),
+        (["<c-f>"], "Subject: Fwd: "),
+    ] {
+        press(&mut app, &keys);
+        let text = app.compose.as_ref().unwrap().buffer.text();
+        assert!(text.contains(subject), "{keys:?}: {text}");
+        press(&mut app, &["<c-g>"]);
+        assert!(app.compose.is_none());
+    }
     let help = {
         press(&mut app, &["?"]);
         app::screen(&mut app, 100, 60)
     };
-    for key in ["C-r", "e", "C-f", "C-n", "R"] {
+    for key in ["C-r", "f C-f", "C-n", "R"] {
         assert!(help.contains(key), "{key} in {help}");
     }
 }
@@ -3589,12 +3596,16 @@ fn the_wheel_moves_in_the_dialog_open_and_not_behind_it() {
         .position(|m| m.from == "Alan Turing")
         .unwrap();
     app.list.select(Some(turing));
-    press(&mut app, &["<enter>", "f"]);
+    press(&mut app, &["<enter>", "o"]);
     let _ = app::screen(&mut app, 120, 40);
     for _ in 0..3 {
         app.mouse(mouse(MouseEventKind::ScrollDown, 1, 1));
     }
-    assert_eq!(app.dialog.files().expect("listed").at, 1, "the last of two");
+    assert_eq!(
+        app.dialog.files().expect("listed").at,
+        2,
+        "the last of three"
+    );
     press(&mut app, &["<esc>"]);
 
     // A question asked, the list behind it stays where it is.
@@ -3616,15 +3627,6 @@ fn space_pages_the_message_and_leaves_the_sidebar_alone() {
     assert_eq!(app.list.selected(), picked, "nor the messages");
     press(&mut app, &["<pgdn>"]);
     assert_ne!(app.row, row, "the page key does");
-}
-
-#[test]
-fn r_says_the_keys_the_table_gives_reply() {
-    let mut app = demo();
-    press(&mut app, &["r"]);
-    for name in crate::keymap::keys_for(crate::keymap::Act::ReplyAll) {
-        assert!(app.status.contains(name), "{name} in {}", app.status);
-    }
 }
 
 #[test]
@@ -5026,7 +5028,9 @@ fn the_map_is_narrowed_to_a_cluster_and_listed() {
 fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
     let mut app = demo_map();
     let all = app.map.shown(jiff::Timestamp::now().as_second()).len();
-    press(&mut app, &["w"]);
+    // From the view menu, which stays open to change more.
+    press(&mut app, &[",", "w"]);
+    assert!(matches!(app.dialog, app::Dialog::View));
     assert_eq!(app.map.lens, Lens::Words);
     assert_eq!(app.map.snapshot.as_ref().unwrap().lens, Lens::Words);
     assert!(
@@ -5047,12 +5051,20 @@ fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
     press(&mut app, &["r"]);
     let unread = app.map.shown(now).len();
     assert_eq!(unread, UNREAD as usize);
-    press(&mut app, &["r", "C"]);
+    press(&mut app, &["r", "c"]);
     assert_eq!(app.map.colour, crate::map::Colour::Cursor);
     let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains("how near the message picked"), "{screen}");
-    press(&mut app, &["C", "!"]);
+    assert!(screen.contains("how near the one picked"), "{screen}");
+    press(&mut app, &["c", "c", "n"]);
     assert!(app.map.new_only);
+    press(&mut app, &["s"]);
+    assert!(app.map.hide_sent);
+    // Any other key closes it; l lays the map out again.
+    press(&mut app, &["<esc>"]);
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    press(&mut app, &[",", "l"]);
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    assert!(app.map.preview.is_some(), "{}", app.status);
 }
 
 #[test]
@@ -5263,7 +5275,7 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
         keys: hotel,
         boxed: None,
     });
-    press(&mut app, &["a"]);
+    press(&mut app, &["e"]);
     let s = app.map.snapshot.clone().unwrap();
     for d in s
         .dots
@@ -5295,6 +5307,56 @@ fn pick_subject(app: &mut App, subject: &str) {
         .position(|d| d.subject == subject)
         .unwrap_or_else(|| panic!("no {subject}"));
     app.map.cursor = Some(s.dots[i].key.clone());
+}
+
+#[test]
+fn keys_mean_the_same_on_the_map_as_in_the_list() {
+    let mut app = demo_map();
+    // r answers the message picked on the map, not the list's.
+    pick_subject(&mut app, "Aims page, third pass");
+    press(&mut app, &["r"]);
+    let text = app.compose.as_ref().expect("written").buffer.text();
+    assert!(
+        text.contains("Subject: Re: Aims page, third pass"),
+        "{text}"
+    );
+    press(&mut app, &["<c-g>"]);
+    // e archives it, as it archives in the list.
+    press(&mut app, &["e"]);
+    let (_, inbox) = dot_labels(&app, "Aims page, third pass");
+    assert!(!inbox, "{}", app.status);
+    // ⌘L, or Super+L, back to the list.
+    app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::SUPER));
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    let first = app.shown[0].summary.subject.clone();
+    press(&mut app, &["e"]);
+    assert_eq!(app.status, "archived, out of the Inbox");
+    assert!(app.shown.iter().all(|m| m.summary.subject != first));
+}
+
+#[test]
+fn space_marks_in_the_picker_after_typing_too() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["one draft.txt", "two draft.txt", "notes.txt"] {
+        std::fs::write(dir.path().join(name), b"x").unwrap();
+    }
+    let mut p = crate::pick::Picker::open(dir.path().to_path_buf());
+    for c in "draft".chars() {
+        p.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(p.shown().len(), 3, "..: and the two drafts");
+    p.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    p.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(p.filter, "draft");
+    let crate::pick::Picked::Take(files) = p.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("none taken");
+    };
+    let names: Vec<_> = files
+        .iter()
+        .map(|f| f.file_name().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["one draft.txt", "two draft.txt"]);
 }
 
 /// The labels of the map's message with `subject`, and whether it is in

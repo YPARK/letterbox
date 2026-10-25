@@ -121,6 +121,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Form(form) => Some(form_dialog(f, &t, form)),
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
+        Dialog::View => Some(view_dialog(f, &t, &app.map)),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
@@ -396,6 +397,7 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     let mut lines = vec![Line::raw("")];
     for (i, item) in files.items.iter().enumerate() {
         let (icon, name, what) = match item {
+            Item::Page => ("◳", "this message".to_string(), "browser".to_string()),
             Item::File {
                 name,
                 mime,
@@ -453,13 +455,55 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     f.render_widget(
         Paragraph::new(lines).block(dialog(
             t,
-            "Files and links",
-            "⏎ open · s save · y copy address · esc close",
+            "Open",
+            "⏎ open · s save · S save all · y copy address · esc close",
         )),
         area,
     );
     let targets = (0..files.items.len())
         .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
+        .collect();
+    (area, targets)
+}
+
+/// What the map shows, and how, each by the key that changes it, with what
+/// it is now; a row clicked is its key pressed.
+fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (Rect, Targets) {
+    use crate::keymap::Act;
+    let on = |b: bool| if b { "on" } else { "off" };
+    let shown = |hidden: bool| if hidden { "hidden" } else { "shown" };
+    let colour = match map.colour {
+        crate::map::Colour::Angle => "what it is about",
+        crate::map::Colour::Cursor => "how near the one picked",
+        crate::map::Colour::State => "its state",
+    };
+    let mut lines = vec![Line::raw("")];
+    for &(key, act, what) in keymap::VIEW {
+        let now = match act {
+            Act::Lens => map.lens.name(),
+            Act::Since => map.since.name(),
+            Act::Colours => colour,
+            Act::ShowRead => shown(map.hide_read),
+            Act::ShowSent => shown(map.hide_sent),
+            Act::NewOnly => on(map.new_only),
+            _ => "",
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {key}  "), Style::new().fg(t.accent).bold()),
+            Span::styled(format!("{what:<18}"), Style::new().fg(t.text)),
+            Span::styled(now, Style::new().fg(t.dim)),
+        ]));
+    }
+    let width = 52.min(f.area().width);
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, "View", "a key changes it · esc closes")),
+        area,
+    );
+    let room = width.saturating_sub(4);
+    let targets = (0..keymap::VIEW.len())
+        .map(|i| (spot(area, 1 + i, 0, room), Target::Item(i)))
         .collect();
     (area, targets)
 }
@@ -2239,6 +2283,7 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
         _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
+        _ if matches!(app.dialog, Dialog::View) => Pane::Viewing,
         _ if app.compose.is_some() => Pane::Writing,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,

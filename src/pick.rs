@@ -288,7 +288,7 @@ impl Picker {
                 Some(Entry::File { .. }) => return self.take(),
                 _ => self.open_here(),
             },
-            KeyCode::Char(' ') if self.filter.is_empty() || !self.marked.is_empty() => {
+            KeyCode::Char(' ') => {
                 self.mark_here();
                 self.step(1);
             }

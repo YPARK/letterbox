@@ -122,30 +122,24 @@ letterbox search grant report --account Work
 | `s` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
 | `c` | write a message |
-| `C-r` | reply to the sender |
-| `e` | reply to all: the sender, the others it went to copied |
-| `C-f` | forward it, its files with it |
-| `o` | open the message in the browser, as its HTML |
-| `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
-| `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`); in the map, take it, or what is marked, out of the Inbox |
+| `r`, `C-r` | reply to the sender |
+| `a` | reply to all: the sender, the others it went to copied |
+| `f`, `C-f` | forward it, its files with it |
+| `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
+| `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
 | `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
-| `M-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
+| `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
-| `w` | in the map, lay it out by words and people, words alone, or people alone |
-| `t` | in the map, all of it, this week's, or today's |
-| `C` | in the map, colour by what it is about, by how near the message picked, or by its state |
-| `r` | in the map, show or hide read mail; elsewhere, say which keys reply |
-| `S` | in the map, show or hide the mail you sent, drawn ▹ beside the mail it answers |
-| `!` | in the map, dim the areas with nothing new |
+| `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
 | `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
 | `y` / `Y` / `-` | once filed, the label's first suggestion filed too, or all of them; `-` says the first is not one, and the map learns it |
-| `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `a`, `u` and `s` then act on all of it, `a` taking it out of the Inbox |
-| `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it |
+| `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
+| `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?` | all the keys |
 | `q` | quit |
 
@@ -156,7 +150,7 @@ shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`,
 or a click on Map at the top right, shows the map in any terminal, and
 List goes back.
 
-`c` opens a message to write, `C-r` a reply, over the list or the map,
+`c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
 back, `M-f` `M-b` `M-d` by word. `C-SPC` sets the mark: `C-w` kills the
@@ -206,29 +200,30 @@ flagged, `▪` labelled by you, and a digit for several in one. Mail you
 sent is placed by whom it went to, as mail come in is by whom it is
 from, so an answer lies beside the mail it answers. Mail come since the map was last
 looked at, and still in the Inbox, is drawn reversed. Its colour is what
-it is about, at one lightness for every hue; `C` turns it to how near
+it is about, at one lightness for every hue; `,` `c` turns it to how near
 the message picked, by angle, or to its state. Each label has an anchor,
 `◆` in its hue with its name; a cluster that is no label yet has a
 tinted `◇` with its three commonest words, or its senders when the map
 is laid out by people. The line under the map says how faithful it is:
 of each message's ten nearest by what they say, how many are near it on
-the map too. Below 70%, `M-r` lays it out again from where it is, and
+the map too. Below 70%, `M-r` (or `,` `l`) lays it out again from where it is, and
 shows what moved, with trails, to keep or drop.
 
 The arrows and `h` `j` `k` `l` go to the nearest message that way, and
 the message read beside the map follows, with its labels, the cluster it
 is in, and the five messages nearest it. `[` and `]` narrow the map to
-one cluster after another. `w` lays it out by words and people, by words
-alone or by people alone; `t` shows all of it, this week's or today's;
-`r` hides read mail, `S` the mail you sent, and `!` dims the clusters
-with nothing new. The
+one cluster after another. `,` opens what the map shows, and how, each
+by a key, kept open to change more: `w` lays it out by words and people,
+by words alone or by people alone; `t` shows all of it, this week's or
+today's; `r` hides read mail, `s` the mail you sent, and `n` dims the
+clusters with nothing new. The
 sidebar lists the clusters too, and the messages that fit nowhere; `M-l`
 lists the one picked.
 
 `m` moves the message picked onto a cluster: `enter` on a message of
 it, or a click on its anchor. It is given the cluster's label and taken
 out of the Inbox; `N` gives it a new label instead. `v` marks a cluster,
-or drag a box with the mouse; then `m`, `d`, `a`, `u` and `s` act on all
+or drag a box with the mouse; then `m`, `d`, `e`, `u` and `s` act on all
 of it. Once a message is filed, the message read says what would go to
 the label too: `y` files the first, `Y` all of them, and `-` says the
 first is not one, which the map learns from. `R` renames a label.

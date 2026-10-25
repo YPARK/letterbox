@@ -36,17 +36,18 @@ pub enum Act {
     Reply,
     ReplyAll,
     Forward,
-    Browser,
     Files,
-    SaveFiles,
+    /// Out of the Inbox, to Archive.
+    Archive,
     NewMail,
     AddAccount,
     Rename,
     Remove,
     Help,
     Quit,
-    /// `r`: in the map, read mail shown or hidden; elsewhere, as it replies
-    /// in other mail programs, says which keys do.
+    /// The map's view, to be changed: the keys of `VIEW`.
+    View,
+    /// In the map, read mail shown or hidden.
     ShowRead,
     /// In the map, mail sent from here shown or hidden.
     ShowSent,
@@ -89,6 +90,8 @@ pub enum Pane {
     Picking,
     /// Picking files to attach to the message being written.
     Attaching,
+    /// The map's view, being changed.
+    Viewing,
     /// The map, in the middle pane.
     Map,
 }
@@ -110,7 +113,18 @@ pub struct Binding {
 }
 
 use Act::*;
-use Pane::{Attaching, List, Map, Picking, Reader, Side, Writing};
+use Pane::{Attaching, List, Map, Picking, Reader, Side, Viewing, Writing};
+
+/// What the map's view menu changes, by the key that changes it there.
+pub const VIEW: &[(char, Act, &str)] = &[
+    ('w', Lens, "lens"),
+    ('t', Since, "since"),
+    ('c', Colours, "colour"),
+    ('r', ShowRead, "read mail"),
+    ('s', ShowSent, "sent mail"),
+    ('n', NewOnly, "new only"),
+    ('l', Relayout, "lay it out again"),
+];
 
 pub const KEYS: &[Binding] = &[
     Binding {
@@ -188,23 +202,23 @@ pub const KEYS: &[Binding] = &[
         help: "write a message",
     },
     Binding {
-        keys: &[("C-r", Reply)],
-        name: "C-r",
-        hint: "C-r",
+        keys: &[("r", Reply), ("C-r", Reply)],
+        name: "r C-r",
+        hint: "r",
         foot: &[(List, "reply"), (Reader, "reply")],
         help: "reply to the sender",
     },
     Binding {
-        keys: &[("e", ReplyAll)],
-        name: "e",
-        hint: "e",
+        keys: &[("a", ReplyAll)],
+        name: "a",
+        hint: "a",
         foot: &[(List, "reply all"), (Reader, "reply all")],
         help: "reply to all: the sender, and the others it went to, copied",
     },
     Binding {
-        keys: &[("C-f", Forward)],
-        name: "C-f",
-        hint: "C-f",
+        keys: &[("f", Forward), ("C-f", Forward)],
+        name: "f C-f",
+        hint: "f",
         foot: &[(List, "forward"), (Reader, "forward")],
         help: "forward it, its files with it",
     },
@@ -234,31 +248,29 @@ pub const KEYS: &[Binding] = &[
         help: "flag, or unflag",
     },
     Binding {
-        keys: &[("f", Files)],
-        name: "f",
-        hint: "f",
-        foot: &[(Reader, "files & links")],
-        help: "its files and links: PDFs and markdown in ohp, a linked PDF downloaded first",
-    },
-    Binding {
-        keys: &[("o", Browser)],
+        keys: &[("o", Files)],
         name: "o",
         hint: "o",
-        foot: &[(Reader, "browser")],
-        help: "open the message in the browser, as its HTML",
+        foot: &[(Reader, "open")],
+        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
     },
     Binding {
-        keys: &[("a", SaveFiles)],
-        name: "a",
-        hint: "a",
-        foot: &[(Reader, "save files"), (Map, "archive")],
-        help: "save its attachments to Downloads; in the map, take it, or what is marked, out of the Inbox",
+        keys: &[("e", Archive)],
+        name: "e",
+        hint: "e",
+        foot: &[(List, "archive"), (Reader, "archive"), (Map, "archive")],
+        help: "archive it: out of the Inbox, to Archive; in the map, it or what is marked",
     },
     Binding {
         keys: &[("esc", Back)],
         name: "esc",
         hint: "esc",
-        foot: &[(Reader, "back"), (Picking, "cancel"), (Attaching, "cancel")],
+        foot: &[
+            (Reader, "back"),
+            (Picking, "cancel"),
+            (Attaching, "cancel"),
+            (Viewing, "close"),
+        ],
         help: "back to the list; clear the search",
     },
     Binding {
@@ -298,8 +310,8 @@ pub const KEYS: &[Binding] = &[
         help: "the map: every account's mail laid out by what it is about and who it is from",
     },
     Binding {
-        keys: &[("M-l", ListView)],
-        name: "M-l",
+        keys: &[("M-l", ListView), ("s-l", ListView)],
+        name: "M-l s-l",
         hint: "M-l",
         foot: &[(Map, "list")],
         help: "back to the list, of what the sidebar picks: a folder, a label, a cluster, or the map's every cluster",
@@ -336,57 +348,22 @@ pub const KEYS: &[Binding] = &[
         keys: &[("M-r", Relayout)],
         name: "M-r",
         hint: "M-r",
-        foot: &[(Map, "lay out again")],
+        foot: &[],
         help: "in the map, lay it out again from where it is, and show what moved: ⏎ keeps it, esc drops it. Said when the map keeps under 70% of each message's nearest near it",
     },
     Binding {
-        keys: &[("w", Lens)],
-        name: "w",
-        hint: "w",
-        foot: &[(Map, "lens")],
-        help: "in the map, lay it out by words and people, by words alone, or by people alone",
-    },
-    Binding {
-        keys: &[("t", Since)],
-        name: "t",
-        hint: "t",
-        foot: &[(Map, "since")],
-        help: "in the map, all of it, this week's, or today's",
-    },
-    Binding {
-        keys: &[("C", Colours)],
-        name: "C",
-        hint: "C",
-        foot: &[(Map, "colour")],
-        help: "in the map, colour by what it is about, by how near the message picked, or by its state",
-    },
-    Binding {
-        keys: &[("r", ShowRead)],
-        name: "r",
-        hint: "r",
-        foot: &[(Map, "read")],
-        help: "in the map, show or hide read mail; elsewhere, say which keys reply",
-    },
-    Binding {
-        keys: &[("S", ShowSent)],
-        name: "S",
-        hint: "S",
-        foot: &[(Map, "sent")],
-        help: "in the map, show or hide the mail you sent, drawn ▹ beside the mail it answers",
+        keys: &[(",", View)],
+        name: ",",
+        hint: ",",
+        foot: &[(Map, "view")],
+        help: "in the map, what it shows and how: w its lens, t how far back, c its colours, r read mail, s sent mail, n the areas with nothing new dimmed, l lay it out again",
     },
     Binding {
         keys: &[("v", Mark)],
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, or drag a box over some; m, d, a, u and s then act on all of it, and v again lets it go",
-    },
-    Binding {
-        keys: &[("!", NewOnly)],
-        name: "!",
-        hint: "!",
-        foot: &[(Map, "new")],
-        help: "in the map, dim the areas with nothing new: new is come since the map was last looked at, and still in the Inbox",
+        help: "in the map, mark the cluster of the message picked, or drag a box over some; m, d, e, u and s then act on all of it, and v again lets it go",
     },
     // The message being written: edit's keys.
     Binding {
@@ -503,15 +480,6 @@ pub fn act(key: KeyEvent) -> Option<Act> {
             .collect()
     });
     chords.get(&chord(key)).copied()
-}
-
-/// The keys that do `act`, as the table names them.
-pub fn keys_for(act: Act) -> Vec<&'static str> {
-    KEYS.iter()
-        .flat_map(|b| b.keys)
-        .filter(|&&(_, a)| a == act)
-        .map(|&(name, _)| name)
-        .collect()
 }
 
 /// A hint at the foot: the key, what it does, and whether it is kept when
