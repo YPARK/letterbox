@@ -1907,7 +1907,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let mut taken: Vec<(u16, u16, u16)> = Vec::new();
     for g in &s.groups {
         let cells: Vec<(u16, u16)> = g
-            .members
+            .core
             .iter()
             .filter_map(|i| app.map.cells.get(i).copied())
             .collect();

@@ -155,11 +155,11 @@ pub enum Answer {
         old: String,
         result: Result<(), String>,
     },
-    /// The map laid out again, from the snapshot of the version and lens
-    /// given; not a store's answer.
+    /// The map laid out again, by the lens given: where each message, by
+    /// its key, would be; not a store's answer.
     Relaid {
-        version: u64,
         lens: crate::index::Lens,
+        keys: Vec<crate::index::Key>,
         at: Vec<crate::model::Point>,
     },
     /// The map made again from the index; not a store's answer.

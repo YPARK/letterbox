@@ -1184,8 +1184,8 @@ impl App {
         if let Answer::Drawn(snapshot) = reply.answer {
             return self.drawn_map(*snapshot);
         }
-        if let Answer::Relaid { version, lens, at } = reply.answer {
-            return self.relaid(version, lens, at);
+        if let Answer::Relaid { lens, keys, at } = reply.answer {
+            return self.relaid(lens, &keys, &at);
         }
         if let Answer::Fetched(got) = reply.answer {
             match got {
@@ -2054,7 +2054,7 @@ impl App {
                     m
                 })
                 .collect(),
-            View::Cluster(id) => s.group(id).map(|g| g.members.clone()).unwrap_or_default(),
+            View::Cluster(id) => (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
             View::Loners => s.loners(),
             _ => return,
         };
@@ -4173,6 +4173,12 @@ impl App {
         {
             self.map.focused = Focused::All;
         }
+        // A layout shown to be kept or dropped follows the map, by key.
+        if let (Some(p), Some(old)) = (self.map.preview.take(), self.map.snapshot.clone()) {
+            self.map.preview = (old.lens == snapshot.lens)
+                .then(|| map::onto(&snapshot, &old.model.keys, &p))
+                .flatten();
+        }
         self.map.snapshot = Some(Arc::new(snapshot));
         if self.map.mode == Mode::Map {
             self.map.pick_first(jiff::Timestamp::now().as_second());
@@ -4692,25 +4698,34 @@ impl App {
             let _ = replies.send(Reply {
                 account: usize::MAX,
                 answer: Answer::Relaid {
-                    version: s.version,
                     lens: s.lens,
+                    keys: s.model.keys.clone(),
                     at,
                 },
             });
         });
     }
 
-    /// Show the map laid out again, if the snapshot it was laid out from is
-    /// still the one drawn.
-    fn relaid(&mut self, version: u64, lens: crate::index::Lens, at: Vec<crate::model::Point>) {
+    /// Show the map laid out again, onto the map as it is now: mail come
+    /// while it was laid out stays where it is, mail gone is let go.
+    fn relaid(
+        &mut self,
+        lens: crate::index::Lens,
+        keys: &[crate::index::Key],
+        at: &[crate::model::Point],
+    ) {
         self.map.relaying = false;
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
-        if s.version != version || s.lens != lens {
-            self.status = "the map changed while it was laid out again: M-r again".to_string();
-            return;
-        }
+        let at = match map::onto(&s, keys, at) {
+            Some(at) if s.lens == lens => at,
+            _ => {
+                self.status =
+                    "the map was turned while it was laid out again: M-r again".to_string();
+                return;
+            }
+        };
         let moved = map::moved(&s, &at);
         let faith = crate::model::faithfulness(&s.model, &at);
         self.status = format!(

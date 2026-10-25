@@ -137,6 +137,9 @@ pub struct Dot {
 pub struct Group {
     pub id: u32,
     pub members: Vec<usize>,
+    /// Its largest part, where its anchor is: a label's mail may lie in
+    /// several parts of the map.
+    pub core: Vec<usize>,
     pub label: Option<String>,
     pub words: Vec<String>,
     pub hue: f32,
@@ -161,7 +164,10 @@ pub struct Snapshot {
     pub dots: Vec<Dot>,
     pub model: Arc<Model>,
     pub clustering: Clustering,
+    /// The clusters, as shown: one a label, its parts together.
     pub groups: Vec<Group>,
+    /// The group each message is in, by its place.
+    pub group_at: Vec<usize>,
     /// Each message's hue, in degrees.
     pub hues: Vec<f32>,
     /// Where each message is, once laid out.
@@ -183,7 +189,26 @@ impl Snapshot {
 
     /// The group the message `i` is in.
     pub fn group_of(&self, i: usize) -> Option<&Group> {
-        self.groups.get(self.clustering.of.get(i).copied()?)
+        self.groups.get(self.group_at.get(i).copied()?)
+    }
+
+    /// The messages of the group `id`, as it is picked: those clustered
+    /// with it, and, a label's, every message that has the label, wherever
+    /// it lies.
+    pub fn picked_by(&self, id: u32, i: usize) -> bool {
+        if self.group_of(i).is_some_and(|g| g.id == id) {
+            return true;
+        }
+        match self.group(id) {
+            Some(Group { label: Some(l), .. }) => {
+                let l = crate::index::fold(l);
+                self.dots[i]
+                    .labels
+                    .iter()
+                    .any(|x| crate::index::fold(x) == l)
+            }
+            _ => false,
+        }
     }
 
     pub fn group(&self, id: u32) -> Option<&Group> {
@@ -424,18 +449,52 @@ pub fn compute(input: Input) -> Snapshot {
             }
         })
         .collect();
-    let groups = clustering
-        .clusters
-        .iter()
-        .map(|c| Group {
-            id: c.id,
-            members: c.members.clone(),
-            label: c.label.clone(),
-            words: c.words.clone(),
-            hue: 0.0,
-            unread: c.members.iter().filter(|&&i| !dots[i].flags.seen).count(),
-        })
-        .collect::<Vec<_>>();
+    // One group a label, however many clusters its mail is split between:
+    // the first cluster's number, the parts' messages together, and its
+    // largest part where its anchor is.
+    let mut groups: Vec<Group> = Vec::new();
+    let mut of_label: BTreeMap<String, usize> = BTreeMap::new();
+    for c in &clustering.clusters {
+        let merged = c
+            .label
+            .as_ref()
+            .and_then(|l| of_label.get(&crate::index::fold(l)).copied());
+        match merged {
+            Some(g) => {
+                let g = &mut groups[g];
+                if c.members.len() > g.core.len() {
+                    g.core = c.members.clone();
+                }
+                g.members.extend(&c.members);
+                g.members.sort_unstable();
+            }
+            None => {
+                if let Some(l) = &c.label {
+                    of_label.insert(crate::index::fold(l), groups.len());
+                }
+                groups.push(Group {
+                    id: c.id,
+                    members: c.members.clone(),
+                    core: c.members.clone(),
+                    label: c.label.clone(),
+                    words: c.words.clone(),
+                    hue: 0.0,
+                    unread: 0,
+                });
+            }
+        }
+    }
+    let mut group_at = vec![0usize; dots.len()];
+    for (g, group) in groups.iter_mut().enumerate() {
+        group.unread = group
+            .members
+            .iter()
+            .filter(|&&i| !dots[i].flags.seen)
+            .count();
+        for &i in &group.members {
+            group_at[i] = g;
+        }
+    }
     // A cluster's hue is its members' mean, by angle on the hue circle.
     let groups = groups
         .into_iter()
@@ -457,6 +516,7 @@ pub fn compute(input: Input) -> Snapshot {
         model,
         clustering,
         groups,
+        group_at,
         hues,
         at,
         faithfulness,
@@ -486,6 +546,21 @@ pub fn relayout(s: &Snapshot) -> Vec<Point> {
     let a: Vec<Point> = held.iter().map(|&i| new[i]).collect();
     let b: Vec<Point> = held.iter().map(|&i| old[i]).collect();
     model::procrustes(&a, &b, &new)
+}
+
+/// `at`, where the messages `keys` would be, as where each message of `s`
+/// would be: as `at` has it, or, come since, where `s` has it.
+pub fn onto(s: &Snapshot, keys: &[Key], at: &[Point]) -> Option<Vec<Point>> {
+    let now = s.at.as_ref()?;
+    let by: std::collections::HashMap<&Key, Point> = keys.iter().zip(at.iter().copied()).collect();
+    Some(
+        s.model
+            .keys
+            .iter()
+            .zip(now)
+            .map(|(k, &p)| by.get(k).copied().unwrap_or(p))
+            .collect(),
+    )
 }
 
 /// How many messages of `s` would move noticeably, laid out at `at`: by
@@ -755,7 +830,7 @@ impl Map {
         };
         match self.focused {
             Focused::All => true,
-            Focused::Cluster(id) => s.group_of(i).is_some_and(|g| g.id == id),
+            Focused::Cluster(id) => s.picked_by(id, i),
             Focused::Loners => s.clustering.loner.get(i).copied().unwrap_or(false),
         }
     }

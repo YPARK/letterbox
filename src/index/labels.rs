@@ -144,7 +144,7 @@ pub fn server(record: &Record, folders: &BTreeMap<(String, String), FolderState>
         }
     }
     for l in &record.server {
-        if l.starts_with('\\') {
+        if l.starts_with('\\') || crate::imap::programs(l) {
             continue;
         }
         let label = unkeyword(l);

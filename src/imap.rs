@@ -260,9 +260,17 @@ fn select(
     }
 }
 
+/// Whether a keyword is a mail program's own, not one of yours: `$Junk`
+/// and the like, and Junk, NonJunk and NotJunk, as Apple's Mail and
+/// Thunderbird keep them.
+pub(crate) fn programs(name: &str) -> bool {
+    name.starts_with('$')
+        || ["junk", "nonjunk", "notjunk"].contains(&name.to_ascii_lowercase().as_str())
+}
+
 /// The flags of a message, by their names as a server gives them: those
 /// letterbox shows, and its keywords, but for those that are a mail
-/// program's own, as `$Junk`, and Junk and NonJunk.
+/// program's own.
 pub(crate) fn flags_named<'a>(
     names: impl IntoIterator<Item = &'a str>,
 ) -> (mail::Flags, Vec<String>) {
@@ -273,8 +281,7 @@ pub(crate) fn flags_named<'a>(
             "\\seen" => f.seen = true,
             "\\flagged" => f.flagged = true,
             "\\answered" => f.answered = true,
-            "junk" | "nonjunk" => {}
-            k if k.starts_with('\\') || k.starts_with('$') || k.is_empty() => {}
+            k if k.starts_with('\\') || k.is_empty() || programs(k) => {}
             _ => keywords.push(name.to_string()),
         }
     }

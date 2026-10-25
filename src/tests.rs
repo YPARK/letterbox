@@ -991,7 +991,8 @@ fn gmail_is_read_by_its_ids_and_labels_in_all_mail() {
 fn a_set_of_uids_is_written_in_runs() {
     assert_eq!(crate::imap::uid_set(&[7, 1, 2, 3, 9, 10, 4]), "1:4,7,9:10");
     assert_eq!(crate::imap::uid_set(&[5]), "5");
-    let (flags, keywords) = crate::imap::flags_named(["\\Seen", "Grant", "$Forwarded", "NonJunk"]);
+    let (flags, keywords) =
+        crate::imap::flags_named(["\\Seen", "Grant", "$Forwarded", "NonJunk", "NotJunk"]);
     assert!(flags.seen && !flags.flagged);
     assert_eq!(keywords, ["Grant"]);
 }
@@ -4423,7 +4424,7 @@ fn folders_are_labels_at_every_level() {
         validity: 7,
         uid: 3,
     });
-    r.server = vec!["Lab".into(), "$Junk".into()];
+    r.server = vec!["Lab".into(), "$Junk".into(), "NotJunk".into()];
     let folders = [
         ("INBOX", state(Role::Inbox)),
         ("Projects/Grant", state(Role::Other)),
@@ -4431,7 +4432,8 @@ fn folders_are_labels_at_every_level() {
     .into_iter()
     .map(|(f, s)| (("a@b.c".to_string(), f.to_string()), s))
     .collect();
-    assert_eq!(server(&r, &folders), ["Projects", "Grant", "Lab", "$Junk"]);
+    // A mail program's own keywords are none of yours.
+    assert_eq!(server(&r, &folders), ["Projects", "Grant", "Lab"]);
     assert!(system(&r, &folders).inbox);
     // Gmail's labels nest as its folders do; its system labels are not.
     r.key.id = "gm:1".into();
@@ -5750,6 +5752,44 @@ fn m_r_lays_the_map_out_again_to_keep_or_drop() {
 }
 
 #[test]
+fn m_r_is_kept_though_mail_comes_while_it_is_laid_out() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    // Laid out from this snapshot, shown on a newer one with a message more.
+    let at = crate::map::relayout(&s);
+    let indexed = index::record::Indexed {
+        uid: 999,
+        size: 300,
+        raw: raw(
+            "Mira Okafor <mira.okafor@uni.example>",
+            "Aims page, fourth pass",
+            "",
+            "Aim 2 is shorter now.\r\n",
+        ),
+        ..Default::default()
+    };
+    let r = index::Record::of("demo", "INBOX", 1, &indexed, 0);
+    app.index
+        .lock()
+        .unwrap()
+        .cache(vec![Cached::Upsert(Box::new(r))])
+        .unwrap();
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 150, 45);
+    let newer = app.map.snapshot.clone().unwrap();
+    assert_eq!(newer.dots.len(), s.dots.len() + 1);
+    let preview = crate::map::onto(&newer, &s.model.keys, &at).unwrap();
+    assert_eq!(preview.len(), newer.dots.len());
+    let k = &s.model.keys[0];
+    assert_eq!(preview[newer.find(k).unwrap()], at[0]);
+    // As the app takes it: shown, then kept.
+    press(&mut app, &["<m-r>"]);
+    assert!(app.map.preview.is_some(), "{}", app.status);
+    press(&mut app, &["<enter>"]);
+    assert!(app.status.contains("kept"), "{}", app.status);
+}
+
+#[test]
 fn faithfulness_below_seventy_percent_suggests_m_r() {
     let mut app = demo_map();
     let faith = app.map.snapshot.as_ref().unwrap().faithfulness.unwrap();
@@ -6030,6 +6070,51 @@ fn measure(n: usize) {
          kept together {:.2} | faithful {:.0}%",
         pure as f32 / n as f32,
         100.0 * f
+    );
+}
+
+#[test]
+fn a_label_split_between_clusters_is_one_node_and_lights_all_its_mail() {
+    let (mut records, truth) = made_mail(1_500, 11);
+    // Work is six topics' label, far apart on the map.
+    for (r, t) in records.iter_mut().zip(&truth) {
+        if *t % 7 == 0 && *t < 42 {
+            r.server = vec!["Work".into()];
+        }
+    }
+    let work = records.iter().filter(|r| !r.server.is_empty()).count();
+    let mut index = Index::memory();
+    index
+        .cache(
+            records
+                .into_iter()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let s = crate::map::compute(crate::map::input(&index, Lens::Both, None, None, true));
+    let parts = s
+        .clustering
+        .clusters
+        .iter()
+        .filter(|c| c.label.as_deref() == Some("Work"))
+        .count();
+    assert!(parts > 1, "Work split between {parts} clusters");
+    let nodes: Vec<&crate::map::Group> = s
+        .groups
+        .iter()
+        .filter(|g| g.label.as_deref() == Some("Work"))
+        .collect();
+    assert_eq!(nodes.len(), 1, "one node for Work");
+    let g = nodes[0];
+    assert!(g.core.len() < g.members.len() && g.core.iter().all(|i| g.members.contains(i)));
+    // Picked, it lights every message of Work, wherever it lies.
+    let lit = (0..s.dots.len()).filter(|&i| s.picked_by(g.id, i)).count();
+    assert!(lit >= work, "{lit} of {work}");
+    assert!(
+        (0..s.dots.len())
+            .filter(|&i| !s.dots[i].labels.is_empty())
+            .all(|i| s.picked_by(g.id, i))
     );
 }
 
