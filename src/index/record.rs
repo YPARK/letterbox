@@ -134,14 +134,34 @@ pub struct Record {
     /// that it is bulk, a list's or junk.
     #[serde(default)]
     pub bulk: bool,
+    /// The messages it answers, by their IDs without brackets: what it
+    /// says it is in reply to, then those before it in its thread.
+    #[serde(default)]
+    pub parents: Vec<String>,
     pub flags: Flags,
     /// When the index first saw it, in seconds since 1970.
     pub first_seen: i64,
 }
 
 /// How a message is read now: 1, whether it was sent to many, by its
-/// `List-Unsubscribe` and `Precedence`.
-pub const READ_AS: u8 = 1;
+/// `List-Unsubscribe` and `Precedence`; 2, what it answers, by its
+/// `In-Reply-To` and `References`.
+pub const READ_AS: u8 = 2;
+
+/// The message IDs a header names, without their brackets.
+fn ids(header: &str) -> Vec<String> {
+    let bracketed: Vec<String> = header
+        .split('<')
+        .skip(1)
+        .filter_map(|s| s.split_once('>').map(|(id, _)| id.trim().to_string()))
+        .filter(|id| !id.is_empty())
+        .collect();
+    if bracketed.is_empty() {
+        header.split_whitespace().map(str::to_string).collect()
+    } else {
+        bracketed
+    }
+}
 
 /// A message as a server gives it to be indexed: its UID and flags, the
 /// labels it keeps on it, Gmail's IDs, its size, and its header with the
@@ -185,6 +205,17 @@ impl Record {
         let list = mail::field(&indexed.raw, "List-Id")
             .map(|l| list_id(&l))
             .unwrap_or_default();
+        let mut parents = Vec::new();
+        for header in ["In-Reply-To", "References"] {
+            for id in mail::field(&indexed.raw, header)
+                .map(|h| ids(&h))
+                .unwrap_or_default()
+            {
+                if !parents.contains(&id) {
+                    parents.push(id);
+                }
+            }
+        }
         let bulk = mail::field(&indexed.raw, "List-Unsubscribe").is_some()
             || mail::field(&indexed.raw, "Precedence").is_some_and(|p| {
                 matches!(p.trim().to_lowercase().as_str(), "bulk" | "list" | "junk")
@@ -219,6 +250,7 @@ impl Record {
             size: indexed.size,
             preview: cut(&mail::preview(&text, PREVIEW), PREVIEW),
             bulk,
+            parents,
             flags: indexed.flags,
             first_seen: now,
         }

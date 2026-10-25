@@ -136,6 +136,9 @@ pub struct Dot {
     pub thrown: Option<f32>,
     /// Whether it was kept, as chosen, filed or flagged: looked at before.
     pub looked: bool,
+    /// What it answers, by message IDs, and Gmail's thread of it.
+    pub parents: Vec<String>,
+    pub thread: Option<u64>,
 }
 
 /// A cluster as the map and the sidebar show it.
@@ -511,6 +514,8 @@ pub fn compute(input: Input) -> Snapshot {
                 twin,
                 thrown,
                 looked,
+                parents: r.parents,
+                thread: r.thread,
             }
         })
         .collect();

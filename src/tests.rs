@@ -8850,3 +8850,72 @@ fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
         assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
     }
 }
+
+// ---- threads, by who answered whom ----
+
+fn threaded(id: &str, parents: &[&str], subject: &str) -> crate::forest::Threaded {
+    crate::forest::Threaded {
+        message_id: id.to_string(),
+        parents: parents.iter().map(|p| p.to_string()).collect(),
+        thread: None,
+        subject: subject.to_string(),
+    }
+}
+
+fn sorted(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
+    for g in &mut groups {
+        g.sort();
+    }
+    groups.sort();
+    groups
+}
+
+#[test]
+fn a_thread_is_who_answered_whom_not_its_subject() {
+    let items = vec![
+        threaded("a", &[], "Meeting"),
+        threaded("b", &["a"], "Re: Meeting"),
+        // Its subject changed: still the same talk.
+        threaded("c", &["a", "b"], "Moved to Thursday"),
+        // Another talk of the same subject: apart.
+        threaded("d", &[], "Meeting"),
+        threaded("e", &["d"], "Re: Meeting"),
+        // Notices that answer nothing: by subject, as before.
+        threaded("f", &[], "Build failed: 12"),
+        threaded("g", &[], "Build failed: 13"),
+        // Answers to one not here, together.
+        threaded("h", &["lost"], "Re: lost"),
+        threaded("i", &["lost"], "Re: lost, again"),
+    ];
+    assert_eq!(
+        sorted(crate::forest::thread_groups(&items)),
+        vec![vec![0, 1, 2], vec![3, 4], vec![5, 6], vec![7, 8]]
+    );
+}
+
+#[test]
+fn gmails_thread_holds_its_messages_together() {
+    let mut a = threaded("a", &[], "Photo 51");
+    let mut b = threaded("b", &[], "the X-ray, sharper");
+    a.thread = Some(9);
+    b.thread = Some(9);
+    let c = threaded("c", &[], "Something else");
+    assert_eq!(
+        sorted(crate::forest::thread_groups(&[a, b, c])),
+        vec![vec![0, 1], vec![2]]
+    );
+}
+
+#[test]
+fn what_a_message_answers_is_read_from_its_headers() {
+    let r = with_headers(
+        "x",
+        "ada@analytical.example",
+        "Re: Notes",
+        "In-Reply-To: <b@analytical.example>\r\nReferences: <a@analytical.example>\r\n <b@analytical.example>\r\n",
+    );
+    assert_eq!(r.parents, ["b@analytical.example", "a@analytical.example"]);
+    assert_eq!(r.read_as, 2, "read again from older mail");
+    let items = crate::imap::indexed_items(false);
+    assert!(items.contains("IN-REPLY-TO") && items.contains("REFERENCES"));
+}
