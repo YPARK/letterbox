@@ -8,6 +8,7 @@
 
 pub mod journal;
 pub mod key;
+pub mod labels;
 pub mod record;
 pub mod sync;
 

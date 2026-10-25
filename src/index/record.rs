@@ -72,6 +72,9 @@ pub struct Place {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderState {
     pub role: Option<Role>,
+    /// Whether it holds every message of the account, as Gmail's All Mail.
+    #[serde(default)]
+    pub all: bool,
     /// What its path's parts are parted by.
     #[serde(default)]
     pub delimiter: Option<String>,

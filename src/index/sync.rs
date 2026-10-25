@@ -178,6 +178,12 @@ pub fn pass(
             .collect();
         apply(index, forgotten)?;
     }
+    // Labels given that the server now has are no longer pending.
+    let mut index = lock(index);
+    let settled = index.settled(&account, now);
+    if !settled.is_empty() {
+        index.keep(settled)?;
+    }
     Ok(Passed { read, complete })
 }
 
@@ -215,6 +221,7 @@ fn look(
         }
     };
     state.role = Some(folder.role);
+    state.all = folder.all;
     state.delimiter = folder.delimiter.clone();
     let on_server = store.uids(path)?;
     let placed = if fresh {

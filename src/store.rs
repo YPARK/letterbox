@@ -146,4 +146,36 @@ pub trait Store: Send {
     fn uids(&mut self, _folder: &str) -> anyhow::Result<Vec<u32>> {
         Err(unsupported("list a folder's UIDs"))
     }
+
+    // Labels, kept on the server.
+
+    /// Give the message `uid` of `folder` the label, or take it off, where
+    /// the server keeps labels.
+    fn label(&mut self, _folder: &str, _uid: u32, _label: &str, _on: bool) -> anyhow::Result<()> {
+        Err(unsupported("keep a label on a message"))
+    }
+    /// File the message `uid` of `folder` under `label`: give it the label,
+    /// and take it out of the Inbox.
+    fn file(
+        &mut self,
+        _folder: &str,
+        _uid: u32,
+        _label: &str,
+        _message_id: &str,
+    ) -> anyhow::Result<Filed> {
+        Err(unsupported("file a message"))
+    }
+    /// Call the label `old` `new` on the server, wherever it is.
+    fn rename_label(&mut self, _old: &str, _new: &str) -> anyhow::Result<()> {
+        Err(unsupported("rename a label"))
+    }
+}
+
+/// What filing a message did: where it was moved to and its UID there, if
+/// it was moved; and whether the server keeps the label, or letterbox is
+/// to, as a server of folders alone keeps only one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filed {
+    pub moved: Option<(String, u32)>,
+    pub on_server: bool,
 }

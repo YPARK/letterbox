@@ -3,10 +3,11 @@
 //! One connection, opened when first needed and again if it is lost.
 
 use crate::config::{Account, Auth, Security};
+use crate::index::labels;
 use crate::index::record::Indexed;
 use crate::mail::{self, Folder, Role, Summary};
 use crate::oauth;
-use crate::store::{Change, Flag, Kind, Page, Removal, Status, Store};
+use crate::store::{Change, Filed, Flag, Kind, Page, Removal, Status, Store, unsupported};
 use anyhow::{Context, bail};
 use imap_proto::NameAttribute;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -128,6 +129,8 @@ pub struct Imap {
     /// What this connection can do, once asked; CONDSTORE is asked for on
     /// it then, where it can be.
     caps: Option<Caps>,
+    /// How the server keeps labels, once told.
+    kind: Option<Kind>,
 }
 
 impl Imap {
@@ -138,6 +141,7 @@ impl Imap {
             selected: None,
             can_move: None,
             caps: None,
+            kind: None,
         }
     }
 
@@ -559,7 +563,11 @@ impl Store for Imap {
     }
 
     fn kind(&mut self) -> anyhow::Result<Kind> {
+        if let Some(kind) = self.kind {
+            return Ok(kind);
+        }
         if self.prepare()?.gmail {
+            self.kind = Some(Kind::Gmail);
             return Ok(Kind::Gmail);
         }
         let archive = self
@@ -575,11 +583,13 @@ impl Store for Imap {
             }
             Ok(all)
         })?;
-        Ok(if keywords {
+        let kind = if keywords {
             Kind::Keywords
         } else {
             Kind::Folders
-        })
+        };
+        self.kind = Some(kind);
+        Ok(kind)
     }
 
     fn status(&mut self, folder: &str) -> anyhow::Result<Status> {
@@ -652,6 +662,139 @@ impl Store for Imap {
             uids.sort_unstable();
             Ok(uids)
         })
+    }
+
+    fn label(&mut self, folder: &str, uid: u32, label: &str, on: bool) -> anyhow::Result<()> {
+        let sign = if on { '+' } else { '-' };
+        let change = match self.kind()? {
+            Kind::Gmail => format!("{sign}X-GM-LABELS.SILENT ({})", astring(label)),
+            Kind::Keywords => format!("{sign}FLAGS.SILENT ({})", labels::keyword(label)),
+            Kind::Folders => return Err(unsupported("keep a label on a message")),
+        };
+        self.store_flags(folder, uid, &change)
+    }
+
+    fn file(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        message_id: &str,
+    ) -> anyhow::Result<Filed> {
+        let kind = self.kind()?;
+        if kind == Kind::Gmail {
+            self.label(folder, uid, label, true)?;
+            self.store_flags(folder, uid, "-X-GM-LABELS.SILENT (\\Inbox)")?;
+            return Ok(Filed {
+                moved: None,
+                on_server: true,
+            });
+        }
+        let folders = self.folders()?;
+        let role = folders
+            .iter()
+            .find(|f| f.path == folder)
+            .map_or(Role::Other, |f| f.role);
+        if kind == Kind::Keywords {
+            self.label(folder, uid, label, true)?;
+            if role != Role::Inbox {
+                return Ok(Filed {
+                    moved: None,
+                    on_server: true,
+                });
+            }
+            let archive = match folders
+                .iter()
+                .find(|f| f.role == Role::Archive && f.selectable)
+            {
+                Some(f) => f.path.clone(),
+                None => {
+                    self.create("Archive")?;
+                    "Archive".to_string()
+                }
+            };
+            let new = self.relocate(folder, uid, &archive, message_id)?;
+            return Ok(Filed {
+                moved: Some((archive, new)),
+                on_server: true,
+            });
+        }
+        // Folders alone: the first label is the folder it is moved to, from
+        // the Inbox or Archive; any other, letterbox keeps.
+        if !matches!(role, Role::Inbox | Role::Archive) {
+            return Ok(Filed {
+                moved: None,
+                on_server: false,
+            });
+        }
+        let to = match labels::folder_for(&folders, label) {
+            Some(f) => f.path.clone(),
+            None => {
+                let name = labels::folder_name(label.trim());
+                self.create(&name)?;
+                name
+            }
+        };
+        let new = self.relocate(folder, uid, &to, message_id)?;
+        Ok(Filed {
+            moved: Some((to, new)),
+            on_server: true,
+        })
+    }
+
+    fn rename_label(&mut self, old: &str, new: &str) -> anyhow::Result<()> {
+        let kind = self.kind()?;
+        let folders = self.folders()?;
+        let mut done = false;
+        // The folder the label is, renamed where it is, under its parent.
+        if let Some(f) = labels::folder_for(&folders, old) {
+            let parent = f
+                .delimiter
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .and_then(|d| Some((f.path.rfind(d)?, d)));
+            let to = match parent {
+                Some((at, d)) => format!("{}{d}{}", &f.path[..at], labels::folder_name(new)),
+                None => labels::folder_name(new),
+            };
+            let from = f.path.clone();
+            self.run(|s, selected| {
+                *selected = None;
+                s.rename(&from, &to)
+            })?;
+            done = true;
+        }
+        if kind == Kind::Keywords {
+            let (from, to) = (labels::keyword(old), labels::keyword(new));
+            let mapped: Vec<String> = folders
+                .iter()
+                .filter(|f| f.selectable && !matches!(f.role, Role::Junk | Role::Trash))
+                .map(|f| f.path.clone())
+                .collect();
+            for folder in mapped {
+                let uids = self.run(|s, selected| {
+                    select(s, selected, &folder, false)?;
+                    Ok(s.uid_search(format!("KEYWORD {from}"))?
+                        .into_iter()
+                        .collect::<Vec<u32>>())
+                })?;
+                if uids.is_empty() {
+                    continue;
+                }
+                let set = uid_set(&uids);
+                self.run(|s, selected| {
+                    select(s, selected, &folder, false)?;
+                    s.uid_store(&set, format!("+FLAGS.SILENT ({to})"))?;
+                    s.uid_store(&set, format!("-FLAGS.SILENT ({from})"))?;
+                    Ok(())
+                })?;
+                done = true;
+            }
+        }
+        if !done {
+            bail!("the server has no label {old}");
+        }
+        Ok(())
     }
 }
 
@@ -759,6 +902,16 @@ fn indexed(attributes: Vec<imap_proto::AttributeValue<'_>>) -> Option<Indexed> {
 }
 
 impl Imap {
+    /// Change the flags or labels of the message `uid` of `folder`, as
+    /// `change` says: `+FLAGS.SILENT (Grant)`, say.
+    fn store_flags(&mut self, folder: &str, uid: u32, change: &str) -> anyhow::Result<()> {
+        self.run(|s, selected| {
+            select(s, selected, folder, false)?;
+            s.uid_store(uid.to_string(), change)?;
+            Ok(())
+        })
+    }
+
     /// What the connection can do, asked once a connection; CONDSTORE is
     /// asked for where the server has it, so that SELECT says a folder's
     /// mod-sequence.

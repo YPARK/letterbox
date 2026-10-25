@@ -330,6 +330,9 @@ fn within(ranges: &[(u32, u32)], n: u32) -> bool {
 fn fetched(seq: usize, l: &Letter, items: &str, changed: bool) -> Vec<u8> {
     let mut out = format!("* {seq} FETCH (UID {}", l.uid).into_bytes();
     if items.contains("X-GM-MSGID") {
+        out.extend(format!(" X-GM-MSGID {} X-GM-THRID {}", l.msgid, l.msgid).bytes());
+    }
+    if items.contains("X-GM-LABELS") {
         let labels: Vec<String> = l
             .labels
             .iter()
@@ -341,15 +344,7 @@ fn fetched(seq: usize, l: &Letter, items: &str, changed: bool) -> Vec<u8> {
                 }
             })
             .collect();
-        out.extend(
-            format!(
-                " X-GM-MSGID {} X-GM-THRID {} X-GM-LABELS ({})",
-                l.msgid,
-                l.msgid,
-                labels.join(" ")
-            )
-            .bytes(),
-        );
+        out.extend(format!(" X-GM-LABELS ({})", labels.join(" ")).bytes());
     }
     if changed {
         out.extend(format!(" MODSEQ ({})", l.modseq).bytes());
@@ -514,11 +509,20 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                     }
                     "STORE" => {
                         let seq = boxes.tick();
-                        let b = &mut boxes[selected.unwrap()];
                         let (uids, rest) = args.split_once(' ').unwrap();
                         let (how, what) = rest.split_once(' ').unwrap();
                         let uids = set(uids);
                         let how = how.to_uppercase();
+                        // Gmail shows each label as a folder, once it is given.
+                        if how.starts_with("+X-GM-LABELS") {
+                            for name in listed(what) {
+                                if !name.starts_with('\\') && !boxes.iter().any(|b| b.name == name)
+                                {
+                                    boxes.push(Mailbox::new(&name, "\\HasNoChildren", Vec::new()));
+                                }
+                            }
+                        }
+                        let b = &mut boxes[selected.unwrap()];
                         for l in b.letters.iter_mut().filter(|l| within(&uids, l.uid)) {
                             let list = if how.contains("X-GM-LABELS") {
                                 &mut l.labels
@@ -4129,4 +4133,241 @@ fn the_app_maps_every_account_as_it_starts() {
     let app = demo();
     assert_eq!(app.index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
     assert!(app.mapping.is_empty(), "{}", app.mapping);
+}
+
+// ---- labels, kept on the servers ----
+
+#[test]
+fn a_label_is_a_keyword_and_back() {
+    use crate::index::labels::{keyword, unkeyword};
+    assert_eq!(keyword("Grant"), "Grant");
+    assert_eq!(keyword("R01/aims:v2"), "R01/aims:v2");
+    assert_eq!(keyword("Big Things"), "Big&ACA-Things");
+    assert_eq!(keyword("Tom & Jerry"), "Tom&ACA-&-&ACA-Jerry");
+    for label in [
+        "Grant",
+        "Big Things",
+        "Tom & Jerry",
+        "Entwürfe",
+        "日本語のラベル",
+        "a(b)c",
+    ] {
+        let k = keyword(label);
+        assert!(
+            k.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._+/:-&,".contains(c)),
+            "{k}"
+        );
+        assert_eq!(unkeyword(&k), label);
+    }
+    let long = "ünïcode ".repeat(20);
+    let k = keyword(&long);
+    assert!(k.len() <= crate::index::labels::KEYWORD, "{}", k.len());
+    assert!(long.starts_with(&unkeyword(&k)));
+}
+
+#[test]
+fn folders_are_labels_at_every_level() {
+    use crate::index::FolderState;
+    use crate::index::labels::{of_folder, server, system};
+    let state = |role| FolderState {
+        role: Some(role),
+        delimiter: Some("/".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        of_folder("Projects/Grant", Some(&state(Role::Other))),
+        ["Projects", "Grant"]
+    );
+    assert_eq!(of_folder("INBOX/Lab", Some(&state(Role::Other))), ["Lab"]);
+    assert_eq!(
+        of_folder("Entw&APw-rfe", Some(&state(Role::Other))),
+        ["Entwürfe"]
+    );
+    assert!(of_folder("Sent Items", Some(&state(Role::Sent))).is_empty());
+
+    let mut r = record("a", "Photo 51");
+    r.places.push(index::Place {
+        folder: "Projects/Grant".into(),
+        validity: 7,
+        uid: 3,
+    });
+    r.server = vec!["Lab".into(), "$Junk".into()];
+    let folders = [
+        ("INBOX", state(Role::Inbox)),
+        ("Projects/Grant", state(Role::Other)),
+    ]
+    .into_iter()
+    .map(|(f, s)| (("a@b.c".to_string(), f.to_string()), s))
+    .collect();
+    assert_eq!(server(&r, &folders), ["Projects", "Grant", "Lab", "$Junk"]);
+    assert!(system(&r, &folders).inbox);
+    // Gmail's labels nest as its folders do; its system labels are not.
+    r.key.id = "gm:1".into();
+    r.places.truncate(1);
+    r.server = vec![
+        "\\Inbox".into(),
+        "\\Important".into(),
+        "Projects/Grant".into(),
+    ];
+    assert_eq!(server(&r, &folders), ["Projects", "Grant"]);
+    assert!(system(&r, &folders).important);
+}
+
+/// The message of `index` with `subject`: its key, labels, and whether it
+/// is in the Inbox.
+fn labelled(index: &Mutex<Index>, subject: &str) -> (index::Key, Vec<String>, bool) {
+    let index = index.lock().unwrap();
+    let r = index
+        .records
+        .values()
+        .find(|r| r.subject == subject)
+        .unwrap_or_else(|| panic!("no {subject}"));
+    (
+        r.key.clone(),
+        index.labels(&r.key),
+        index.system(&r.key).inbox,
+    )
+}
+
+/// Say that the message `key` is filed under `label`, as the app does
+/// before its server is asked.
+fn pending(index: &Mutex<Index>, key: &index::Key, label: &str) {
+    index
+        .lock()
+        .unwrap()
+        .keep(vec![Kept::Pending {
+            key: key.clone(),
+            label: label.into(),
+            on: true,
+            at: 1_000_000,
+        }])
+        .unwrap();
+}
+
+#[test]
+fn filing_on_a_server_of_keywords_labels_it_and_archives_it() {
+    let (account, boxes) = serve_boxes(boxes_in(Mode::Keywords));
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    let (key, labels, inbox) = labelled(&index, "Photo 51");
+    assert!(labels.is_empty() && inbox);
+    pending(&index, &key, "Big Things");
+    let (_, labels, inbox) = labelled(&index, "Photo 51");
+    assert_eq!((labels, inbox), (vec!["Big Things".to_string()], false));
+    let filed = imap.file("INBOX", 11, "Big Things", "").unwrap();
+    let (to, uid) = filed.moved.unwrap();
+    assert_eq!(to, "Archive");
+    let fake = boxes.lock().unwrap();
+    let archived = fake.iter().find(|b| b.name == "Archive").unwrap();
+    assert_eq!(archived.letters[0].uid, uid);
+    assert!(archived.letters[0].has("Big&ACA-Things"));
+    drop(fake);
+    sync_at(&mut imap, &index, 1_000_100);
+    assert!(index.lock().unwrap().keep.pending.is_empty(), "settled");
+    let (still, labels, inbox) = labelled(&index, "Photo 51");
+    assert_eq!(
+        (still, labels, inbox),
+        (key, vec!["Big Things".to_string()], false)
+    );
+
+    // Renamed, the keyword is changed wherever it is.
+    imap.rename_label("Big Things", "Funding").unwrap();
+    sync_at(&mut imap, &index, 1_000_200);
+    assert_eq!(labelled(&index, "Photo 51").1, ["Funding"]);
+}
+
+#[test]
+fn filing_on_gmail_gives_the_label_and_takes_the_inbox_off() {
+    let (account, boxes) = serve_boxes(gmail_boxes());
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    let (key, _, inbox) = labelled(&index, "R01 resubmission");
+    assert!(inbox);
+    pending(&index, &key, "Grant");
+    let filed = imap.file("[Gmail]/All Mail", 22, "Grant", "").unwrap();
+    assert_eq!(filed.moved, None);
+    let labels = boxes.lock().unwrap()[2].letters[1].labels.clone();
+    assert_eq!(labels, ["\\Important", "Grant"]);
+    sync_at(&mut imap, &index, 1_000_100);
+    assert!(index.lock().unwrap().keep.pending.is_empty());
+    let (_, labels, inbox) = labelled(&index, "R01 resubmission");
+    assert_eq!((labels, inbox), (vec!["Grant".to_string()], false));
+    // A label renamed is renamed on every message it is on.
+    imap.rename_label("Grant", "Funding").unwrap();
+    sync_at(&mut imap, &index, 1_000_200);
+    assert_eq!(labelled(&index, "R01 resubmission").1, ["Funding"]);
+}
+
+#[test]
+fn filing_on_a_server_of_folders_moves_it_to_the_folder_the_label_is() {
+    let (account, boxes) = server();
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    // Grant is Projects/Grant: the folder of that name, not a new one.
+    let filed = imap.file("INBOX", 11, "grant", "").unwrap();
+    assert_eq!(filed.moved.as_ref().unwrap().0, "Projects/Grant");
+    assert!(filed.on_server);
+    sync_once(&mut imap, &index);
+    assert_eq!(labelled(&index, "Photo 51").1, ["Projects", "Grant"]);
+    // Out of the Inbox, a second label is letterbox's to keep.
+    let (to, uid) = filed.moved.unwrap();
+    let again = imap.file(&to, uid, "Lab", "").unwrap();
+    assert_eq!((again.moved, again.on_server), (None, false));
+    // No folder of the name: one is made, at the top.
+    let new = imap.file("INBOX", 14, "Reading list", "").unwrap();
+    assert_eq!(new.moved.unwrap().0, "Reading list");
+    assert!(imap.label("INBOX", 12, "Lab", true).is_err());
+    imap.rename_label("Grant", "Funding").unwrap();
+    let names: Vec<String> = boxes
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| b.name.clone())
+        .collect();
+    assert!(names.contains(&"Projects/Funding".to_string()), "{names:?}");
+}
+
+#[test]
+fn the_demo_files_as_a_server_of_keywords_does() {
+    let mut demo = Demo::new();
+    let mut twin = demo.twin().unwrap();
+    let index = Mutex::new(Index::memory());
+    sync_once(twin.as_mut(), &index);
+    let (key, _, inbox) = labelled(&index, "Aims page, third pass");
+    assert!(inbox);
+    let uid = demo
+        .page("INBOX", 0, 100)
+        .unwrap()
+        .summaries
+        .into_iter()
+        .find(|s| s.subject == "Aims page, third pass")
+        .unwrap()
+        .uid;
+    pending(&index, &key, "Grant");
+    let filed = demo.file("INBOX", uid, "Grant", "").unwrap();
+    assert_eq!(filed.moved.unwrap().0, "Archive");
+    sync_at(twin.as_mut(), &index, 1_000_100);
+    assert!(index.lock().unwrap().keep.pending.is_empty());
+    let (still, labels, inbox) = labelled(&index, "Aims page, third pass");
+    assert_eq!(
+        (still, labels, inbox),
+        (key, vec!["Grant".to_string()], false)
+    );
+    // The Grant folder's letters are Projects and Grant; the keyword is the
+    // same label, renamed with the folder.
+    assert_eq!(
+        labelled(&index, "Letter of support, signed").1,
+        ["Projects", "Grant"]
+    );
+    demo.rename_label("Grant", "Funding").unwrap();
+    sync_at(twin.as_mut(), &index, 1_000_200);
+    assert_eq!(labelled(&index, "Aims page, third pass").1, ["Funding"]);
+    assert_eq!(
+        labelled(&index, "Letter of support, signed").1,
+        ["Projects", "Funding"]
+    );
 }

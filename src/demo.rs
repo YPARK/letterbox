@@ -5,9 +5,10 @@
 //! `List-Id`, talks, travel and home; what is read and old is in Archive,
 //! and the older grant letters in Projects/Grant, filed by hand.
 
+use crate::index::labels;
 use crate::index::record::Indexed;
 use crate::mail::{self, Flags, Folder, Role, Summary};
-use crate::store::{Change, Flag, Kind, Page, Removal, Status, Store};
+use crate::store::{Change, Filed, Flag, Kind, Page, Removal, Status, Store};
 use jiff::{ToSpan, Zoned};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -780,5 +781,80 @@ impl Store for Demo {
 
     fn uids(&mut self, folder: &str) -> anyhow::Result<Vec<u32>> {
         Ok(self.mail().letters(folder)?.iter().map(|l| l.uid).collect())
+    }
+
+    fn label(&mut self, folder: &str, uid: u32, label: &str, on: bool) -> anyhow::Result<()> {
+        let keyword = labels::keyword(label);
+        let mut mail = self.mail();
+        let letter = mail.changing(folder, uid)?;
+        letter
+            .keywords
+            .retain(|k| !k.eq_ignore_ascii_case(&keyword));
+        if on {
+            letter.keywords.push(keyword);
+        }
+        Ok(())
+    }
+
+    fn file(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        message_id: &str,
+    ) -> anyhow::Result<Filed> {
+        self.label(folder, uid, label, true)?;
+        if !folder.eq_ignore_ascii_case("INBOX") {
+            return Ok(Filed {
+                moved: None,
+                on_server: true,
+            });
+        }
+        let new = self.relocate(folder, uid, "Archive", message_id)?;
+        Ok(Filed {
+            moved: Some(("Archive".to_string(), new)),
+            on_server: true,
+        })
+    }
+
+    fn rename_label(&mut self, old: &str, new: &str) -> anyhow::Result<()> {
+        let (from, to) = (labels::keyword(old), labels::keyword(new));
+        let mut mail = self.mail();
+        mail.modseq += 1;
+        let modseq = mail.modseq;
+        let mut done = false;
+        for letter in mail.folders.values_mut().flatten() {
+            if letter
+                .keywords
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(&from))
+            {
+                letter.keywords.retain(|k| !k.eq_ignore_ascii_case(&from));
+                letter.keywords.push(to.clone());
+                letter.modseq = modseq;
+                done = true;
+            }
+        }
+        // A folder the label is, renamed where it is, under its parent.
+        let folders: Vec<String> = mail.folders.keys().cloned().collect();
+        for path in folders {
+            let (parent, name) = match path.rsplit_once('/') {
+                Some((p, n)) => (Some(p), n),
+                None => (None, path.as_str()),
+            };
+            if name.eq_ignore_ascii_case(old) {
+                let to = match parent {
+                    Some(p) => format!("{p}/{new}"),
+                    None => new.to_string(),
+                };
+                let letters = mail.folders.remove(&path).unwrap_or_default();
+                mail.folders.insert(to, letters);
+                done = true;
+            }
+        }
+        if !done {
+            anyhow::bail!("there is no label {old}");
+        }
+        Ok(())
     }
 }
