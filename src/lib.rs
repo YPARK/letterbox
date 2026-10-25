@@ -132,6 +132,12 @@ enum Command {
         #[command(subcommand)]
         action: MapAction,
     },
+    /// What letterbox has learnt of the mail you throw away: how well it
+    /// would have done, or learnt from the Trash and your labels too
+    Filter {
+        #[command(subcommand)]
+        action: FilterAction,
+    },
     /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
     /// program, as Cursor or Claude Code, runs `letterbox mcp`
     Mcp,
@@ -195,6 +201,21 @@ enum VaultAction {
     /// A new passphrase for it, asked for as letterbox starts; or none, its
     /// key a file beside it only you may read, never asked for
     Passphrase,
+}
+
+#[derive(Subcommand)]
+enum FilterAction {
+    /// How it would have done: each decision said before it was learnt,
+    /// from those before it alone; what it caught, and what you kept that
+    /// it would have thrown away
+    Check,
+    /// Learn from mail already in each account's Trash, as thrown away,
+    /// and filed under your labels, as kept, the newest of each; then check
+    Learn {
+        /// How many of each, at most, from each place
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -389,6 +410,146 @@ fn stores(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
             )
         })
         .collect())
+}
+
+/// The map's index, its key found where it is kept: the vault opened
+/// first if an account keeps its password there.
+fn open_index(args: &Args) -> anyhow::Result<index::Index> {
+    if args.demo {
+        return Ok(index::Index::memory());
+    }
+    if config::load(&args.config)?.iter().any(in_vault) {
+        open_vault(false)?;
+    }
+    index::Index::open(
+        &index::key::dir(),
+        secret::keepers,
+        secret::find,
+        secret::store,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// The newest `limit` messages of the account's Trash, as thrown away, each
+/// with when it was sent.
+fn trash_seeds(
+    store: &mut dyn Store,
+    limit: usize,
+    now: i64,
+) -> anyhow::Result<Vec<(i64, filter::Taught)>> {
+    let trash = store
+        .folders()?
+        .into_iter()
+        .find(|f| f.role == mail::Role::Trash)
+        .map(|f| f.path)
+        .or_else(|| store.trash().map(str::to_string));
+    let Some(trash) = trash else {
+        return Ok(Vec::new());
+    };
+    let ident = store.ident();
+    let uids = store.uids(&trash)?;
+    let newest = &uids[uids.len().saturating_sub(limit)..];
+    let mut seeds = Vec::new();
+    for chunk in newest.chunks(100) {
+        for got in store.fetch_index(&trash, chunk)? {
+            let r = index::Record::of(&ident, &trash, 0, &got, now);
+            seeds.push((
+                r.date.unwrap_or(now),
+                filter::Taught {
+                    key: r.key.clone(),
+                    thrown: true,
+                    tokens: filter::Filter::tokens(&r),
+                    message_id: r.message_id.clone(),
+                    seeded: true,
+                },
+            ));
+        }
+    }
+    Ok(seeds)
+}
+
+/// How what was learnt would have done, as `letterbox filter check` says it.
+fn check(index: &index::Index) -> String {
+    use std::fmt::Write;
+    let taught = &index.filter.taught;
+    let said = filter::Filter::check(taught);
+    let mut out = String::new();
+    let seeded = taught.iter().filter(|t| t.seeded).count();
+    let _ = writeln!(
+        out,
+        "{} decisions: {} thrown away, {} kept; {} of them yours, {} read from the Trash and your labels",
+        taught.len(),
+        taught.iter().filter(|t| t.thrown).count(),
+        taught.iter().filter(|t| !t.thrown).count(),
+        taught.len() - seeded,
+        seeded,
+    );
+    if said.is_empty() {
+        let _ = writeln!(
+            out,
+            "nothing to grade yet: it says nothing until it has learnt {} of each",
+            filter::READY
+        );
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "{} graded, each before it was learnt, by what was learnt before it\n",
+        said.len()
+    );
+    let pct = |a: usize, b: usize| {
+        if b == 0 {
+            0.0
+        } else {
+            100.0 * a as f32 / b as f32
+        }
+    };
+    for level in [0.7, 0.8, 0.9] {
+        let g = filter::grade(&said, level);
+        let mark = if level == filter::SURE {
+            "  (as it is)"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            out,
+            "sure to {:.0}%: caught {} of {} thrown away ({:.0}%); would have thrown away {} of {} kept ({:.1}%){mark}",
+            level * 100.0,
+            g.caught,
+            g.caught + g.missed,
+            pct(g.caught, g.caught + g.missed),
+            g.wrong,
+            g.wrong + g.right,
+            pct(g.wrong, g.wrong + g.right),
+        );
+    }
+    let mut wrong: Vec<&filter::Said> = said
+        .iter()
+        .filter(|s| !s.thrown && s.odds >= filter::SURE)
+        .collect();
+    wrong.sort_by(|a, b| b.odds.total_cmp(&a.odds));
+    if !wrong.is_empty() {
+        let _ = writeln!(out, "\nkept, but it would have thrown away:");
+        for s in wrong.iter().take(30) {
+            let subject = index
+                .records
+                .get(&s.key)
+                .map(|r| r.subject.clone())
+                .unwrap_or_else(|| "(no longer here)".to_string());
+            let _ = writeln!(
+                out,
+                "  {:>3.0}%  {}  {}{}",
+                s.odds * 100.0,
+                s.from,
+                mail::clean(&subject),
+                if s.seeded { "  · from a label" } else { "" }
+            );
+        }
+        if wrong.len() > 30 {
+            let _ = writeln!(out, "  and {} more", wrong.len() - 30);
+        }
+    }
+    out
 }
 
 fn in_vault(a: &config::Account) -> bool {
@@ -699,23 +860,37 @@ fn command(args: &Args) -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
+        Some(Command::Filter { action }) => {
+            let mut index = open_index(args)?;
+            if let FilterAction::Learn { limit } = action {
+                let mut seeds = index.kept_seeds(*limit);
+                let kept = seeds.len();
+                let mut thrown = 0;
+                let now = jiff::Timestamp::now().as_second();
+                for (name, mut store) in stores(args)? {
+                    match trash_seeds(store.as_mut(), *limit, now) {
+                        Ok(found) => {
+                            thrown += found.len();
+                            seeds.extend(found);
+                        }
+                        Err(e) => eprintln!("{name}: its Trash cannot be read: {e:#}"),
+                    }
+                }
+                // Oldest first, as if decided as they came.
+                seeds.sort_by_key(|(at, t)| (*at, t.key.clone()));
+                let learnt = index.seed(seeds.into_iter().map(|(_, t)| t).collect())?;
+                index.flush()?;
+                println!(
+                    "{thrown} in the Trash and {kept} under your labels read; {learnt} not learnt before, learnt\n"
+                );
+            }
+            print!("{}", check(&index));
+            Ok(())
+        }
         Some(Command::Map {
             action: MapAction::Rebuild { from_servers },
         }) => {
-            let mut index = if args.demo {
-                index::Index::memory()
-            } else {
-                if config::load(&args.config)?.iter().any(in_vault) {
-                    open_vault(false)?;
-                }
-                index::Index::open(
-                    &index::key::dir(),
-                    secret::keepers,
-                    secret::find,
-                    secret::store,
-                )
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-            };
+            let mut index = open_index(args)?;
             if *from_servers {
                 index.forget_cache()?;
             }

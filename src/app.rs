@@ -2031,6 +2031,8 @@ impl App {
             self.status = "in Archive already".to_string();
             return;
         }
+        // Archived, it is kept: learnt as not thrown away.
+        self.teach_at(account, &folder, summary.uid, false);
         self.drop_listed(account, &folder, summary.uid);
         self.status = "archived, out of the Inbox".to_string();
         self.ask(
@@ -3297,6 +3299,13 @@ impl App {
                 .origin(&email, &folder, &summary.message_id, uid);
             let dest = known.clone().unwrap_or_else(|| self.inbox(account));
             let name = self.folder_label(account, &dest);
+            // Put back, it was not to be thrown away: learnt as kept.
+            let ident = self.accounts[account].ident.clone();
+            let _ = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put_back(&ident, &summary.message_id);
             self.drop_listed(account, &folder, uid);
             self.status = if known.is_some() {
                 format!("put back in {name}")
@@ -3601,6 +3610,8 @@ impl App {
             return;
         };
         let (account, folder, uid) = (summary.account, summary.folder, summary.summary.uid);
+        // Answered, it is kept: learnt as not thrown away.
+        self.teach_at(account, &folder, uid, false);
         if let Some(message) = self.cached(account, &folder, uid) {
             self.open_reply(account, &folder, &message, how);
             return;
@@ -4637,6 +4648,13 @@ impl App {
     fn region_archive(&mut self) -> bool {
         let dots = self.region_dots();
         let mut archived = 0;
+        // Archived, they are kept: learnt as not thrown away.
+        let keys: Vec<crate::index::Key> = dots
+            .iter()
+            .filter(|d| d.system.inbox)
+            .map(|d| d.key.clone())
+            .collect();
+        self.teach(&keys, false);
         for d in dots.iter().filter(|d| d.system.inbox) {
             let Some((a, folder, uid)) = self.place_of(d) else {
                 continue;

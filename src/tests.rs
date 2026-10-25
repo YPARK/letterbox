@@ -7253,6 +7253,8 @@ fn taught(n: usize) -> crate::filter::Filter {
                 key: r.key.clone(),
                 thrown,
                 tokens: crate::filter::Filter::tokens(&r),
+                message_id: r.message_id.clone(),
+                seeded: false,
             });
         }
     }
@@ -7496,4 +7498,121 @@ fn in_the_list_a_message_is_filed_as_in_the_map() {
     app.settle(Duration::from_secs(5));
     let (labels, inbox) = dot_labels(&app, &subject);
     assert!(labels.contains(&label) && !inbox, "{labels:?}");
+}
+
+// ---- how what is learnt would have done ----
+
+#[test]
+fn the_filter_is_graded_on_each_decision_before_it_is_learnt() {
+    let mut f = taught(25);
+    // A message from the shop you kept, last: it would have been thrown
+    // away, and is graded so, not as what it taught.
+    let kept = sent_by("k", "deals@shop.example", "Your receipt");
+    f.learn(crate::filter::Taught {
+        key: kept.key.clone(),
+        thrown: false,
+        tokens: crate::filter::Filter::tokens(&kept),
+        message_id: String::new(),
+        seeded: false,
+    });
+    let said = crate::filter::Filter::check(&f.taught);
+    // Nothing said before twenty of each: one of each a turn.
+    let first = 2 * crate::filter::READY as usize;
+    assert_eq!(said.len(), f.taught.len() - first, "{}", said.len());
+    let last = said.last().unwrap();
+    assert!(!last.thrown && last.odds >= crate::filter::SURE, "{last:?}");
+    assert_eq!(last.from, "deals@shop.example");
+    let g = crate::filter::grade(&said, crate::filter::SURE);
+    assert_eq!(g.wrong, 1, "{g:?}");
+    assert!(g.caught >= 4, "{g:?}");
+    assert_eq!(g.right, said.iter().filter(|s| !s.thrown).count() - 1);
+}
+
+#[test]
+fn a_message_put_back_is_learnt_as_kept_though_the_index_let_it_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = Index::open_with(dir.path(), &identity());
+    let mut deal = sent_by("d", "deals@shop.example", "Save now");
+    deal.message_id = "<d@shop>".into();
+    index
+        .cache(vec![Cached::Upsert(Box::new(deal.clone()))])
+        .unwrap();
+    index.teach(&deal.key, true).unwrap();
+    // Known by its Message-ID; one never thrown away is not.
+    assert!(!index.put_back(&deal.key.account, "<other@shop>").unwrap());
+    assert!(index.put_back(&deal.key.account, "<d@shop>").unwrap());
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 1));
+    let last = index.filter.taught.last().unwrap();
+    assert!(!last.thrown && last.tokens == index.filter.taught[0].tokens);
+    // Once kept, put back again teaches nothing more.
+    assert!(!index.put_back(&deal.key.account, "<d@shop>").unwrap());
+}
+
+#[test]
+fn archiving_answering_and_putting_back_teach_that_it_was_kept() {
+    let mut app = demo_map();
+    let kept = |app: &App| app.index.lock().unwrap().filter.kept;
+    let thrown = |app: &App| app.index.lock().unwrap().filter.thrown;
+    // e on the map: archived, kept.
+    press(&mut app, &["e"]);
+    assert_eq!(kept(&app), 1);
+    // r, in the list: answered, kept.
+    press(&mut app, &["M", "r"]);
+    assert_eq!(kept(&app), 2);
+    app.compose = None;
+    // d, then d on it in the Trash: put back, kept.
+    let subject = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["d"]);
+    assert_eq!(thrown(&app), 1);
+    app.settle(Duration::from_secs(5));
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Trash",
+            _ => false,
+        })
+        .expect("a Trash in the sidebar");
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject == subject)
+        .expect("in the Trash");
+    app.list.select(Some(at));
+    app.focus = app::Focus::List;
+    press(&mut app, &["d"]);
+    assert!(app.status.contains("put back"), "{}", app.status);
+    assert_eq!(kept(&app), 3);
+}
+
+#[test]
+fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
+    let mut index = Index::memory();
+    let mut store = Demo::new();
+    // A message thrown away, in the Trash.
+    let uid = store.page("INBOX", 0, 1).unwrap().summaries[0].uid;
+    store.relocate("INBOX", uid, "Trash", "").unwrap();
+    let now = jiff::Timestamp::now().as_second();
+    let thrown = crate::trash_seeds(&mut store, 10, now).unwrap();
+    assert_eq!(thrown.len(), 1);
+    assert!(thrown[0].1.thrown && thrown[0].1.seeded);
+    // Filed under labels, kept.
+    let shared = std::sync::Mutex::new(index);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    index = shared.into_inner().unwrap();
+    let kept = index.kept_seeds(100);
+    assert!(!kept.is_empty());
+    assert!(kept.iter().all(|(_, t)| !t.thrown && t.seeded));
+    let seeds: Vec<_> = thrown.into_iter().chain(kept).map(|(_, t)| t).collect();
+    let n = seeds.len();
+    assert_eq!(index.seed(seeds.clone()).unwrap(), n);
+    // Again: nothing more.
+    assert_eq!(index.seed(seeds).unwrap(), 0);
+    let said = crate::check(&index);
+    assert!(said.contains(&format!("{n} decisions")), "{said}");
+    assert!(said.contains("read from the Trash"), "{said}");
 }

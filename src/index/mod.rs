@@ -417,13 +417,91 @@ impl Index {
             key: key.clone(),
             thrown,
             tokens: crate::filter::Filter::tokens(r),
+            message_id: r.message_id.clone(),
+            seeded: false,
         };
+        self.learn(t)
+    }
+
+    fn learn(&mut self, t: crate::filter::Taught) -> anyhow::Result<()> {
         self.filter.learn(t.clone());
         self.version += 1;
         if let Some(taught) = &mut self.taught {
             taught.push(t)?;
         }
         Ok(())
+    }
+
+    /// A message of `account` put back from the Trash, by its `Message-ID`:
+    /// learnt as kept, as it was read when it was thrown away, since the
+    /// index has let it go. Whether it was known.
+    pub fn put_back(&mut self, account: &str, message_id: &str) -> anyhow::Result<bool> {
+        if message_id.is_empty() || self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            return Ok(false);
+        }
+        let Some(thrown) = self
+            .filter
+            .taught
+            .iter()
+            .rev()
+            .find(|t| t.key.account == account && t.message_id == message_id)
+            .filter(|t| t.thrown)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        self.learn(crate::filter::Taught {
+            thrown: false,
+            seeded: false,
+            ..thrown
+        })?;
+        Ok(true)
+    }
+
+    /// Learn from `seeds`, read from where mail already is, each not yet
+    /// learnt; how many were.
+    pub fn seed(&mut self, seeds: Vec<crate::filter::Taught>) -> anyhow::Result<usize> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read, so nothing more is learnt");
+        }
+        let known: std::collections::HashSet<Key> =
+            self.filter.taught.iter().map(|t| t.key.clone()).collect();
+        let mut n = 0;
+        for t in seeds {
+            if !known.contains(&t.key) {
+                self.learn(t)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// The mail you kept, filed under a label and out of the Inbox, as
+    /// seeds: the newest `limit`, each with when it was sent.
+    pub fn kept_seeds(&self, limit: usize) -> Vec<(i64, crate::filter::Taught)> {
+        let mut kept: Vec<(i64, crate::filter::Taught)> = self
+            .records
+            .values()
+            .filter(|r| {
+                let s = self.system(&r.key);
+                !s.inbox && !s.sent && !s.draft && !self.labels(&r.key).is_empty()
+            })
+            .map(|r| {
+                (
+                    r.date.unwrap_or(r.first_seen),
+                    crate::filter::Taught {
+                        key: r.key.clone(),
+                        thrown: false,
+                        tokens: crate::filter::Filter::tokens(r),
+                        message_id: r.message_id.clone(),
+                        seeded: true,
+                    },
+                )
+            })
+            .collect();
+        kept.sort_by_key(|(at, t)| (std::cmp::Reverse(*at), t.key.clone()));
+        kept.truncate(limit);
+        kept
     }
 
     /// The message of `account` at `uid` in `folder`, by its key.

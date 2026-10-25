@@ -19,6 +19,14 @@ pub struct Taught {
     pub key: Key,
     pub thrown: bool,
     pub tokens: Vec<(String, f32)>,
+    /// Its `Message-ID`, by which a message put back from the Trash is
+    /// known again once the index has let it go.
+    #[serde(default)]
+    pub message_id: String,
+    /// Whether it was read from where mail already was, the Trash or a
+    /// label, not decided as you went.
+    #[serde(default)]
+    pub seeded: bool,
 }
 
 /// How many of each it is to have been taught before it says anything.
@@ -39,6 +47,51 @@ pub struct Filter {
     pub kept: u32,
     /// Every decision, in turn, to write again as one base.
     pub taught: Vec<Taught>,
+}
+
+/// What it would have said of a decision, before learning it.
+#[derive(Clone, Debug)]
+pub struct Said {
+    pub odds: f32,
+    pub thrown: bool,
+    pub seeded: bool,
+    pub key: Key,
+    pub from: String,
+}
+
+/// How it would have done, sure to `level`: of those thrown away, how many
+/// it would have said; of those kept, how many it would have thrown away.
+pub fn grade(said: &[Said], level: f32) -> Grade {
+    let mut g = Grade::default();
+    for s in said {
+        let says = s.odds >= level;
+        match (s.thrown, says) {
+            (true, true) => g.caught += 1,
+            (true, false) => g.missed += 1,
+            (false, true) => g.wrong += 1,
+            (false, false) => g.right += 1,
+        }
+    }
+    g
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Grade {
+    /// Thrown away, and it would have said so.
+    pub caught: usize,
+    pub missed: usize,
+    /// Kept, and it would have thrown them away: what matters most.
+    pub wrong: usize,
+    pub right: usize,
+}
+
+/// Who sent mail read as `tokens`, as the map reads them.
+fn from_of(tokens: &[(String, f32)]) -> String {
+    tokens
+        .iter()
+        .find_map(|(t, _)| t.strip_prefix("from:"))
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn sigmoid(x: f32) -> f32 {
@@ -109,6 +162,27 @@ impl Filter {
     /// Whether it has been taught enough of both to say anything.
     pub fn ready(&self) -> bool {
         self.thrown >= READY && self.kept >= READY
+    }
+
+    /// How it would have done: each decision in `taught`, in turn, said
+    /// before it was learnt, by what was learnt before it alone, once that
+    /// was enough to say anything.
+    pub fn check(taught: &[Taught]) -> Vec<Said> {
+        let mut f = Filter::default();
+        let mut said = Vec::new();
+        for t in taught {
+            if f.ready() {
+                said.push(Said {
+                    odds: f.odds(&t.tokens),
+                    thrown: t.thrown,
+                    seeded: t.seeded,
+                    key: t.key.clone(),
+                    from: from_of(&t.tokens),
+                });
+            }
+            f.learn(t.clone());
+        }
+        said
     }
 
     /// How likely `r` is to be thrown away, if it has been taught enough
