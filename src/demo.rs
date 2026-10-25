@@ -5,22 +5,79 @@
 //! `List-Id`, talks, travel and home; what is read and old is in Archive,
 //! and the older grant letters in Projects/Grant, filed by hand.
 
+use crate::index::record::Indexed;
 use crate::mail::{self, Flags, Folder, Role, Summary};
-use crate::store::{Flag, Page, Removal, Store};
+use crate::store::{Change, Flag, Kind, Page, Removal, Status, Store};
 use jiff::{ToSpan, Zoned};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 struct Letter {
     uid: u32,
     flags: Flags,
     raw: Vec<u8>,
+    /// Its keywords: the demo keeps labels as a server of keywords does.
+    keywords: Vec<String>,
+    /// When it last changed, as CONDSTORE counts.
+    modseq: u64,
 }
 
-pub struct Demo {
+impl Letter {
+    fn new(uid: u32, flags: Flags, raw: Vec<u8>, modseq: u64) -> Letter {
+        Letter {
+            uid,
+            flags,
+            raw,
+            keywords: Vec::new(),
+            modseq,
+        }
+    }
+}
+
+/// The demo's mail, as a server holds it.
+struct Mail {
     /// Each folder's messages, oldest first, as a server numbers them.
     folders: BTreeMap<String, Vec<Letter>>,
     /// The next UID, across every folder: a move gives the message a new one.
     next: u32,
+    /// The mod-sequence of the last change.
+    modseq: u64,
+}
+
+impl Mail {
+    fn letters(&mut self, folder: &str) -> anyhow::Result<&mut Vec<Letter>> {
+        self.folders
+            .get_mut(folder)
+            .ok_or_else(|| anyhow::anyhow!("no folder {folder}"))
+    }
+
+    /// The message `uid` of `folder`, changed now.
+    fn changing(&mut self, folder: &str, uid: u32) -> anyhow::Result<&mut Letter> {
+        self.modseq += 1;
+        let modseq = self.modseq;
+        let letter = self
+            .letters(folder)?
+            .iter_mut()
+            .find(|l| l.uid == uid)
+            .ok_or_else(|| anyhow::anyhow!("no message {uid} in {folder}"))?;
+        letter.modseq = modseq;
+        Ok(letter)
+    }
+
+    /// A new UID, and the mod-sequence of a message given it now.
+    fn fresh(&mut self) -> (u32, u64) {
+        let uid = self.next;
+        self.next += 1;
+        self.modseq += 1;
+        (uid, self.modseq)
+    }
+}
+
+/// The demo's account. Its twin, for the map, holds the same mail.
+pub struct Demo {
+    mail: Arc<Mutex<Mail>>,
+    /// What it is known by in the index.
+    ident: String,
 }
 
 /// A message, `hours` ago.
@@ -456,7 +513,7 @@ impl Demo {
             let list = folders.entry(folder.to_string()).or_default();
             for (_, raw, flags) in letters {
                 uid += 1;
-                list.push(Letter { uid, flags, raw });
+                list.push(Letter::new(uid, flags, raw, 1));
             }
         };
         let mut lab: BTreeMap<&str, Vec<Kept>> = BTreeMap::new();
@@ -497,15 +554,17 @@ impl Demo {
             file(f, Vec::new());
         }
         Demo {
-            next: uid + 1,
-            folders,
+            mail: Arc::new(Mutex::new(Mail {
+                next: uid + 1,
+                folders,
+                modseq: 1,
+            })),
+            ident: "demo".to_string(),
         }
     }
 
-    fn letters(&mut self, folder: &str) -> anyhow::Result<&mut Vec<Letter>> {
-        self.folders
-            .get_mut(folder)
-            .ok_or_else(|| anyhow::anyhow!("no folder {folder}"))
+    fn mail(&self) -> MutexGuard<'_, Mail> {
+        self.mail.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -516,6 +575,7 @@ fn summary(l: &Letter) -> Summary {
 impl Store for Demo {
     fn folders(&mut self) -> anyhow::Result<Vec<Folder>> {
         let mut folders: Vec<Folder> = self
+            .mail()
             .folders
             .keys()
             .map(|f| Folder::new(f, Some("/"), None, true))
@@ -526,13 +586,15 @@ impl Store for Demo {
     }
 
     fn counts(&mut self, folder: &str) -> anyhow::Result<(u32, u32)> {
-        let letters = self.letters(folder)?;
+        let mut mail = self.mail();
+        let letters = mail.letters(folder)?;
         let unseen = letters.iter().filter(|l| !l.flags.seen).count();
         Ok((letters.len() as u32, unseen as u32))
     }
 
     fn page(&mut self, folder: &str, offset: usize, n: usize) -> anyhow::Result<Page> {
-        let letters = self.letters(folder)?;
+        let mut mail = self.mail();
+        let letters = mail.letters(folder)?;
         Ok(Page {
             summaries: letters
                 .iter()
@@ -546,7 +608,8 @@ impl Store for Demo {
     }
 
     fn raw(&mut self, folder: &str, uid: u32) -> anyhow::Result<Vec<u8>> {
-        self.letters(folder)?
+        self.mail()
+            .letters(folder)?
             .iter()
             .find(|l| l.uid == uid)
             .map(|l| l.raw.clone())
@@ -554,11 +617,8 @@ impl Store for Demo {
     }
 
     fn set(&mut self, folder: &str, uid: u32, flag: Flag, on: bool) -> anyhow::Result<()> {
-        let letter = self
-            .letters(folder)?
-            .iter_mut()
-            .find(|l| l.uid == uid)
-            .ok_or_else(|| anyhow::anyhow!("no message {uid} in {folder}"))?;
+        let mut mail = self.mail();
+        let letter = mail.changing(folder, uid)?;
         match flag {
             Flag::Seen => letter.flags.seen = on,
             Flag::Flagged => letter.flags.flagged = on,
@@ -574,28 +634,30 @@ impl Store for Demo {
         to: &str,
         _message_id: &str,
     ) -> anyhow::Result<u32> {
-        if !self.folders.contains_key(to) {
+        let mut mail = self.mail();
+        if !mail.folders.contains_key(to) {
             anyhow::bail!("no folder {to}");
         }
         let letter = {
-            let letters = self.letters(from)?;
+            let letters = mail.letters(from)?;
             let at = letters
                 .iter()
                 .position(|l| l.uid == uid)
                 .ok_or_else(|| anyhow::anyhow!("no message {uid} in {from}"))?;
             letters.remove(at)
         };
-        let uid = self.next;
-        self.next += 1;
-        self.folders
-            .get_mut(to)
-            .expect("checked")
-            .push(Letter { uid, ..letter });
+        let (uid, modseq) = mail.fresh();
+        mail.folders.get_mut(to).expect("checked").push(Letter {
+            uid,
+            modseq,
+            ..letter
+        });
         Ok(uid)
     }
 
     fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal> {
-        let letters = self.letters(folder)?;
+        let mut mail = self.mail();
+        let letters = mail.letters(folder)?;
         let n = letters.len();
         letters.retain(|l| l.uid != uid);
         Ok(if letters.len() == n {
@@ -606,22 +668,20 @@ impl Store for Demo {
     }
 
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
-        let uid = self.next;
-        self.next += 1;
+        let mut mail = self.mail();
+        mail.letters(folder)?;
+        let (uid, modseq) = mail.fresh();
         let flags = Flags {
             seen,
             ..Flags::default()
         };
-        self.letters(folder)?.push(Letter {
-            uid,
-            flags,
-            raw: raw.to_vec(),
-        });
+        mail.letters(folder)?
+            .push(Letter::new(uid, flags, raw.to_vec(), modseq));
         Ok(())
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {
-        self.folders.entry(path.to_string()).or_default();
+        self.mail().folders.entry(path.to_string()).or_default();
         Ok(())
     }
 
@@ -637,6 +697,7 @@ impl Store for Demo {
     fn search(&mut self, folder: &str, words: &str, n: usize) -> anyhow::Result<Vec<Summary>> {
         let words: Vec<String> = words.split_whitespace().map(str::to_lowercase).collect();
         Ok(self
+            .mail()
             .letters(folder)?
             .iter()
             .rev()
@@ -647,5 +708,77 @@ impl Store for Demo {
             .take(n)
             .map(summary)
             .collect())
+    }
+
+    fn twin(&self) -> Option<Box<dyn Store>> {
+        Some(Box::new(Demo {
+            mail: self.mail.clone(),
+            ident: self.ident.clone(),
+        }))
+    }
+
+    fn ident(&self) -> String {
+        self.ident.clone()
+    }
+
+    fn kind(&mut self) -> anyhow::Result<Kind> {
+        Ok(Kind::Keywords)
+    }
+
+    fn status(&mut self, folder: &str) -> anyhow::Result<Status> {
+        let mut mail = self.mail();
+        let next = mail.next;
+        let letters = mail.letters(folder)?;
+        Ok(Status {
+            messages: letters.len() as u32,
+            validity: 1,
+            next,
+            modseq: Some(letters.iter().map(|l| l.modseq).max().unwrap_or(1)),
+        })
+    }
+
+    fn fetch_index(&mut self, folder: &str, uids: &[u32]) -> anyhow::Result<Vec<Indexed>> {
+        Ok(self
+            .mail()
+            .letters(folder)?
+            .iter()
+            .filter(|l| uids.contains(&l.uid))
+            .map(|l| Indexed {
+                uid: l.uid,
+                flags: l.flags,
+                labels: l.keywords.clone(),
+                modseq: Some(l.modseq),
+                size: l.raw.len() as u32,
+                raw: l.raw.clone(),
+                ..Indexed::default()
+            })
+            .collect())
+    }
+
+    fn changed(
+        &mut self,
+        folder: &str,
+        since: Option<u64>,
+        uids: &[u32],
+    ) -> anyhow::Result<Vec<Change>> {
+        Ok(self
+            .mail()
+            .letters(folder)?
+            .iter()
+            .filter(|l| match since {
+                Some(m) => l.modseq > m,
+                None => uids.contains(&l.uid),
+            })
+            .map(|l| Change {
+                uid: l.uid,
+                flags: l.flags,
+                labels: l.keywords.clone(),
+                modseq: Some(l.modseq),
+            })
+            .collect())
+    }
+
+    fn uids(&mut self, folder: &str) -> anyhow::Result<Vec<u32>> {
+        Ok(self.mail().letters(folder)?.iter().map(|l| l.uid).collect())
     }
 }

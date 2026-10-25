@@ -6,6 +6,7 @@ use crate::compose;
 use crate::compose::{Respond, Thread};
 use crate::config::{self, Auth};
 use crate::edit::{self, Done};
+use crate::index::{Index, sync};
 use crate::keymap::{self, Act};
 use crate::mail::{self, Attachment, Folder, Message, Role, Summary};
 use crate::oauth;
@@ -31,9 +32,9 @@ use ratatui::text::Line;
 use ratatui::widgets::ListState;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Messages listed at a time; more as the list is moved to its end.
@@ -736,6 +737,15 @@ pub struct App {
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
     quit: bool,
+    /// The index the map reads, shared with each account's sync.
+    pub index: Arc<Mutex<Index>>,
+    /// Why there is no map, if there is none: as its key could not be had.
+    pub map_off: Option<String>,
+    /// Each account's sync, by the account's place, and what stops its
+    /// pass; none once the account is removed.
+    syncs: Vec<Option<(Sender<sync::Ask>, Arc<AtomicBool>)>>,
+    /// How far the map's sync has got, as it last said.
+    pub mapping: String,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -774,7 +784,8 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
         Ok(())
     })();
     give_back();
-    result
+    let written = app.index.lock().unwrap_or_else(|e| e.into_inner()).flush();
+    result.and(written)
 }
 
 /// Do what `launch` asks, outside the screen; what to say of it.
@@ -846,8 +857,22 @@ fn give_back() {
 
 impl App {
     /// The app over `stores`, each an account by its name; their folders
-    /// are asked for at once.
+    /// are asked for at once. Its map is in memory alone.
     pub fn new(stores: Vec<(String, Box<dyn Store>)>, config: PathBuf) -> Self {
+        Self::with_index(stores, config, Ok(Index::memory()))
+    }
+
+    /// The app over `stores`, its map read from `index`, or with none, and
+    /// why, when it could not be opened.
+    pub fn with_index(
+        stores: Vec<(String, Box<dyn Store>)>,
+        config: PathBuf,
+        index: Result<Index, String>,
+    ) -> Self {
+        let (index, map_off) = match index {
+            Ok(index) => (index, None),
+            Err(why) => (Index::memory(), Some(why)),
+        };
         let (replies_to, replies) = mpsc::channel();
         let ledger = trash::Ledger::load();
         let status = ledger.fault().unwrap_or("").to_string();
@@ -893,6 +918,10 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            index: Arc::new(Mutex::new(index)),
+            map_off,
+            syncs: Vec::new(),
+            mapping: String::new(),
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -913,7 +942,11 @@ impl App {
     fn join(&mut self, name: String, store: Box<dyn Store>) -> usize {
         let a = self.accounts.len();
         let trash = store.trash().map(str::to_string);
+        let twin = store.twin().filter(|_| self.map_off.is_none());
         let asks = worker::spawn(a, store, self.replies_to.clone());
+        self.syncs.push(
+            twin.map(|twin| sync::spawn(a, twin, self.index.clone(), self.replies_to.clone())),
+        );
         self.accounts.push(Account {
             name,
             email: String::new(),
@@ -922,7 +955,20 @@ impl App {
             state: State::Connecting,
             asks: Some(asks),
         });
+        self.map_pass(a);
         a
+    }
+
+    /// Ask the account's sync to pass over it, for the map.
+    fn map_pass(&mut self, account: usize) {
+        let sent = self
+            .syncs
+            .get(account)
+            .and_then(Option::as_ref)
+            .is_some_and(|(s, _)| s.send(sync::Ask::Pass).is_ok());
+        if sent {
+            self.pending += 1;
+        }
     }
 
     fn ask(&mut self, account: usize, ask: Ask) {
@@ -1002,6 +1048,11 @@ impl App {
                 form.note = None;
                 form.waiting = Some(waiting);
             }
+            return;
+        }
+        // How far the map's sync has got is said as it goes.
+        if let Answer::Mapping(said) = reply.answer {
+            self.mapping = said;
             return;
         }
         // The address is said as the thread starts, not in answer to an ask.
@@ -1095,7 +1146,18 @@ impl App {
             | Answer::Waiting(_)
             | Answer::Address(_)
             | Answer::Fetched(_)
+            | Answer::Mapping(_)
             | Answer::Realm { .. } => {}
+            Answer::Mapped(passed) => {
+                self.mapping = match passed {
+                    Ok(_) => String::new(),
+                    Err(e) => format!(
+                        "the map cannot read {}: {}",
+                        self.accounts[a].name,
+                        first_line(&e)
+                    ),
+                };
+            }
             Answer::Page {
                 folder,
                 offset,
@@ -1239,6 +1301,7 @@ impl App {
                     self.ask(a, Ask::Count(from));
                     self.ask(a, Ask::Count(to));
                     self.reload(a);
+                    self.map_pass(a);
                 }
                 Err(e) => {
                     self.status = format!("cannot move it: {}", first_line(&e));
@@ -1608,6 +1671,9 @@ impl App {
             }
         };
         self.accounts[a].asks = None;
+        if let Some((_, stop)) = self.syncs.get_mut(a).and_then(Option::take) {
+            stop.store(true, Ordering::Relaxed);
+        }
         self.listed.retain(|(x, _), _| *x != a);
         self.read.forget(a);
         // Folders together are no more with one account left.
@@ -1821,6 +1887,7 @@ impl App {
             self.ask_page(a, folder, 0);
         }
         for a in self.live().collect::<Vec<_>>() {
+            self.map_pass(a);
             if matches!(self.accounts[a].state, State::Failed(_)) {
                 self.accounts[a].state = State::Connecting;
                 self.ask(a, Ask::Folders);

@@ -7,8 +7,6 @@ mod compose;
 mod config;
 mod demo;
 mod edit;
-// The map's sync, which reads what is added here, follows.
-#[allow(dead_code)]
 mod imap;
 // What the map is to read is written before the map that reads it.
 #[allow(dead_code)]
@@ -21,7 +19,6 @@ mod oauth;
 mod secret;
 mod setup;
 mod smtp;
-#[allow(dead_code)]
 mod store;
 mod theme;
 mod trash;
@@ -483,7 +480,18 @@ pub fn run() -> anyhow::Result<()> {
 fn command(args: &Args) -> anyhow::Result<()> {
     match &args.command {
         None => {
-            let mut app = app::App::new(stores_for_tui(args)?, args.config.clone());
+            let stores = stores_for_tui(args)?;
+            let index = if args.demo {
+                Ok(index::Index::memory())
+            } else {
+                index::Index::open(
+                    &index::key::dir(),
+                    secret::keepers,
+                    secret::find,
+                    secret::store,
+                )
+            };
+            let mut app = app::App::with_index(stores, args.config.clone(), index);
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();

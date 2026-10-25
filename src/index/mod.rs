@@ -9,6 +9,7 @@
 pub mod journal;
 pub mod key;
 pub mod record;
+pub mod sync;
 
 use crate::mail::Flags;
 use crate::secret::Keeper;

@@ -400,6 +400,9 @@ pub fn renew(tenant: &str, client: &str, refresh: &str) -> anyhow::Result<Tokens
 /// The tokens of the accounts signed in this run, by `user@host`.
 static TOKENS: Mutex<Option<HashMap<String, Tokens>>> = Mutex::new(None);
 
+/// What each account's renewal holds while it renews, by `user@host`.
+static RENEWING: Mutex<Option<HashMap<String, std::sync::Arc<Mutex<()>>>>> = Mutex::new(None);
+
 fn key(a: &Account) -> String {
     format!("{}@{}", a.user(), a.host)
 }
@@ -415,6 +418,17 @@ pub fn remember(account: &Account, tokens: Tokens) {
 /// old one was.
 pub fn access(account: &Account) -> anyhow::Result<String> {
     let k = key(account);
+    // One renewal at a time an account: the screen's connection and the
+    // map's may both want a token, and Microsoft takes each refresh token
+    // once, the second renewal with it refused.
+    let one = RENEWING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_default()
+        .entry(k.clone())
+        .or_default()
+        .clone();
+    let _renewing = one.lock().unwrap_or_else(|e| e.into_inner());
     let cached = TOKENS
         .lock()
         .unwrap_or_else(|e| e.into_inner())

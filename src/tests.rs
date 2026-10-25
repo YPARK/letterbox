@@ -3913,3 +3913,220 @@ fn the_maps_key_is_kept_before_it_is_named() {
     let found = key::identity(&card, find_key).unwrap();
     assert!(key::export(&found).contains(&secret));
 }
+
+// ---- the map's sync ----
+
+/// One pass of the sync over `store`, into `index`, as at the time `now`.
+fn sync_at(store: &mut dyn Store, index: &Mutex<Index>, now: i64) -> index::sync::Passed {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    index::sync::pass(store, index, now, &stop, &mut |_| {}).unwrap()
+}
+
+fn sync_once(store: &mut dyn Store, index: &Mutex<Index>) -> index::sync::Passed {
+    sync_at(store, index, 1_000_000)
+}
+
+/// The folders the index places each of `account`'s messages in, by
+/// subject.
+fn places(index: &Mutex<Index>) -> std::collections::BTreeMap<String, Vec<String>> {
+    index
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .map(|r| {
+            (
+                r.subject.clone(),
+                r.places.iter().map(|p| p.folder.clone()).collect(),
+            )
+        })
+        .collect()
+}
+
+/// The UID sets of the messages fetched whole for the index, as the
+/// server was asked for them, in turn.
+fn index_fetches(boxes: &Boxes) -> Vec<String> {
+    boxes
+        .lock()
+        .unwrap()
+        .said
+        .iter()
+        .filter(|s| s.starts_with("UID FETCH") && s.contains("LIST-ID"))
+        .map(|s| s.split(' ').nth(2).unwrap_or_default().to_string())
+        .collect()
+}
+
+#[test]
+fn the_sync_reads_the_inbox_first_newest_first_a_hundred_at_a_time() {
+    let (account, boxes) = serve_boxes(boxes_in(Mode::Keywords));
+    let mut uids = Vec::new();
+    for n in 0..150 {
+        uids.push(add_listed(&boxes, "INBOX", &[], &format!("Build {n}")));
+    }
+    add_listed(&boxes, "Archive", &["\\Seen"], "Old news");
+    add_listed(&boxes, "Drafts", &[], "Unfinished");
+    add_listed(&boxes, "Deleted Items", &[], "Thrown away");
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    let passed = sync_once(&mut imap, &index);
+    assert!(passed.complete);
+    let fetches = index_fetches(&boxes);
+    let newest = crate::imap::uid_set(&uids[50..]);
+    assert_eq!(fetches[0], newest, "the newest hundred of the Inbox first");
+    assert_eq!(fetches.len(), 3, "{fetches:?}");
+    let at = places(&index);
+    assert_eq!(at.len(), 3 + 150 + 1, "{:?}", at.keys());
+    assert_eq!(at["Old news"], ["Archive"]);
+    assert_eq!(at["Photo 51"], ["INBOX"]);
+    assert!(!at.contains_key("Unfinished") && !at.contains_key("Thrown away"));
+
+    // Again, nothing new: nothing is fetched whole.
+    sync_once(&mut imap, &index);
+    assert_eq!(index_fetches(&boxes).len(), 3);
+}
+
+#[test]
+fn new_mail_and_mail_gone_are_seen_by_the_next_pass() {
+    let (account, boxes) = serve_boxes(boxes_in(Mode::Keywords));
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    let new = add_listed(&boxes, "INBOX", &[], "PR #38 merged");
+    boxes.lock().unwrap()[0].letters.retain(|l| l.uid != 11);
+    sync_at(&mut imap, &index, 2_000_000);
+    assert_eq!(index_fetches(&boxes).last().unwrap(), &new.to_string());
+    let at = places(&index);
+    assert!(at.contains_key("PR #38 merged"));
+    assert!(!at.contains_key("Photo 51"), "forgotten once gone");
+    let index = index.lock().unwrap();
+    let pr = index
+        .records
+        .values()
+        .find(|r| r.subject == "PR #38 merged");
+    assert_eq!(pr.unwrap().first_seen, 2_000_000);
+}
+
+#[test]
+fn a_message_moved_keeps_its_key_and_its_first_sight() {
+    let (account, _) = serve_boxes(boxes_in(Mode::Keywords));
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    let key = |index: &Mutex<Index>| {
+        let index = index.lock().unwrap();
+        let r = index
+            .records
+            .values()
+            .find(|r| r.subject == "Photo 51")
+            .unwrap();
+        (r.key.clone(), r.first_seen, r.places.clone())
+    };
+    let (before, seen, _) = key(&index);
+    imap.relocate("INBOX", 11, "Archive", "").unwrap();
+    sync_at(&mut imap, &index, 3_000_000);
+    let (after, still, places) = key(&index);
+    assert_eq!((after, still), (before, seen));
+    assert_eq!(places.len(), 1);
+    assert_eq!(places[0].folder, "Archive");
+    assert_ne!(places[0].uid, 11);
+    assert_eq!(index.lock().unwrap().records.len(), 3);
+}
+
+#[test]
+fn a_folder_whose_uidvalidity_changed_is_read_again() {
+    let (account, boxes) = serve_boxes(boxes_in(Mode::Keywords));
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    {
+        let mut fake = boxes.lock().unwrap();
+        let inbox = &mut fake[0];
+        inbox.validity = 8;
+        for (i, l) in inbox.letters.iter_mut().enumerate() {
+            l.uid = 100 + i as u32;
+        }
+        inbox.next = 200;
+    }
+    sync_once(&mut imap, &index);
+    let index = index.lock().unwrap();
+    assert_eq!(index.records.len(), 3);
+    for r in index.records.values() {
+        assert_eq!(r.places.len(), 1);
+        assert_eq!((r.places[0].validity, r.places[0].uid >= 100), (8, true));
+    }
+}
+
+#[test]
+fn flags_changed_on_the_server_are_read_by_mod_sequence_or_again() {
+    for mode in [Mode::Keywords, Mode::Folders] {
+        let (account, boxes) = serve_boxes(boxes_in(mode));
+        let index = Mutex::new(Index::memory());
+        let mut imap = Imap::new(account);
+        sync_once(&mut imap, &index);
+        {
+            let mut fake = boxes.lock().unwrap();
+            let seq = fake.tick();
+            let emmy = &mut fake[0].letters[2];
+            emmy.flags.push("\\Seen".into());
+            emmy.modseq = seq;
+        }
+        sync_at(&mut imap, &index, 1_000_100);
+        let index = index.lock().unwrap();
+        let emmy = index
+            .records
+            .values()
+            .find(|r| r.address == "noether@goettingen.example")
+            .unwrap();
+        assert!(emmy.flags.seen, "{mode:?}");
+        let said = boxes.lock().unwrap().said.join("\n");
+        assert_eq!(
+            said.contains("CHANGEDSINCE"),
+            mode == Mode::Keywords,
+            "{said}"
+        );
+    }
+}
+
+#[test]
+fn gmail_is_read_through_all_mail_alone() {
+    let (account, boxes) = serve_boxes(gmail_boxes());
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    assert!(sync_once(&mut imap, &index).complete);
+    let said = boxes.lock().unwrap().said.clone();
+    let selected: Vec<&String> = said.iter().filter(|s| s.starts_with("SELECT")).collect();
+    assert!(
+        selected.iter().all(|s| s.contains("All Mail")),
+        "{selected:?}"
+    );
+    let index = index.lock().unwrap();
+    assert_eq!(index.records.len(), 3);
+    let aims = index
+        .records
+        .values()
+        .find(|r| r.subject == "Aims page, third pass")
+        .unwrap();
+    assert_eq!(aims.key.id, "gm:9021");
+    assert_eq!(aims.server, ["\\Inbox", "Projects/Grant"]);
+}
+
+#[test]
+fn the_demo_is_mapped_from_a_twin_that_sees_its_mail() {
+    let demo = Demo::new();
+    let mut twin = demo.twin().unwrap();
+    let index = Mutex::new(Index::memory());
+    sync_once(twin.as_mut(), &index);
+    // The Inbox, Archive, Sent and Projects/Grant; not Drafts.
+    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    let mut demo = demo;
+    demo.relocate("INBOX", 1, "Trash", "").unwrap();
+    sync_once(twin.as_mut(), &index);
+    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4 - 1);
+}
+
+#[test]
+fn the_app_maps_every_account_as_it_starts() {
+    let app = demo();
+    assert_eq!(app.index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    assert!(app.mapping.is_empty(), "{}", app.mapping);
+}

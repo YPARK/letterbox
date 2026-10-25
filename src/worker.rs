@@ -120,6 +120,11 @@ pub enum Answer {
     },
     /// A linked document downloaded, and where it is kept.
     Fetched(Result<std::path::PathBuf, String>),
+    /// How far the map's sync of the account has got, as it goes; not an
+    /// answer to what was asked.
+    Mapping(String),
+    /// A pass of the map's sync over the account, done.
+    Mapped(Result<crate::index::sync::Passed, String>),
 }
 
 pub struct Added {
