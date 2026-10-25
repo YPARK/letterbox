@@ -1940,6 +1940,34 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     crate::vault::lock();
     crate::vault::unlock_by_key().unwrap().unwrap();
     assert_eq!(crate::vault::get("imap.example.com", "me").unwrap(), "pw");
+    // Given a passphrase instead: the key file gone, the passphrase asked.
+    assert!(crate::vault::rekey(Some("short")).is_err());
+    crate::vault::rekey(Some("a new horse")).unwrap();
+    assert!(!crate::vault::key_path().exists());
+    crate::vault::lock();
+    assert!(crate::vault::unlock_by_key().is_none());
+    crate::vault::unlock("a new horse").unwrap();
+    assert_eq!(crate::vault::get("imap.example.com", "me").unwrap(), "pw");
+    // And a key file again.
+    crate::vault::rekey(None).unwrap();
+    crate::vault::lock();
+    assert!(crate::vault::unlock("a new horse").is_err());
+    crate::vault::unlock_by_key().unwrap().unwrap();
+    assert_eq!(crate::vault::get("imap.example.com", "me").unwrap(), "pw");
+    // A change cut short, the new key beside the vault it opens: it opens.
+    let key = std::fs::read_to_string(crate::vault::key_path()).unwrap();
+    std::fs::rename(
+        crate::vault::key_path(),
+        crate::vault::key_path().with_extension("key.new"),
+    )
+    .unwrap();
+    std::fs::write(crate::vault::key_path(), "AGE-SECRET-KEY-1STALE").unwrap();
+    crate::vault::lock();
+    crate::vault::unlock_by_key().unwrap().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(crate::vault::key_path()).unwrap(),
+        key
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

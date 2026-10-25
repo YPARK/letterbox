@@ -61,7 +61,10 @@ or with `--keep`:
 Made with no passphrase (nothing typed when asked for one), the vault's
 key is a file beside it, `vault.key`, which only you may read: nothing is
 ever asked, as letterbox starts or after, and it is as safe as that file,
-as an ssh key with no passphrase is.
+as an ssh key with no passphrase is. `letterbox vault passphrase` gives
+it a new passphrase, or, given none, a key file instead, either way: the
+vault is written again under the new one, and nothing in it is lost if
+that is cut short.
 
 `letterbox keep vault` moves every password letterbox keeps, and the
 map's key, into the vault, and `letterbox keep keyring` moves them back:

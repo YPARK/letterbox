@@ -121,6 +121,11 @@ enum Command {
         #[arg(value_enum)]
         to: secret::Keeper,
     },
+    /// letterbox's vault: give it a new passphrase, or a key file instead
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
+    },
     /// The map of every account's mail: lay it out again, or say its key
     Map {
         #[command(subcommand)]
@@ -182,6 +187,13 @@ enum AccountAction {
     },
     /// Call an account something else; only letterbox's name for it changes
     Rename { name: String, new: String },
+}
+
+#[derive(Subcommand)]
+enum VaultAction {
+    /// A new passphrase for it, asked for as letterbox starts; or none, its
+    /// key a file beside it only you may read, never asked for
+    Passphrase,
 }
 
 #[derive(Subcommand)]
@@ -419,8 +431,10 @@ fn open_vault(create: bool) -> anyhow::Result<()> {
     if vault::is_open() {
         return Ok(());
     }
-    if let Some(opened) = vault::unlock_by_key() {
-        return opened;
+    // By its key file; one that no longer opens it, as after its
+    // passphrase was changed, asks for the passphrase instead.
+    if let Some(Ok(())) = vault::unlock_by_key() {
+        return Ok(());
     }
     if !vault::exists() {
         if !create {
@@ -717,6 +731,29 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 index = shared.into_inner().unwrap_or_else(|e| e.into_inner());
             }
             println!("{}", map::rebuild(&mut index)?);
+            Ok(())
+        }
+        Some(Command::Vault {
+            action: VaultAction::Passphrase,
+        }) => {
+            if !vault::exists() {
+                bail!("there is no vault yet: `letterbox keep vault` makes one");
+            }
+            open_vault(false)?;
+            let new = ask_password("New vault passphrase, or nothing for a key file")?;
+            if new.is_empty() {
+                vault::rekey(None)?;
+                println!(
+                    "the vault's key is kept in {}, which only you may read: nothing is asked",
+                    vault::key_path().display()
+                );
+            } else {
+                if ask_password("Again")? != new {
+                    bail!("the two passphrases differ: the vault is as it was");
+                }
+                vault::rekey(Some(&new))?;
+                println!("the vault's passphrase is changed: it is asked for as letterbox starts");
+            }
             Ok(())
         }
         Some(Command::Keep { to }) => {

@@ -52,10 +52,59 @@ pub fn key_path() -> PathBuf {
     path().with_extension("key")
 }
 
-/// Open the vault by its key file, if it has one: never asked.
+/// Open the vault by its key file, if it has one: never asked. A key
+/// left beside it by a change cut short is tried too, and kept if it opens
+/// it.
 pub fn unlock_by_key() -> Option<anyhow::Result<()>> {
-    let key = std::fs::read_to_string(key_path()).ok()?;
+    let (at, new) = (key_path(), key_path().with_extension("key.new"));
+    if let Ok(key) = std::fs::read_to_string(&new)
+        && open_with(key.trim(), true).is_ok()
+    {
+        let _ = std::fs::rename(&new, &at);
+        return Some(Ok(()));
+    }
+    let key = std::fs::read_to_string(at).ok()?;
     Some(open_with(key.trim(), true))
+}
+
+/// Give the open vault a new passphrase; or, none, a new key file, never
+/// asked for. Written so that a change cut short leaves it openable: a new
+/// key is written beside the old before the vault, and an old key file is
+/// removed only after it.
+pub fn rekey(passphrase: Option<&str>) -> anyhow::Result<()> {
+    use age::secrecy::ExposeSecret;
+    let mut guard = open();
+    let Some(v) = guard.as_mut() else {
+        bail!("the vault is locked");
+    };
+    let (at, new) = (key_path(), key_path().with_extension("key.new"));
+    match passphrase {
+        Some(p) => {
+            if p.chars().count() < 8 {
+                bail!("a vault's passphrase is 8 characters or more");
+            }
+            v.passphrase = SecretString::from(p.to_string());
+            v.keyed = false;
+            write(v)?;
+            for key in [&new, &at] {
+                match std::fs::remove_file(key) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e).with_context(|| format!("cannot remove {}", key.display()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None => {
+            let key = age::x25519::Identity::generate().to_string();
+            write_private(&new, key.expose_secret().as_bytes())?;
+            v.passphrase = SecretString::from(key.expose_secret().to_string());
+            v.keyed = true;
+            write(v)?;
+            std::fs::rename(&new, &at).with_context(|| format!("cannot write {}", at.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Make a vault with no passphrase: its key, long and random, in a file
