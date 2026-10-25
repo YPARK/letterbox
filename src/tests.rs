@@ -1118,6 +1118,9 @@ fn press(app: &mut App, keys: &[&str]) {
 /// The demo's Inbox: the six letters, and the lab's mail still to deal with;
 /// and how many of them are unread.
 const INBOX: usize = 33;
+/// How many the demo has in Archive: what is read and old, and a Scholar
+/// alert.
+const ARCHIVE: usize = 21;
 const UNREAD: u32 = 18;
 
 fn unseen(app: &App) -> Option<u32> {
@@ -4501,17 +4504,23 @@ fn the_demo_is_mapped_from_a_twin_that_sees_its_mail() {
     let index = Mutex::new(Index::memory());
     sync_once(twin.as_mut(), &index);
     // The Inbox, Archive, Sent and Projects/Grant; not Drafts.
-    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(index.lock().unwrap().records.len(), INBOX + ARCHIVE + 4 + 4);
     let mut demo = demo;
     demo.relocate("INBOX", 1, "Trash", "").unwrap();
     sync_once(twin.as_mut(), &index);
-    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4 - 1);
+    assert_eq!(
+        index.lock().unwrap().records.len(),
+        INBOX + ARCHIVE + 4 + 4 - 1
+    );
 }
 
 #[test]
 fn the_app_maps_every_account_as_it_starts() {
     let app = demo();
-    assert_eq!(app.index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(
+        app.index.lock().unwrap().records.len(),
+        INBOX + ARCHIVE + 4 + 4
+    );
     assert!(app.mapping.is_empty(), "{}", app.mapping);
 }
 
@@ -5151,7 +5160,7 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     let mut app = demo_map();
     assert_eq!(app.map.mode, crate::map::Mode::Map);
     let s = app.map.snapshot.clone().expect("drawn");
-    assert_eq!(s.dots.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(s.dots.len(), INBOX + ARCHIVE + 4 + 4);
     assert!(s.at.is_some(), "laid out");
     // The layout is kept, to be the same next time.
     assert_eq!(
@@ -5363,7 +5372,7 @@ fn a_message_in_two_accounts_is_two_dots_marked_twins() {
     let mut app = two_accounts();
     press(&mut app, &["<m-g>"]);
     let s = app.map.snapshot.clone().unwrap();
-    assert_eq!(s.dots.len(), 2 * (INBOX + 20 + 4 + 4) + 1);
+    assert_eq!(s.dots.len(), 2 * (INBOX + ARCHIVE + 4 + 4) + 1);
     let photo: Vec<&crate::map::Dot> = s.dots.iter().filter(|d| d.subject == "Photo 51").collect();
     assert_eq!(photo.len(), 2);
     assert!(photo.iter().all(|d| d.twin));
@@ -6341,7 +6350,10 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
     let id = identity();
     let mut once = demo_index();
     let said = crate::map::rebuild(&mut once).unwrap();
-    assert!(said.contains("laid out 61 messages"), "{said}");
+    assert!(
+        said.contains(&format!("laid out {} messages", INBOX + ARCHIVE + 4 + 4)),
+        "{said}"
+    );
     assert_eq!(once.keep.layouts.len(), 3, "a layout each lens");
     let mut twice = demo_index();
     crate::map::rebuild(&mut twice).unwrap();
@@ -6376,10 +6388,10 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
         sync_once(twin.as_mut(), &shared);
         let mut index = shared.into_inner().unwrap();
         crate::map::rebuild(&mut index).unwrap();
-        assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+        assert_eq!(index.records.len(), INBOX + ARCHIVE + 4 + 4);
     }
     let index = Index::open_with(dir.path(), &id);
-    assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(index.records.len(), INBOX + ARCHIVE + 4 + 4);
     assert_eq!(index.keep.labels.len(), 1);
     assert_eq!(index.keep.not_it.len(), 1);
     assert_eq!(index.keep.layouts.len(), 3);
@@ -6388,7 +6400,7 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
             .keep
             .layouts
             .values()
-            .all(|at| at.len() == INBOX + 20 + 4 + 4)
+            .all(|at| at.len() == INBOX + ARCHIVE + 4 + 4)
     );
 }
 
@@ -8342,4 +8354,335 @@ fn a_sender_not_heard_of_in_a_long_time_weighs_less() {
         after(crate::filter::DECAY)
     );
     assert!(after(crate::filter::DECAY) > 0.0);
+}
+
+// ---- papers in mail, into paperstack ----
+
+const SCHOLAR: &str = r#"<html><body>
+<h3 style="font-weight:normal"><a href="https://scholar.google.com/scholar_url?url=https://www.nature.com/articles/s41586-026-11078-2&amp;hl=en&amp;sa=X&amp;oi=scholaralrt" class="gse_alrt_title">Population-scale immune <b>multiome</b> atlas reveals regulatory disease mechanisms</a></h3>
+<div style="color:#006621">M Kanai, TM Delorey, J Honkanen - Nature, 2026</div>
+<div class="gse_alrt_sni">The immune system is shaped by genetics &hellip;</div>
+<h3><a href="https://scholar.google.com/scholar_url?url=https://arxiv.org/abs/2410.01234&amp;hl=en&amp;oi=scholaralrt" class="gse_alrt_title">Learning gene programs from single-cell data with transformers</a></h3>
+<div style="color:#006621">A Author, B Author - arXiv preprint, 2026</div>
+<p><a href="https://scholar.google.com/scholar_alerts?view_op=cancel_alert_options&amp;x=1">Cancel alert</a>
+<a href="https://scholar.google.com/scholar_alerts?view_op=list_alerts">List alerts</a></p>
+</body></html>"#;
+
+const NEJM: &str = r#"<table><tr><td>
+<a href="https://click.nejm.org/?qs=abc123"><span>Large Language Models for Clinical Trial Matching in Oncology</span></a><br><span>J. Smith and Others</span>
+</td></tr><tr><td>
+<a href="https://ai.nejm.org/doi/full/10.1056/AIoa2500123?query=TOC">A Benchmark of Medical Reasoning in Vision&#8211;Language Models</a>
+</td></tr><tr><td>
+<a href="https://click.nejm.org/?qs=def">View Table of Contents</a>
+<a href="https://click.nejm.org/?qs=x">Unsubscribe from these emails</a>
+</td></tr></table>"#;
+
+#[test]
+fn the_papers_of_a_scholar_alert_are_found_with_where_they_are() {
+    let found = crate::papers::in_message("scholaralerts-noreply@google.com", Some(SCHOLAR), "");
+    let titles: Vec<&str> = found.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Population-scale immune multiome atlas reveals regulatory disease mechanisms",
+            "Learning gene programs from single-cell data with transformers"
+        ]
+    );
+    // The address Scholar sends it on to, and who wrote it where.
+    assert_eq!(
+        found[0].what,
+        "https://www.nature.com/articles/s41586-026-11078-2"
+    );
+    assert_eq!(
+        found[0].about,
+        "M Kanai, TM Delorey, J Honkanen - Nature, 2026"
+    );
+    assert_eq!(found[1].what, "arXiv:2410.01234");
+}
+
+#[test]
+fn a_journals_table_of_contents_gives_its_papers_by_doi_or_title() {
+    let found = crate::papers::in_message("nejmai@nejm.org", Some(NEJM), "");
+    let titles: Vec<&str> = found.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Large Language Models for Clinical Trial Matching in Oncology",
+            "A Benchmark of Medical Reasoning in Vision–Language Models"
+        ]
+    );
+    // Behind a link that tells nothing, by its title; else by its DOI.
+    assert_eq!(found[0].what, found[0].title);
+    assert_eq!(found[1].what, "10.1056/AIoa2500123");
+    // Mail from no journal: only links that say they are papers.
+    let found = crate::papers::in_message("friend@example.com", Some(NEJM), "");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].what, "10.1056/AIoa2500123");
+}
+
+#[test]
+fn an_arxiv_listing_in_text_gives_its_papers() {
+    let text = "------\narXiv:2410.05678\nDate: Mon, 21 Oct 2026\nTitle: Sparse autoencoders for gene\n  regulatory networks\nAuthors: C. Author\n------\n";
+    let found = crate::papers::in_message("no-reply@arxiv.org", None, text);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].what, "arXiv:2410.05678");
+    assert_eq!(
+        found[0].title,
+        "Sparse autoencoders for gene regulatory networks"
+    );
+}
+
+/// A library in memory, as paperstack would answer.
+#[derive(Default)]
+struct Shelf {
+    papers: Vec<crate::paperstack::Found>,
+    added: Vec<String>,
+}
+
+impl crate::paperstack::Library for Shelf {
+    fn search(
+        &mut self,
+        query: &str,
+        _limit: usize,
+    ) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        let starred = query.contains("is:starred");
+        let words: Vec<String> = query
+            .replace("is:starred", "")
+            .replace("title:", "")
+            .replace('"', " ")
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        Ok(self
+            .papers
+            .iter()
+            .filter(|p| !starred || p.starred)
+            .filter(|p| {
+                let t = p.title.to_lowercase();
+                words.iter().all(|w| t.contains(w.as_str()))
+            })
+            .cloned()
+            .collect())
+    }
+    fn add(&mut self, what: &str) -> anyhow::Result<crate::paperstack::Found> {
+        self.added.push(what.to_string());
+        let found = crate::paperstack::Found {
+            key: format!("Key{}", self.added.len()),
+            title: what.to_string(),
+            starred: false,
+        };
+        self.papers.push(found.clone());
+        Ok(found)
+    }
+    fn star(&mut self, key: &str) -> anyhow::Result<()> {
+        for p in self.papers.iter_mut().filter(|p| p.key == key) {
+            p.starred = true;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_paper_is_in_your_library_like_what_you_starred_or_new() {
+    use crate::paperstack::{Found, Standing, standing};
+    let mut shelf = Shelf {
+        papers: vec![
+            Found {
+                key: "Kanai2026".into(),
+                title:
+                    "Population-scale immune multiome atlas reveals regulatory disease mechanisms"
+                        .into(),
+                starred: true,
+            },
+            Found {
+                key: "Theodoris2023".into(),
+                title: "Transfer learning enables predictions in network biology".into(),
+                starred: true,
+            },
+        ],
+        ..Default::default()
+    };
+    let paper = |title: &str| crate::papers::Paper {
+        title: title.into(),
+        what: title.into(),
+        about: String::new(),
+        link: None,
+    };
+    let have = standing(
+        &mut shelf,
+        &paper("Population-scale immune multiome atlas reveals regulatory disease mechanisms"),
+    )
+    .unwrap();
+    assert_eq!(
+        have,
+        Standing::Have {
+            key: "Kanai2026".into(),
+            starred: true
+        }
+    );
+    let like = standing(
+        &mut shelf,
+        &paper("Network biology predictions from transfer learning of single cells"),
+    )
+    .unwrap();
+    assert_eq!(
+        like,
+        Standing::Like("Transfer learning enables predictions in network biology".into())
+    );
+    let new = standing(&mut shelf, &paper("A census of deep-sea octopus behaviour")).unwrap();
+    assert_eq!(new, Standing::New);
+}
+
+#[test]
+fn paperstack_is_asked_over_mcp_one_line_a_message() {
+    let replies = [
+        r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"paperstack"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"..."}],"isError":false,"structuredContent":{"total":1,"shown":1,"papers":[{"key":"Kanai2026","title":"Population-scale atlas","starred":true}]}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"added"}],"isError":false,"structuredContent":{"outcome":"added","paper":{"key":"New2026","title":"A new one","starred":false}}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"not found: nothing"}],"isError":true}}"#,
+    ]
+    .join("\n");
+    let mut mcp =
+        crate::paperstack::Mcp::new(std::io::Cursor::new(replies), Vec::<u8>::new()).unwrap();
+    use crate::paperstack::Library;
+    let found = mcp.search("is:starred atlas", 5).unwrap();
+    assert_eq!(found[0].key, "Kanai2026");
+    assert!(found[0].starred);
+    let added = mcp.add("10.1056/AIoa2500123").unwrap();
+    assert_eq!(added.key, "New2026");
+    let failed = mcp.star("nothing").unwrap_err();
+    assert!(format!("{failed:#}").contains("not found"), "{failed:#}");
+    // What was asked: initialize, the initialized notice, then each tool.
+    let asked: Vec<serde_json::Value> = String::from_utf8(mcp.into_writer())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(asked[0]["method"], "initialize");
+    assert_eq!(asked[1]["method"], "notifications/initialized");
+    assert_eq!(asked[2]["params"]["name"], "search_papers");
+    assert_eq!(asked[2]["params"]["arguments"]["query"], "is:starred atlas");
+    assert_eq!(asked[3]["params"]["name"], "add_paper");
+    assert_eq!(asked[4]["params"]["name"], "update_paper");
+    assert_eq!(asked[4]["params"]["arguments"]["starred"], true);
+}
+
+/// A library shared with the test that put it there.
+struct Shared(Arc<Mutex<Shelf>>);
+
+impl crate::paperstack::Library for Shared {
+    fn search(&mut self, q: &str, n: usize) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        self.0.lock().unwrap().search(q, n)
+    }
+    fn add(&mut self, what: &str) -> anyhow::Result<crate::paperstack::Found> {
+        self.0.lock().unwrap().add(what)
+    }
+    fn star(&mut self, key: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().star(key)
+    }
+}
+
+/// The demo, reading its Scholar alert.
+fn reading_the_alert() -> App {
+    let mut app = demo();
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Archive",
+            _ => false,
+        })
+        .unwrap();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.from == "Google Scholar Alerts")
+        .expect("the alert in Archive");
+    app.list.select(Some(at));
+    app.focus = app::Focus::List;
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.message().is_some(), "{}", app.status);
+    app
+}
+
+#[test]
+fn p_lists_the_papers_of_the_message_read_and_adds_one_to_paperstack_starred() {
+    use crate::paperstack::{Found, Standing};
+    // Nothing read: nothing to list.
+    let mut app = demo();
+    press(&mut app, &["P"]);
+    assert!(!app.dialog.is_open());
+    assert!(app.status.contains("reads"), "{}", app.status);
+    let mut app = reading_the_alert();
+    let shelf = Arc::new(Mutex::new(Shelf {
+        papers: vec![Found {
+            key: "Kanai2026".into(),
+            title: "Population-scale immune multiome atlas reveals regulatory disease mechanisms"
+                .into(),
+            starred: true,
+        }],
+        ..Default::default()
+    }));
+    *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("no papers: {}", app.status);
+    };
+    assert_eq!(p.papers.len(), 2);
+    assert_eq!(
+        p.standing[0],
+        Some(Standing::Have {
+            key: "Kanai2026".into(),
+            starred: true
+        })
+    );
+    assert_eq!(p.standing[1], Some(Standing::New));
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("in your library"), "{screen}");
+    assert!(screen.contains("Learning gene programs"), "{screen}");
+    // ⏎ on the new one: added, and starred, for you liked it.
+    press(&mut app, &["j", "<enter>"]);
+    app.settle(Duration::from_secs(5));
+    {
+        let shelf = shelf.lock().unwrap();
+        assert_eq!(shelf.added, ["arXiv:2410.01234"]);
+        assert!(shelf.papers.iter().all(|p| p.starred));
+    }
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("closed: {}", app.status);
+    };
+    assert!(matches!(
+        &p.standing[1],
+        Some(Standing::Have { starred: true, .. })
+    ));
+    // o opens where it is.
+    press(&mut app, &["o"]);
+    assert_eq!(
+        app.launch.take(),
+        Some(app::Launch::Browse(
+            "https://arxiv.org/abs/2410.01234".into()
+        ))
+    );
+}
+
+#[test]
+fn without_paperstack_p_says_how_to_have_it() {
+    let mut app = reading_the_alert();
+    // SAFETY: this test alone reads it.
+    unsafe { std::env::set_var("LETTERBOX_PAPERSTACK", "no-such-paperstack-program") };
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    unsafe { std::env::remove_var("LETTERBOX_PAPERSTACK") };
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("no papers: {}", app.status);
+    };
+    // The papers are still listed; why paperstack could not be asked, said.
+    assert_eq!(p.papers.len(), 2);
+    let note = p.note.clone().unwrap_or_default();
+    assert!(note.contains("paperstack"), "{note}");
 }

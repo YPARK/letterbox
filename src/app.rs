@@ -667,6 +667,19 @@ pub enum Dialog {
     StartMap,
     /// What was thrown away on its own, and why, to put back.
     Debrief(Box<crate::filter::Debrief>),
+    /// The papers of the message read, each where it stands with
+    /// paperstack, to put there.
+    Papers(Box<PapersView>),
+}
+
+/// The papers of the message read, as listed: where each stands with
+/// paperstack, once it has said; the one picked; what is under way.
+#[derive(Clone, Debug)]
+pub struct PapersView {
+    pub papers: Vec<crate::papers::Paper>,
+    pub standing: Vec<Option<crate::paperstack::Standing>>,
+    pub at: usize,
+    pub note: Option<String>,
 }
 
 impl Dialog {
@@ -911,6 +924,8 @@ pub struct App {
     /// was last told of; and where that is kept, if anywhere.
     pub auto: crate::filter::Auto,
     pub filter_file: Option<PathBuf>,
+    /// paperstack, once asked: run as it is first wanted, and kept.
+    pub library: Arc<Mutex<Option<Box<dyn crate::paperstack::Library>>>>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -1119,6 +1134,7 @@ impl App {
             look_file: None,
             auto: Default::default(),
             filter_file: None,
+            library: Default::default(),
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1281,6 +1297,39 @@ impl App {
         if let Answer::Relaid { lens, keys, at } = reply.answer {
             return self.relaid(lens, &keys, &at);
         }
+        if let Answer::Standings(said) = reply.answer {
+            if let Dialog::Papers(p) = &mut self.dialog {
+                match said {
+                    Ok(standing) => {
+                        p.standing = standing.into_iter().map(Some).collect();
+                        p.note = None;
+                    }
+                    Err(e) => p.note = Some(first_line(&e).to_string()),
+                }
+            }
+            return;
+        }
+        if let Answer::Shelved { at, found } = reply.answer {
+            let said = match found {
+                Ok(f) => {
+                    if let Dialog::Papers(p) = &mut self.dialog
+                        && let Some(s) = p.standing.get_mut(at)
+                    {
+                        *s = Some(crate::paperstack::Standing::Have {
+                            key: f.key.clone(),
+                            starred: true,
+                        });
+                    }
+                    format!("in paperstack, starred, as {}", f.key)
+                }
+                Err(e) => first_line(&e).to_string(),
+            };
+            match &mut self.dialog {
+                Dialog::Papers(p) => p.note = Some(said),
+                _ => self.status = said,
+            }
+            return;
+        }
         if let Answer::Fetched(got) = reply.answer {
             match got {
                 Ok(path) => {
@@ -1360,6 +1409,8 @@ impl App {
             | Answer::Waiting(_)
             | Answer::Address(_)
             | Answer::Fetched(_)
+            | Answer::Standings(_)
+            | Answer::Shelved { .. }
             | Answer::Mapping(_)
             | Answer::Drawn(_)
             | Answer::Relaid { .. }
@@ -2665,6 +2716,7 @@ impl App {
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
             Act::Debrief => self.debrief(),
+            Act::Papers => self.list_papers(),
             Act::Present => self.present(),
             Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),
@@ -2690,6 +2742,7 @@ impl App {
             Dialog::Attach(_) => self.attach_key(key),
             Dialog::View => self.view_key(key),
             Dialog::Debrief(_) => self.debrief_key(key),
+            Dialog::Papers(_) => self.papers_key(key),
             Dialog::StartMap => match key.code {
                 KeyCode::Char('y' | 'Y') => self.start_map(),
                 _ => {
@@ -2803,6 +2856,11 @@ impl App {
                 self.put_back_thrown(&[i]);
             }
             (Dialog::Debrief(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::Papers(p), Some(Target::Item(i))) => {
+                p.at = i;
+                self.shelve();
+            }
+            (Dialog::Papers(_), _) => self.dialog = Dialog::Closed,
             (Dialog::StartMap, _) => {
                 self.dialog = Dialog::Closed;
                 self.status = "the map is not begun: M-g asks again".to_string();
@@ -4388,6 +4446,108 @@ impl App {
             n => format!("{n} put back, and learnt as kept"),
         };
         self.dialog = Dialog::Debrief(d);
+    }
+
+    /// List the papers the message read tells of, and ask paperstack where
+    /// each stands.
+    fn list_papers(&mut self) {
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to look in: ⏎ reads the message picked".to_string();
+            return;
+        };
+        let from = m
+            .from
+            .rsplit_once('<')
+            .map_or(m.from.as_str(), |(_, a)| a.trim_end_matches('>'));
+        let papers = crate::papers::in_message(from, m.html.as_deref(), &m.text);
+        if papers.is_empty() {
+            self.status = "no papers found in it".to_string();
+            return;
+        }
+        self.dialog = Dialog::Papers(Box::new(PapersView {
+            standing: vec![None; papers.len()],
+            papers: papers.clone(),
+            at: 0,
+            note: Some("asking paperstack…".to_string()),
+        }));
+        let (lib, replies) = (self.library.clone(), self.replies_to.clone());
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let said = with_library(&lib, |l| {
+                papers
+                    .iter()
+                    .map(|p| crate::paperstack::standing(l, p))
+                    .collect()
+            });
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Standings(said.map_err(worker::text)),
+            });
+        });
+    }
+
+    /// A key among the papers listed: ⏎ puts the one picked in paperstack,
+    /// starred; o opens it.
+    fn papers_key(&mut self, key: KeyEvent) {
+        let Dialog::Papers(p) = &mut self.dialog else {
+            return;
+        };
+        let n = p.papers.len();
+        match (keymap::act(key), key.code) {
+            (Some(Act::Down), _) => p.at = (p.at + 1).min(n.saturating_sub(1)),
+            (Some(Act::Up), _) => p.at = p.at.saturating_sub(1),
+            (Some(Act::Open), _) => self.shelve(),
+            (_, KeyCode::Char('o')) => {
+                if let Some(link) = p.papers.get(p.at).and_then(|x| x.link.clone()) {
+                    self.launch = Some(Launch::Browse(link));
+                }
+            }
+            _ => self.dialog = Dialog::Closed,
+        }
+    }
+
+    /// Put the paper picked in paperstack, starred, as you liked it; or,
+    /// there already, star it.
+    fn shelve(&mut self) {
+        let Dialog::Papers(p) = &mut self.dialog else {
+            return;
+        };
+        let at = p.at;
+        let Some(paper) = p.papers.get(at).cloned() else {
+            return;
+        };
+        let have = match &p.standing[at] {
+            Some(crate::paperstack::Standing::Have { starred: true, .. }) => {
+                p.note = Some("in your library, starred already".to_string());
+                return;
+            }
+            Some(crate::paperstack::Standing::Have { key, .. }) => Some(key.clone()),
+            _ => None,
+        };
+        p.note = Some(format!("putting it in paperstack: {}", paper.what));
+        let (lib, replies) = (self.library.clone(), self.replies_to.clone());
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let found = with_library(&lib, |l| {
+                let f = match have {
+                    Some(key) => crate::paperstack::Found {
+                        key,
+                        title: paper.title.clone(),
+                        starred: true,
+                    },
+                    None => l.add(&paper.what)?,
+                };
+                l.star(&f.key)?;
+                Ok(f)
+            });
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Shelved {
+                    at,
+                    found: found.map_err(worker::text),
+                },
+            });
+        });
     }
 
     /// Write down whether new mail is thrown away on its own, and when what
@@ -5991,6 +6151,26 @@ fn open(path: &std::path::Path) -> anyhow::Result<()> {
 
 /// Keep `bytes`, an attachment or a document downloaded, of the message
 /// `uid`, in a private folder of the cache, to be opened from there.
+/// Do `f` with paperstack, run first if it is not yet: what it gives.
+fn with_library<T>(
+    lib: &Mutex<Option<Box<dyn crate::paperstack::Library>>>,
+    f: impl FnOnce(&mut dyn crate::paperstack::Library) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut held = lib.lock().unwrap_or_else(|e| e.into_inner());
+    if held.is_none() {
+        *held = Some(crate::paperstack::connect()?);
+    }
+    let done = f(held.as_mut().expect("run").as_mut());
+    // One that stopped answering is run again next time.
+    if done
+        .as_ref()
+        .is_err_and(|e| format!("{e:#}").contains("stopped answering"))
+    {
+        *held = None;
+    }
+    done
+}
+
 /// The message as a page, written where only you may read it: its HTML,
 /// the images it shows from its own parts put in it, or its text; and the
 /// file it is in.

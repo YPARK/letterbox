@@ -18,6 +18,8 @@ mod mcp;
 mod model;
 mod net;
 mod oauth;
+mod papers;
+mod paperstack;
 mod pick;
 mod secret;
 mod setup;

@@ -153,6 +153,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
         Dialog::View => Some(view_dialog(f, &t, &app.map)),
         Dialog::Debrief(d) => Some(debrief_dialog(f, &t, d)),
+        Dialog::Papers(p) => Some(papers_dialog(f, &t, p)),
         Dialog::StartMap => Some((
             question(
                 f,
@@ -596,6 +597,80 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     );
     let targets = (0..files.items.len())
         .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
+        .collect();
+    (area, targets)
+}
+
+/// The papers of the message read, two lines each: its title and where it
+/// stands with paperstack, then who wrote it where. A paper clicked is put
+/// in paperstack.
+fn papers_dialog(f: &mut Frame, t: &Theme, p: &crate::app::PapersView) -> (Rect, Targets) {
+    use crate::paperstack::Standing;
+    let width = f.area().width.min(100);
+    let room = (width as usize).saturating_sub(4);
+    let side = 30.min(room / 3);
+    let mut lines = vec![Line::raw("")];
+    let first = lines.len();
+    for (i, paper) in p.papers.iter().enumerate() {
+        let ground = if i == p.at { t.focus } else { t.page };
+        let (said, style) = match &p.standing[i] {
+            None => ("…".to_string(), Style::new().fg(t.dim)),
+            Some(Standing::Have { starred: true, .. }) => (
+                "★ in your library".to_string(),
+                Style::new().fg(t.accent).bold(),
+            ),
+            Some(Standing::Have { .. }) => {
+                ("in your library".to_string(), Style::new().fg(t.accent))
+            }
+            Some(Standing::Like(title)) => (
+                format!("like: {}", clip(title, side.saturating_sub(6))),
+                Style::new().fg(t.title),
+            ),
+            Some(Standing::New) => ("new".to_string(), Style::new().fg(t.soft)),
+        };
+        let title_room = room.saturating_sub(side + 2);
+        let title = clip(&paper.title, title_room);
+        let pad = title_room.saturating_sub(title.width());
+        lines.push(
+            Line::from(vec![
+                Span::styled(format!(" {title}"), Style::new().fg(t.text)),
+                Span::raw(" ".repeat(pad + 1)),
+                Span::styled(format!("{said:>side$}"), style),
+            ])
+            .style(Style::new().bg(ground)),
+        );
+        lines.push(
+            Line::styled(
+                clip(&format!("   {}", paper.about), room),
+                Style::new().fg(t.dim),
+            )
+            .style(Style::new().bg(ground)),
+        );
+    }
+    if let Some(note) = &p.note {
+        lines.push(Line::raw(""));
+        lines.extend(
+            wrap(note, room)
+                .into_iter()
+                .map(|l| Line::styled(format!(" {l}"), Style::new().fg(t.soft))),
+        );
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            "Papers in it",
+            "⏎ put in paperstack, starred · o open · esc close",
+        )),
+        area,
+    );
+    let targets = (0..p.papers.len())
+        .map(|i| {
+            let mut r = spot(area, first + 2 * i, 0, room as u16);
+            r.height = 2;
+            (r, Target::Item(i))
+        })
         .collect();
     (area, targets)
 }

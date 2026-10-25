@@ -41,6 +41,8 @@ pub enum Act {
     Present,
     /// What was thrown away on its own, and why.
     Debrief,
+    /// The papers the message read tells of, to put in paperstack.
+    Papers,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -286,6 +288,13 @@ pub const KEYS: &[Binding] = &[
         hint: "o",
         foot: &[(Reader, "open")],
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
+    },
+    Binding {
+        keys: &[("P", Papers)],
+        name: "P",
+        hint: "P",
+        foot: &[(Reader, "papers")],
+        help: "the papers the message read tells of, a Scholar alert's or a journal's, each said to be in your paperstack, like what you starred there, or new: ⏎ puts the one picked there, starred, o opens it",
     },
     Binding {
         keys: &[("B", Debrief)],
