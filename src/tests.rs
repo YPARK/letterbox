@@ -4490,6 +4490,60 @@ fn the_same_seed_lays_out_the_same_map() {
 }
 
 #[test]
+fn the_map_is_the_same_on_any_number_of_threads() {
+    let index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| crate::model::layout(&m, None, 1))
+    };
+    let bits = |p: &[crate::model::Point]| -> Vec<u32> {
+        p.iter()
+            .flat_map(|q| [q[0].to_bits(), q[1].to_bits()])
+            .collect()
+    };
+    assert_eq!(bits(&on(1)), bits(&on(4)));
+}
+
+#[test]
+fn past_every_pair_the_neighbours_found_are_mostly_the_nearest() {
+    // Twenty groups of a hundred directions, each its centre a little shaken.
+    let mut state = 1u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) as f32 / (1u64 << 31) as f32 - 0.5
+    };
+    let unit = |mut v: crate::model::Vector| {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter_mut().for_each(|x| *x /= n);
+        v
+    };
+    let centres: Vec<crate::model::Vector> = (0..20)
+        .map(|_| unit(std::array::from_fn(|_| next())))
+        .collect();
+    let vectors: Vec<crate::model::Vector> = (0..2000)
+        .map(|i| {
+            let c = centres[i % 20];
+            unit(std::array::from_fn(|d| c[d] + 0.15 * next()))
+        })
+        .collect();
+    let every = crate::model::neighbours(&vectors, 15, usize::MAX);
+    let grouped = crate::model::neighbours(&vectors, 15, 0);
+    let shared: usize = every
+        .iter()
+        .zip(&grouped)
+        .map(|(a, b)| a.iter().filter(|x| b.iter().any(|y| y.0 == x.0)).count())
+        .sum();
+    let recall = shared as f32 / (15 * vectors.len()) as f32;
+    assert!(recall > 0.9, "{recall} of the nearest found");
+}
+
+#[test]
 fn a_new_message_lands_among_its_kind() {
     let mut index = demo_index();
     let m = model_of(&index, Lens::Both);

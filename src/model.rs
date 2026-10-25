@@ -8,11 +8,13 @@
 //! message not yet labelled is pulled toward a label by the share of its
 //! tokens seen in that label's mail, and pushed away from one it was said
 //! not to be. Clusters are found by angle, a cluster holding two labels'
-//! mail is split between them, and the map is laid out by t-SNE. Every
-//! step is seeded, so the same mail gives the same map, bit for bit.
+//! mail is split between them, and the map is laid out by UMAP over each
+//! message's nearest by angle. Every step is seeded, so the same mail gives
+//! the same map, bit for bit, however many threads it is made on.
 
 use crate::index::record::{Record, fnv};
 use crate::index::{Key, Lens, fold};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The model's version: vectors are made again when it changes.
@@ -30,9 +32,18 @@ const PUSH: f32 = 0.8;
 /// How near to its cluster's centre, by cosine, a message is to be of it,
 /// and not a loner.
 const LONER: f32 = 0.2;
-/// How many messages are laid out exactly; more, and these many are, the
-/// rest placed by them.
-pub const LANDMARKS: usize = 3000;
+/// How many neighbours each message has in the graph the map is laid out
+/// from: UMAP's `n_neighbors`, less the message itself.
+const NEIGHBOURS: usize = 15;
+/// Up to how many messages their neighbours are found by comparing every
+/// pair; past it, each is compared only with those of its nearest groups.
+pub const EXACT: usize = 6000;
+/// How many of its nearest groups a message is compared within, past
+/// `EXACT`.
+const PROBES: usize = 4;
+/// How many others each end of an edge is pushed from, each time the edge
+/// is drawn.
+const NEGATIVE: usize = 5;
 /// How near a label, in degrees, a message is to be suggested for it.
 pub const NEAR: f32 = 30.0;
 
@@ -599,175 +610,333 @@ fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
         .collect()
 }
 
-/// t-SNE (van der Maaten and Hinton, 2008) of `n` points, `far(i, j)`
-/// apart, in two dimensions: begun from `start` where given, gently, else
-/// from points near nothing drawn with the seed, with the clusters drawn
-/// apart early on.
-pub fn tsne(
-    n: usize,
-    far: impl Fn(usize, usize) -> f32,
-    start: Option<Vec<Point>>,
-    seed: u64,
-) -> Vec<Point> {
-    if n == 0 {
-        return Vec::new();
+/// Each of `vectors`' `k` nearest others by angle, as (which, distance),
+/// the distance `1 − cos`, nearest first. Up to `exact` vectors, every
+/// pair is compared; past that, each vector only with the members of its
+/// `PROBES` nearest of √n groups, found by a few rounds of spherical
+/// k-means begun evenly through them. Ties go to the lower index, so the
+/// same vectors give the same neighbours on any number of threads.
+pub fn neighbours(vectors: &[Vector], k: usize, exact: usize) -> Vec<Vec<(usize, f32)>> {
+    let n = vectors.len();
+    let k = k.min(n.saturating_sub(1));
+    if k == 0 {
+        return vec![Vec::new(); n];
     }
-    if n == 1 {
-        return vec![[0.0, 0.0]];
+    if n <= exact {
+        return (0..n)
+            .into_par_iter()
+            .map(|i| nearest_among(vectors, i, 0..n, k))
+            .collect();
     }
-    let perplexity = (30.0f64).min((n as f64 - 1.0) / 6.0).max(2.0);
-    // The neighbours each point has, by a width found for each.
-    let mut p = vec![0f64; n * n];
-    for i in 0..n {
-        let d: Vec<f64> = (0..n).map(|j| f64::from(far(i, j))).collect();
-        let (mut lo, mut hi, mut beta) = (0.0f64, f64::INFINITY, 1.0f64);
-        let target = perplexity.ln();
-        for _ in 0..64 {
-            let mut sum = 0.0;
-            let mut sum_dp = 0.0;
-            for j in 0..n {
-                if j != i {
-                    let e = (-beta * d[j]).exp();
-                    p[i * n + j] = e;
-                    sum += e;
-                    sum_dp += d[j] * e;
-                }
-            }
-            if sum <= 0.0 {
-                hi = beta;
-                beta = (beta + lo) / 2.0;
-                continue;
-            }
-            let entropy = sum.ln() + beta * sum_dp / sum;
-            for j in 0..n {
-                p[i * n + j] /= sum;
-            }
-            if (entropy - target).abs() < 1e-5 {
-                break;
-            }
-            if entropy > target {
-                lo = beta;
-                beta = if hi.is_finite() {
-                    (beta + hi) / 2.0
-                } else {
-                    beta * 2.0
-                };
-            } else {
-                hi = beta;
-                beta = (beta + lo) / 2.0;
-            }
-        }
-        p[i * n + i] = 0.0;
-    }
-    let mut sym = vec![0f64; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            sym[i * n + j] = ((p[i * n + j] + p[j * n + i]) / (2.0 * n as f64)).max(1e-12);
-        }
-    }
-    let gentle = start.is_some();
-    let mut rng = Rng::new(seed);
-    let mut y: Vec<[f64; 2]> = match start {
-        Some(s) => s
-            .iter()
-            .map(|q| [f64::from(q[0]), f64::from(q[1])])
-            .collect(),
-        None => (0..n)
-            .map(|_| [rng.normal() * 1e-2, rng.normal() * 1e-2])
-            .collect(),
+    let m = ((n as f64).sqrt().ceil() as usize).max(PROBES);
+    let mut centres: Vec<Vector> = (0..m).map(|c| vectors[c * n / m]).collect();
+    let nearest_centre = |v: &Vector, centres: &[Vector]| {
+        (0..centres.len())
+            .max_by(|&a, &b| {
+                dot(v, &centres[a])
+                    .total_cmp(&dot(v, &centres[b]))
+                    .then(b.cmp(&a))
+            })
+            .unwrap_or(0)
     };
-    let rounds = if gentle { 300 } else { 600 };
-    let rate = (n as f64 / 12.0).max(50.0);
-    let mut step = vec![[0f64; 2]; n];
-    let mut gains = vec![[1f64; 2]; n];
-    let mut q = vec![0f64; n * n];
-    for round in 0..rounds {
-        let exaggerate = if !gentle && round < 120 { 12.0 } else { 1.0 };
-        let momentum = if round < 250 { 0.5 } else { 0.8 };
-        let mut z = 0.0;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let dx = y[i][0] - y[j][0];
-                let dy = y[i][1] - y[j][1];
-                let w = 1.0 / (1.0 + dx * dx + dy * dy);
-                q[i * n + j] = w;
-                q[j * n + i] = w;
-                z += 2.0 * w;
-            }
+    let mut of = vec![0usize; n];
+    for _ in 0..4 {
+        of = vectors
+            .par_iter()
+            .map(|v| nearest_centre(v, &centres))
+            .collect();
+        let mut sums = vec![[0f32; DIM]; m];
+        let mut counts = vec![0usize; m];
+        for (v, &c) in vectors.iter().zip(&of) {
+            sums[c].iter_mut().zip(v).for_each(|(s, x)| *s += x);
+            counts[c] += 1;
         }
-        for i in 0..n {
-            let mut g = [0f64; 2];
-            for j in 0..n {
-                if i == j {
-                    continue;
-                }
-                let w = q[i * n + j];
-                let f = (exaggerate * sym[i * n + j] - w / z) * w;
-                g[0] += 4.0 * f * (y[i][0] - y[j][0]);
-                g[1] += 4.0 * f * (y[i][1] - y[j][1]);
+        for c in 0..m {
+            if counts[c] > 0 {
+                centres[c] = normalised(sums[c]);
             }
-            for d in 0..2 {
-                gains[i][d] = if (g[d] > 0.0) == (step[i][d] > 0.0) {
-                    (gains[i][d] * 0.8).max(0.01)
-                } else {
-                    gains[i][d] + 0.2
-                };
-                step[i][d] = momentum * step[i][d] - rate * gains[i][d] * g[d];
-            }
-        }
-        let mut mean = [0f64; 2];
-        for i in 0..n {
-            y[i][0] += step[i][0];
-            y[i][1] += step[i][1];
-            mean[0] += y[i][0] / n as f64;
-            mean[1] += y[i][1] / n as f64;
-        }
-        for point in &mut y {
-            point[0] -= mean[0];
-            point[1] -= mean[1];
         }
     }
-    y.into_iter().map(|q| [q[0] as f32, q[1] as f32]).collect()
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); m];
+    for (i, &c) in of.iter().enumerate() {
+        members[c].push(i);
+    }
+    (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let mut by: Vec<(usize, f32)> = centres
+                .iter()
+                .enumerate()
+                .map(|(c, centre)| (c, dot(&vectors[i], centre)))
+                .collect();
+            by.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            let among = by
+                .iter()
+                .take(PROBES)
+                .flat_map(|&(c, _)| members[c].iter().copied());
+            nearest_among(vectors, i, among, k)
+        })
+        .collect()
 }
 
-/// Where the model's messages are on the map, laid out by t-SNE on their
-/// angles: all of them, or past `LANDMARKS`, that many, evenly through
-/// them, and the rest each placed among its nearest of those. Begun from
-/// `start`, each message's old place where it had one.
+/// The `k` nearest to `vectors[i]` of those `among`, by angle.
+fn nearest_among(
+    vectors: &[Vector],
+    i: usize,
+    among: impl Iterator<Item = usize>,
+    k: usize,
+) -> Vec<(usize, f32)> {
+    let by = |a: &(usize, f32), b: &(usize, f32)| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0));
+    let mut all: Vec<(usize, f32)> = among
+        .filter(|&j| j != i)
+        .map(|j| (j, (1.0 - dot(&vectors[i], &vectors[j])).max(0.0)))
+        .collect();
+    if all.len() > k {
+        all.select_nth_unstable_by(k, by);
+        all.truncate(k);
+    }
+    all.sort_by(by);
+    all
+}
+
+/// The width σ that makes a message's memberships in its neighbours,
+/// `exp(−max(0, d − ρ)/σ)`, sum to `target`, found by halving: UMAP's
+/// `smooth_knn_dist`.
+fn width(dists: &[f32], rho: f32, target: f32) -> f32 {
+    let mean = dists.iter().sum::<f32>() / dists.len().max(1) as f32;
+    let (mut lo, mut hi, mut mid) = (0.0f32, f32::INFINITY, 1.0f32);
+    for _ in 0..64 {
+        let sum: f32 = dists
+            .iter()
+            .map(|&d| {
+                if d > rho {
+                    (-(d - rho) / mid).exp()
+                } else {
+                    1.0
+                }
+            })
+            .sum();
+        if (sum - target).abs() < 1e-5 {
+            break;
+        }
+        if sum > target {
+            hi = mid;
+            mid = (lo + hi) / 2.0;
+        } else {
+            lo = mid;
+            mid = if hi.is_finite() {
+                (lo + hi) / 2.0
+            } else {
+                mid * 2.0
+            };
+        }
+    }
+    mid.max(1e-3 * mean)
+}
+
+/// A message's membership in each of its neighbours, from their distances:
+/// `exp(−(d − ρ)/σ)`, ρ the nearest distance and σ set so that they sum to
+/// `log₂(k + 1)`, as UMAP counts the message itself among its neighbours.
+fn memberships(dists: &[f32]) -> Vec<f32> {
+    let Some(rho) = dists.iter().copied().reduce(f32::min) else {
+        return Vec::new();
+    };
+    let sigma = width(dists, rho, ((dists.len() + 1) as f32).log2());
+    dists
+        .iter()
+        .map(|&d| {
+            if d > rho {
+                (-(d - rho) / sigma).exp()
+            } else {
+                1.0
+            }
+        })
+        .collect()
+}
+
+/// The fuzzy graph UMAP lays out, from each message's neighbours: each
+/// pair once, `i < j`, weighed by the chance that either lists the other,
+/// `a + b − a·b`.
+fn graph(near: &[Vec<(usize, f32)>]) -> Vec<(usize, usize, f32)> {
+    let directed: Vec<Vec<f32>> = near
+        .par_iter()
+        .map(|list| memberships(&list.iter().map(|&(_, d)| d).collect::<Vec<_>>()))
+        .collect();
+    let mut pairs: BTreeMap<(usize, usize), (f32, f32)> = BTreeMap::new();
+    for (i, list) in near.iter().enumerate() {
+        for (&(j, _), &w) in list.iter().zip(&directed[i]) {
+            let pair = pairs.entry((i.min(j), i.max(j))).or_insert((0.0, 0.0));
+            if i < j {
+                pair.0 = w;
+            } else {
+                pair.1 = w;
+            }
+        }
+    }
+    pairs
+        .into_iter()
+        .filter_map(|((i, j), (a, b))| {
+            let w = a + b - a * b;
+            (w > 0.0).then_some((i, j, w))
+        })
+        .collect()
+}
+
+/// UMAP (McInnes, Healy and Melville, 2018) of the graph `edges` over the
+/// points begun at `start`, with t-UMAP's kernel `1/(1 + d²)`, which spreads
+/// the map more than UMAP's own and suits a grid of cells. Each edge is
+/// drawn as often as its weight asks, from each end in turn: that end is
+/// drawn toward the other and pushed from `NEGATIVE` others taken at
+/// random. Within a round each point moves itself alone, against where the
+/// others were as the round began, so the points are taken in parallel and
+/// the map is the same, bit for bit, on any number of threads.
+fn umap(
+    edges: &[(usize, usize, f32)],
+    start: Vec<Point>,
+    rounds: usize,
+    rate: f32,
+    seed: u64,
+) -> Vec<Point> {
+    let n = start.len();
+    let top = edges.iter().map(|e| e.2).fold(1e-4f32, f32::max);
+    // Each point's half of each of its edges: the other end, and how many
+    // rounds apart it is drawn.
+    let mut ends: Vec<Vec<(usize, f32)>> = vec![Vec::new(); n];
+    for &(i, j, w) in edges {
+        ends[i].push((j, top / w));
+        ends[j].push((i, top / w));
+    }
+    let mut due: Vec<Vec<f32>> = ends
+        .iter()
+        .map(|e| e.iter().map(|&(_, every)| every).collect())
+        .collect();
+    let mut y = start;
+    for round in 0..rounds {
+        let now = round as f32;
+        let alpha = rate * (1.0 - now / rounds as f32);
+        let before = y.clone();
+        y.par_iter_mut()
+            .zip(due.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, (p, due))| {
+                let mut rng = Rng::new(
+                    seed ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ ((round as u64) << 40),
+                );
+                for (e, &(j, every)) in ends[i].iter().enumerate() {
+                    if due[e] > now {
+                        continue;
+                    }
+                    pull(p, &before[j], alpha);
+                    for _ in 0..NEGATIVE {
+                        let k = rng.below(n);
+                        if k != i {
+                            push(p, &before[k], alpha);
+                        }
+                    }
+                    due[e] += every;
+                }
+            });
+    }
+    centred(y)
+}
+
+/// A step of `p` toward `q`, by t-UMAP's attraction, each part held to 4.
+fn pull(p: &mut Point, q: &Point, alpha: f32) {
+    let (dx, dy) = (p[0] - q[0], p[1] - q[1]);
+    let d2 = dx * dx + dy * dy;
+    if d2 <= 0.0 {
+        return;
+    }
+    let f = -2.0 / (1.0 + d2);
+    p[0] += (f * dx).clamp(-4.0, 4.0) * alpha;
+    p[1] += (f * dy).clamp(-4.0, 4.0) * alpha;
+}
+
+/// A step of `p` away from `q`, by t-UMAP's repulsion, each part held to 4.
+fn push(p: &mut Point, q: &Point, alpha: f32) {
+    let (dx, dy) = (p[0] - q[0], p[1] - q[1]);
+    let d2 = dx * dx + dy * dy;
+    let f = if d2 > 0.0 {
+        2.0 / ((0.001 + d2) * (1.0 + d2))
+    } else {
+        4.0
+    };
+    p[0] += (f * dx).clamp(-4.0, 4.0) * alpha;
+    p[1] += (f * dy).clamp(-4.0, 4.0) * alpha;
+}
+
+/// `points` moved to have their mean at the middle.
+fn centred(mut points: Vec<Point>) -> Vec<Point> {
+    let n = points.len().max(1) as f32;
+    let mean = points
+        .iter()
+        .fold([0f32; 2], |m, p| [m[0] + p[0], m[1] + p[1]]);
+    for p in &mut points {
+        p[0] -= mean[0] / n;
+        p[1] -= mean[1] / n;
+    }
+    points
+}
+
+/// `points` centred and scaled so that the farthest part of any is 10
+/// from the middle, as UMAP begins.
+fn spread(points: Vec<Point>) -> Vec<Point> {
+    let mut points = centred(points);
+    let far = points
+        .iter()
+        .flat_map(|p| [p[0].abs(), p[1].abs()])
+        .fold(0f32, f32::max);
+    if far > 0.0 {
+        for p in &mut points {
+            p[0] *= 10.0 / far;
+            p[1] *= 10.0 / far;
+        }
+    }
+    points
+}
+
+/// Where the model's messages are on the map, laid out by UMAP over each
+/// one's nearest by angle. Begun from `start`, each message's old place
+/// where it had one and a place among its nearest where not, gently: fewer
+/// rounds, smaller steps. Else begun from the first two principal
+/// components, a little shaken so that the same mail twice comes apart.
 pub fn layout(model: &Model, start: Option<&[Option<Point>]>, seed: u64) -> Vec<Point> {
     let n = model.len();
-    let marks: Vec<usize> = if n <= LANDMARKS {
-        (0..n).collect()
-    } else {
-        (0..LANDMARKS).map(|i| i * n / LANDMARKS).collect()
-    };
-    let far = |a: usize, b: usize| {
-        let cos = dot(&model.vectors[marks[a]], &model.vectors[marks[b]]);
-        2.0 * (1.0 - cos).max(0.0)
-    };
-    let begun = start.map(|s| {
-        let known: Vec<(usize, Point)> = (0..n)
-            .filter_map(|i| Some((i, s.get(i).copied().flatten()?)))
-            .collect();
-        marks
-            .iter()
-            .map(|&i| {
-                s.get(i)
-                    .copied()
-                    .flatten()
-                    .unwrap_or_else(|| place(model, i, &known))
-            })
-            .collect()
-    });
-    let laid = tsne(marks.len(), far, begun, seed ^ model.lens as u64);
-    let mut at: Vec<Option<Point>> = vec![None; n];
-    for (m, &i) in marks.iter().enumerate() {
-        at[i] = Some(laid[m]);
+    if n < 2 {
+        return vec![[0.0, 0.0]; n];
     }
-    let known: Vec<(usize, Point)> = marks.iter().zip(&laid).map(|(&i, &p)| (i, p)).collect();
-    (0..n)
-        .map(|i| at[i].unwrap_or_else(|| place(model, i, &known)))
-        .collect()
+    let seed = seed ^ model.lens as u64;
+    let edges = graph(&neighbours(&model.vectors, NEIGHBOURS, EXACT));
+    let (begun, rounds, rate) = match start {
+        Some(s) => {
+            let known: Vec<(usize, Point)> = (0..n)
+                .filter_map(|i| Some((i, s.get(i).copied().flatten()?)))
+                .collect();
+            let begun = (0..n)
+                .map(|i| {
+                    s.get(i)
+                        .copied()
+                        .flatten()
+                        .unwrap_or_else(|| place(model, i, &known))
+                })
+                .collect();
+            (begun, 120, 0.25)
+        }
+        None => {
+            let mut rng = Rng::new(seed);
+            let begun = principal(&model.vectors)
+                .into_iter()
+                .map(|[a, b]| {
+                    [
+                        (a + 1e-4 * rng.normal()) as f32,
+                        (b + 1e-4 * rng.normal()) as f32,
+                    ]
+                })
+                .collect();
+            (begun, if n <= 10_000 { 500 } else { 200 }, 1.0)
+        }
+    };
+    umap(&edges, spread(begun), rounds, rate, seed)
 }
 
 /// Where the message `i` goes among those `known`: the mean of the places
@@ -847,9 +1016,19 @@ pub fn procrustes(new: &[Point], old: &[Point], points: &[Point]) -> Vec<Point> 
 }
 
 /// Each message's hue, in degrees: the angle of its direction in the
-/// plane of the first two principal components of them all, found by
-/// power iteration.
+/// plane of the first two principal components of them all.
 pub fn hues(vectors: &[Vector]) -> Vec<f32> {
+    principal(vectors)
+        .into_iter()
+        .map(|[a, b]| (b.atan2(a).to_degrees().rem_euclid(360.0)) as f32)
+        .collect()
+}
+
+/// Each of `vectors` in the plane of their first two principal components,
+/// found by power iteration, each with a sign of its own. The products are
+/// summed a block at a time in parallel and the blocks in turn, so the
+/// result is the same on any number of threads.
+fn principal(vectors: &[Vector]) -> Vec<[f64; 2]> {
     let n = vectors.len();
     if n == 0 {
         return Vec::new();
@@ -871,11 +1050,23 @@ pub fn hues(vectors: &[Vector]) -> Vec<f32> {
         })
         .collect();
     let times = |x: &[f64; DIM]| {
+        let blocks: Vec<[f64; DIM]> = centred
+            .par_chunks(1024)
+            .map(|block| {
+                let mut out = [0f64; DIM];
+                for c in block {
+                    let p: f64 = c.iter().zip(x).map(|(a, b)| a * b).sum();
+                    for d in 0..DIM {
+                        out[d] += p * c[d];
+                    }
+                }
+                out
+            })
+            .collect();
         let mut out = [0f64; DIM];
-        for c in &centred {
-            let p: f64 = c.iter().zip(x).map(|(a, b)| a * b).sum();
+        for block in &blocks {
             for d in 0..DIM {
-                out[d] += p * c[d];
+                out[d] += block[d];
             }
         }
         out
@@ -917,7 +1108,7 @@ pub fn hues(vectors: &[Vector]) -> Vec<f32> {
         .map(|c| {
             let a: f64 = c.iter().zip(&components[0]).map(|(x, y)| x * y).sum();
             let b: f64 = c.iter().zip(&components[1]).map(|(x, y)| x * y).sum();
-            (b.atan2(a).to_degrees().rem_euclid(360.0)) as f32
+            [a, b]
         })
         .collect()
 }
