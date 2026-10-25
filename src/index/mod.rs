@@ -476,6 +476,26 @@ impl Index {
         Ok(n)
     }
 
+    /// Forget what was read from the Trash and your labels: what is learnt
+    /// is learnt again from your own decisions alone, and written so. How
+    /// many were forgotten.
+    pub fn unseed(&mut self) -> anyhow::Result<usize> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read, so it is left as it is");
+        }
+        let all = std::mem::take(&mut self.filter.taught);
+        let n = all.iter().filter(|t| t.seeded).count();
+        self.filter = crate::filter::Filter::default();
+        for t in all.into_iter().filter(|t| !t.seeded) {
+            self.filter.learn(t);
+        }
+        self.version += 1;
+        if let Some(taught) = &mut self.taught {
+            taught.compact(&self.filter.taught)?;
+        }
+        Ok(n)
+    }
+
     /// The mail you kept, filed under a label and out of the Inbox, as
     /// seeds: the newest `limit`, each with when it was sent.
     pub fn kept_seeds(&self, limit: usize) -> Vec<(i64, crate::filter::Taught)> {

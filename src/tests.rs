@@ -7592,13 +7592,19 @@ fn archiving_answering_and_putting_back_teach_that_it_was_kept() {
 fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
     let mut index = Index::memory();
     let mut store = Demo::new();
-    // A message thrown away, in the Trash.
-    let uid = store.page("INBOX", 0, 1).unwrap().summaries[0].uid;
-    store.relocate("INBOX", uid, "Trash", "").unwrap();
+    // Two thrown away, one read first: dealt with, not unwanted, so left
+    // out.
+    let page = store.page("INBOX", 0, 40).unwrap().summaries;
+    let unread = page.iter().find(|m| !m.flags.seen).unwrap().clone();
+    let read = page.iter().find(|m| m.flags.seen).unwrap().clone();
+    for m in [&unread, &read] {
+        store.relocate("INBOX", m.uid, "Trash", "").unwrap();
+    }
     let now = jiff::Timestamp::now().as_second();
     let thrown = crate::trash_seeds(&mut store, 10, now).unwrap();
-    assert_eq!(thrown.len(), 1);
+    assert_eq!(thrown.len(), 1, "{thrown:?}");
     assert!(thrown[0].1.thrown && thrown[0].1.seeded);
+    assert_eq!(thrown[0].1.message_id, unread.message_id);
     // Filed under labels, kept.
     let shared = std::sync::Mutex::new(index);
     let stop = std::sync::atomic::AtomicBool::new(false);
@@ -7615,4 +7621,8 @@ fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
     let said = crate::check(&index);
     assert!(said.contains(&format!("{n} decisions")), "{said}");
     assert!(said.contains("read from the Trash"), "{said}");
+    // Forgotten: only your own decisions are left.
+    assert_eq!(index.unseed().unwrap(), n);
+    assert!(index.filter.taught.is_empty());
+    assert_eq!((index.filter.thrown, index.filter.kept), (0, 0));
 }

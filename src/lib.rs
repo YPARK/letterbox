@@ -209,13 +209,17 @@ enum FilterAction {
     /// from those before it alone; what it caught, and what you kept that
     /// it would have thrown away
     Check,
-    /// Learn from mail already in each account's Trash, as thrown away,
-    /// and filed under your labels, as kept, the newest of each; then check
+    /// Learn from mail already in each account's Trash, thrown away
+    /// unread, as thrown away, and filed under your labels, as kept, the
+    /// newest of each; then check
     Learn {
         /// How many of each, at most, from each place
         #[arg(long, default_value_t = 500)]
         limit: usize,
     },
+    /// Forget what was learnt from the Trash and your labels: only your
+    /// own decisions are kept; then check
+    Forget,
 }
 
 #[derive(Subcommand)]
@@ -430,8 +434,9 @@ fn open_index(args: &Args) -> anyhow::Result<index::Index> {
     .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// The newest `limit` messages of the account's Trash, as thrown away, each
-/// with when it was sent.
+/// The newest `limit` messages of the account's Trash never read, as thrown
+/// away, each with when it was sent. Mail read and then thrown away was
+/// dealt with, not unwanted: it is left out.
 fn trash_seeds(
     store: &mut dyn Store,
     limit: usize,
@@ -448,10 +453,16 @@ fn trash_seeds(
     };
     let ident = store.ident();
     let uids = store.uids(&trash)?;
-    let newest = &uids[uids.len().saturating_sub(limit)..];
     let mut seeds = Vec::new();
-    for chunk in newest.chunks(100) {
+    // Newest first, as far back as it takes to find `limit` never read.
+    for chunk in uids.rchunks(100) {
+        if seeds.len() >= limit {
+            break;
+        }
         for got in store.fetch_index(&trash, chunk)? {
+            if got.flags.seen {
+                continue;
+            }
             let r = index::Record::of(&ident, &trash, 0, &got, now);
             seeds.push((
                 r.date.unwrap_or(now),
@@ -465,6 +476,7 @@ fn trash_seeds(
             ));
         }
     }
+    seeds.truncate(limit);
     Ok(seeds)
 }
 
@@ -862,6 +874,11 @@ fn command(args: &Args) -> anyhow::Result<()> {
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
         Some(Command::Filter { action }) => {
             let mut index = open_index(args)?;
+            if let FilterAction::Forget = action {
+                let n = index.unseed()?;
+                index.flush()?;
+                println!("{n} read from the Trash and your labels, forgotten\n");
+            }
             if let FilterAction::Learn { limit } = action {
                 let mut seeds = index.kept_seeds(*limit);
                 let kept = seeds.len();

@@ -320,6 +320,7 @@ journal `taught`, and learnt again as letterbox starts.
 ```sh
 letterbox filter check    # how it would have done on what you decided
 letterbox filter learn    # learn from the Trash and your labels too, then check
+letterbox filter forget   # forget what was learnt from them, then check
 ```
 
 `filter check` goes through every decision in turn and says, of each,
@@ -328,10 +329,12 @@ so it is never graded on what it has already seen. It counts how many of
 what you threw away it would have caught, and how many you kept it would
 have thrown away, sure to 70%, 80% and 90%, and names the ones kept,
 which matter most. `filter learn` reads, on each account's server, the
-newest 500 messages (`--limit`) of its Trash as thrown away, and the
-newest 500 filed under your labels as kept, oldest first; each only once.
-Mail may be in the Trash for reasons other than not wanting mail like it,
-so check after.
+newest 500 messages (`--limit`) of its Trash that were never read, as
+thrown away, and the newest 500 filed under your labels, as kept, oldest
+first; each only once. Mail read and then thrown away was dealt with, not
+unwanted, so it is left out: learnt from, it took meetings and colleagues'
+mail for what you throw away. `filter forget` takes back what was learnt
+from either, and your own decisions are all that is left.
 
 The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
