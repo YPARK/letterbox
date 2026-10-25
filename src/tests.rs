@@ -4673,7 +4673,7 @@ fn two_rebuilds_are_byte_identical() {
         let m = model_of(&index, Lens::Both);
         let c = crate::model::cluster(&m, &[], 1);
         let laid = crate::model::layout(&m, None, 1);
-        let hues = crate::model::hues(&m.vectors);
+        let hues = m.hues();
         let mut bytes = Vec::new();
         for (i, p) in laid.iter().enumerate() {
             bytes.extend(p[0].to_le_bytes());
@@ -4690,7 +4690,7 @@ fn two_rebuilds_are_byte_identical() {
 fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
     let index = demo_index();
     let m = model_of(&index, Lens::Both);
-    let hues = crate::model::hues(&m.vectors);
+    let hues = m.hues();
     assert!(hues.iter().all(|h| (0.0..360.0).contains(h)));
     let a = at_subject(&index, &m, "Build failed: letterbox main (clippy)");
     let b = at_subject(&index, &m, "Build failed: faba (test timeout)");
@@ -5596,6 +5596,66 @@ fn measure(n: usize) {
         pure as f32 / n as f32,
         100.0 * f
     );
+}
+
+/// How long the map takes to follow the index, as the app has it do, on
+/// `n` made-up messages: the first snapshot, then one after a new message
+/// comes, and one after a message is read.
+fn measure_following(n: usize) {
+    use std::time::Instant;
+    let (records, _) = made_mail(n + 1, 7);
+    let mut index = Index::memory();
+    let mut records = records.into_iter();
+    let last = records.next_back().unwrap();
+    index
+        .cache(records.map(|r| Cached::Upsert(Box::new(r))).collect())
+        .unwrap();
+    let step = |index: &Index, last: Option<&mut crate::map::Snapshot>| {
+        let t = Instant::now();
+        let (last, corpus) = match last {
+            Some(s) => {
+                let corpus = s.corpus.take();
+                (Some(&*s), corpus)
+            }
+            None => (None, None),
+        };
+        let input = crate::map::input(index, Lens::Both, last, corpus, true);
+        let taken = t.elapsed();
+        let t = Instant::now();
+        let s = crate::map::compute(input);
+        (s, taken, t.elapsed())
+    };
+    let (mut first, taken, made) = step(&index, None);
+    eprintln!("n {n:>6}: first: taken {taken:>6.0?} made {made:>6.0?}");
+    // Kept, as the app keeps the layout made.
+    let at = first.fresh.clone().unwrap();
+    index
+        .keep(vec![Kept::Layout {
+            lens: Lens::Both,
+            at,
+        }])
+        .unwrap();
+    let (mut s, taken, made) = step(&index, Some(&mut first));
+    eprintln!("          the layout kept: taken {taken:>6.0?} made {made:>6.0?}");
+    let key = last.key.clone();
+    index.cache(vec![Cached::Upsert(Box::new(last))]).unwrap();
+    let (mut s2, taken, made) = step(&index, Some(&mut s));
+    eprintln!("          a new message: taken {taken:>6.0?} made {made:>6.0?}");
+    let flags = crate::mail::Flags {
+        seen: true,
+        ..Default::default()
+    };
+    index.cache(vec![Cached::Flags { key, flags }]).unwrap();
+    let (_, taken, made) = step(&index, Some(&mut s2));
+    eprintln!("          a message read: taken {taken:>6.0?} made {made:>6.0?}");
+}
+
+#[test]
+#[ignore = "measures; run with --release --ignored --nocapture"]
+fn how_long_the_map_takes_to_follow_the_index() {
+    for n in [10_000, 50_000] {
+        measure_following(n);
+    }
 }
 
 #[test]

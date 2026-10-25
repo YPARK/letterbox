@@ -772,6 +772,8 @@ pub struct App {
     pub mapping: String,
     /// The map, as it is looked at.
     pub map: Map,
+    /// What the map's model has read, between one snapshot and the next.
+    map_corpus: Option<crate::model::Corpus>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -956,6 +958,7 @@ impl App {
             syncs: Vec::new(),
             mapping: String::new(),
             map: Map::default(),
+            map_corpus: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -3712,7 +3715,13 @@ impl App {
         if !stale {
             return;
         }
-        let input = map::input(&index, self.map.lens, self.map.snapshot.as_deref(), layout);
+        let input = map::input(
+            &index,
+            self.map.lens,
+            self.map.snapshot.as_deref(),
+            self.map_corpus.take(),
+            layout,
+        );
         drop(index);
         self.map.computing = true;
         self.pending += 1;
@@ -3729,8 +3738,9 @@ impl App {
     /// Take the map's new snapshot: keep a layout made for it, keep the
     /// message picked if it is still there, and list again what the map
     /// lists.
-    fn drawn_map(&mut self, snapshot: map::Snapshot) {
+    fn drawn_map(&mut self, mut snapshot: map::Snapshot) {
         self.map.computing = false;
+        self.map_corpus = snapshot.corpus.take();
         if let Some(fresh) = &snapshot.fresh {
             let kept = self
                 .index

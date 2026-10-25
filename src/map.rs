@@ -8,7 +8,7 @@ use crate::index::labels::System;
 use crate::index::record::Place;
 use crate::index::{Index, Key, Lens, Record};
 use crate::mail::Flags;
-use crate::model::{self, Clustering, Model, Point, Vector};
+use crate::model::{self, Clustering, Corpus, Model, Point, Vector};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -159,7 +159,7 @@ pub struct Snapshot {
     pub version: u64,
     pub lens: Lens,
     pub dots: Vec<Dot>,
-    pub model: Model,
+    pub model: Arc<Model>,
     pub clustering: Clustering,
     pub groups: Vec<Group>,
     /// Each message's hue, in degrees.
@@ -171,12 +171,14 @@ pub struct Snapshot {
     pub fresh: Option<Vec<(Key, f32, f32)>>,
     /// Each message and label, folded, it was said not to be.
     pub not_it: std::collections::BTreeSet<(Key, String)>,
+    /// What the model has read, to be handed to the next snapshot.
+    pub corpus: Option<Corpus>,
 }
 
 impl Snapshot {
     /// The message known by `key`, by its place.
     pub fn find(&self, key: &Key) -> Option<usize> {
-        self.model.keys.binary_search(key).ok()
+        self.model.place.get(key).copied()
     }
 
     /// The group the message `i` is in.
@@ -205,11 +207,35 @@ pub struct Input {
     layout: Option<BTreeMap<Key, (f32, f32)>>,
     before: Vec<(u32, Vector, Vec<Key>)>,
     layout_wanted: bool,
+    last: Option<Last>,
+    corpus: Option<Corpus>,
 }
 
-/// What a snapshot of `index` by `lens` is made from; begun from the
-/// clusters of `last`, and laid out if `layout` and it never was.
-pub fn input(index: &Index, lens: Lens, last: Option<&Snapshot>, layout: bool) -> Input {
+/// A message as it is drawn from: its record, its labels, whether it has
+/// one of letterbox's, its state, and whether another account has it.
+type Drawn = (Record, Vec<String>, bool, System, bool);
+
+/// What the last snapshot made, to be kept where nothing it was made from
+/// changed.
+struct Last {
+    model: Arc<Model>,
+    clustering: Clustering,
+    hues: Vec<f32>,
+    at: Option<Vec<Point>>,
+    faithfulness: Option<f32>,
+    not_it: std::collections::BTreeSet<(Key, String)>,
+}
+
+/// What a snapshot of `index` by `lens` is made from: begun from `last`,
+/// its clusters and where its messages were, and from what `corpus` has
+/// read; laid out if `layout` and it never was.
+pub fn input(
+    index: &Index,
+    lens: Lens,
+    last: Option<&Snapshot>,
+    corpus: Option<Corpus>,
+    layout: bool,
+) -> Input {
     let records = index
         .records
         .values()
@@ -224,8 +250,8 @@ pub fn input(index: &Index, lens: Lens, last: Option<&Snapshot>, layout: bool) -
             (r.clone(), index.labels(&r.key), mine, index.system(&r.key))
         })
         .collect();
+    let last = last.filter(|s| s.lens == lens);
     let before = last
-        .filter(|s| s.lens == lens)
         .map(|s| {
             s.clustering
                 .clusters
@@ -245,21 +271,102 @@ pub fn input(index: &Index, lens: Lens, last: Option<&Snapshot>, layout: bool) -
         layout: index.keep.layouts.get(&lens).cloned(),
         before,
         layout_wanted: layout,
+        last: last.map(|s| Last {
+            model: s.model.clone(),
+            clustering: s.clustering.clone(),
+            hues: s.hues.clone(),
+            at: s.at.clone(),
+            faithfulness: s.faithfulness,
+            not_it: s.not_it.clone(),
+        }),
+        corpus,
     }
 }
 
 /// The snapshot `input` makes: the model, its clusters and hues, and where
-/// each message is, by the layout kept, new mail placed among its
-/// nearest; or by a layout made now, if one is wanted and none was kept.
+/// each message is. What the model has read follows the index: new mail
+/// is read alone, and where no message came, went or changed its labels,
+/// the last snapshot's model, clusters and map are kept as they were.
+/// Messages stay where the layout kept, or the last snapshot, has them,
+/// and new mail is settled among its nearest; a layout is made now if one
+/// is wanted and none was kept.
 pub fn compute(input: Input) -> Snapshot {
     let given: Vec<model::Given> = input
         .records
         .iter()
         .map(|(r, labels, _, system)| (r, labels.clone(), system.sent))
         .collect();
-    let model = Model::build(&given, &input.not_it, input.lens);
-    let clustering = model::cluster(&model, &input.before, SEED);
-    let hues = model::hues(&model.vectors);
+    let (mut corpus, changed) = match input.corpus {
+        Some(mut c) if c.lens == input.lens => {
+            let changed = c.follow(&given);
+            (c, changed)
+        }
+        _ => (Corpus::read(&given, input.lens), true),
+    };
+    let unchanged = input.last.as_ref().filter(|l| {
+        !changed
+            && l.not_it == input.not_it
+            && l.model.len() == given.len()
+            && given.iter().all(|(r, labels, _)| {
+                l.model
+                    .place
+                    .get(&r.key)
+                    .is_some_and(|&i| l.model.labels[i] == *labels)
+            })
+    });
+    let n = corpus.len();
+    let (model, clustering, hues) = match unchanged {
+        Some(l) => (l.model.clone(), l.clustering.clone(), l.hues.clone()),
+        None => {
+            let model = Arc::new(corpus.model(&given, &input.not_it));
+            let clustering = model::cluster(&model, &input.before, SEED);
+            let hues = model.hues();
+            (model, clustering, hues)
+        }
+    };
+    drop(given);
+    let (at, fresh, faithfulness) = if let Some(kept) = &input.layout {
+        // Where the layout kept has each message, else where the last
+        // snapshot had it; the rest settled among their nearest.
+        let mut known: Vec<Option<Point>> = model
+            .keys
+            .iter()
+            .map(|k| kept.get(k).map(|&(x, y)| [x, y]))
+            .collect();
+        if let Some(l) = &input.last
+            && let Some(old) = &l.at
+        {
+            for (i, k) in model.keys.iter().enumerate() {
+                if known[i].is_none()
+                    && let Some(&j) = l.model.place.get(k)
+                {
+                    known[i] = old.get(j).copied();
+                }
+            }
+        }
+        let new: Vec<usize> = (0..n).filter(|&i| known[i].is_none()).collect();
+        let mut at: Vec<Point> = known.iter().map(|p| p.unwrap_or([0.0, 0.0])).collect();
+        model::settle(&model, &mut at, &new, SEED);
+        // As faithful as it was, where nothing moved or changed.
+        let faith = match unchanged {
+            Some(l) if l.at.as_ref() == Some(&at) => l.faithfulness,
+            _ => None,
+        }
+        .unwrap_or_else(|| model::faithfulness(&model, &at));
+        (Some(at), None, Some(faith))
+    } else if input.layout_wanted && n > 0 {
+        let at = model::layout(&model, None, SEED);
+        let fresh = model
+            .keys
+            .iter()
+            .zip(&at)
+            .map(|(k, p)| (k.clone(), p[0], p[1]))
+            .collect();
+        let faith = model::faithfulness(&model, &at);
+        (Some(at), Some(fresh), Some(faith))
+    } else {
+        (None, None, None)
+    };
     let mut ids: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (r, _, _, _) in &input.records {
         if !r.message_id.is_empty() {
@@ -268,29 +375,51 @@ pub fn compute(input: Input) -> Snapshot {
                 .push(r.key.account.as_str());
         }
     }
-    let dots: Vec<Dot> = input
+    let twins: Vec<bool> = input
         .records
         .iter()
-        .map(|(r, labels, mine, system)| {
-            let twin = ids
-                .get(r.message_id.as_str())
-                .is_some_and(|a| a.iter().any(|x| *x != r.key.account));
+        .map(|(r, _, _, _)| {
+            ids.get(r.message_id.as_str())
+                .is_some_and(|a| a.iter().any(|x| *x != r.key.account))
+        })
+        .collect();
+    drop(ids);
+    // The dots, in the model's order, made of the records themselves.
+    let mut records: Vec<Option<Drawn>> = input
+        .records
+        .into_iter()
+        .zip(twins)
+        .map(|((r, labels, mine, system), twin)| Some((r, labels, mine, system, twin)))
+        .collect();
+    let mut order = vec![0usize; n];
+    for (i, slot) in records.iter().enumerate() {
+        if let Some((r, ..)) = slot
+            && let Some(&at) = model.place.get(&r.key)
+        {
+            order[at] = i;
+        }
+    }
+    let dots: Vec<Dot> = order
+        .into_iter()
+        .map(|i| {
+            let (r, labels, mine, system, twin) =
+                records[i].take().expect("each record a dot once");
             Dot {
-                key: r.key.clone(),
-                from: r.from.clone(),
-                address: r.address.clone(),
-                to: r.to.clone(),
-                subject: r.subject.clone(),
-                preview: r.preview.clone(),
-                message_id: r.message_id.clone(),
+                key: r.key,
+                from: r.from,
+                address: r.address,
+                to: r.to,
+                subject: r.subject,
+                preview: r.preview,
+                message_id: r.message_id,
                 date: r.date,
                 arrived: r.date.unwrap_or(r.first_seen).min(r.first_seen),
                 size: r.size,
                 flags: r.flags,
-                labels: labels.clone(),
-                mine: *mine,
-                system: *system,
-                places: r.places.clone(),
+                labels,
+                mine,
+                system,
+                places: r.places,
                 twin,
             }
         })
@@ -303,7 +432,7 @@ pub fn compute(input: Input) -> Snapshot {
             members: c.members.clone(),
             label: c.label.clone(),
             words: c.words.clone(),
-            hue: model::hues(&[c.centre]).first().copied().unwrap_or(0.0),
+            hue: 0.0,
             unread: c.members.iter().filter(|&&i| !dots[i].flags.seen).count(),
         })
         .collect::<Vec<_>>();
@@ -320,31 +449,7 @@ pub fn compute(input: Input) -> Snapshot {
             g
         })
         .collect();
-    let (at, fresh) = match &input.layout {
-        Some(kept) => {
-            let known: Vec<Option<Point>> = model
-                .keys
-                .iter()
-                .map(|k| kept.get(k).map(|&(x, y)| [x, y]))
-                .collect();
-            let at: Vec<Point> = (0..model.len())
-                .map(|i| known[i].unwrap_or_else(|| model::place(&model, i, &known)))
-                .collect();
-            (Some(at), None)
-        }
-        None if input.layout_wanted && model.len() > 0 => {
-            let at = model::layout(&model, None, SEED);
-            let fresh = model
-                .keys
-                .iter()
-                .zip(&at)
-                .map(|(k, p)| (k.clone(), p[0], p[1]))
-                .collect();
-            (Some(at), Some(fresh))
-        }
-        None => (None, None),
-    };
-    let faithfulness = at.as_ref().map(|a| model::faithfulness(&model, a));
+
     Snapshot {
         version: input.version,
         lens: input.lens,
@@ -357,6 +462,7 @@ pub fn compute(input: Input) -> Snapshot {
         faithfulness,
         fresh,
         not_it: input.not_it,
+        corpus: Some(corpus),
     }
 }
 
@@ -407,7 +513,7 @@ pub fn moved(s: &Snapshot, at: &[Point]) -> usize {
 pub fn rebuild(index: &mut Index) -> anyhow::Result<String> {
     let mut said = Vec::new();
     for lens in Lens::ALL {
-        let mut input = input(index, lens, None, true);
+        let mut input = input(index, lens, None, None, true);
         input.layout = None;
         let s = compute(input);
         if let Some(fresh) = s.fresh {

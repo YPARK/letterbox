@@ -19,6 +19,7 @@ use crate::index::record::{Record, fnv};
 use crate::index::{Key, Lens, fold};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 /// The model's version: vectors are made again when it changes.
 pub const VERSION: u32 = 1;
@@ -46,6 +47,8 @@ const NEGATIVE: usize = 5;
 /// compared with it token by token.
 const WINDOW: usize = 512;
 const SHORTLIST: usize = 48;
+/// How many rounds new messages are settled among the rest for.
+const SETTLE: usize = 100;
 /// How much nearer two messages are laid out for sharing a label.
 const SHARED: f32 = 0.5;
 /// How near a label, in degrees, a message is to be suggested for it.
@@ -228,6 +231,18 @@ impl Rarity {
         self.n += 1;
         for &(b, _) in bag {
             *self.seen.entry(b).or_default() += 1;
+        }
+    }
+
+    fn remove(&mut self, bag: &Bag) {
+        self.n -= 1;
+        for &(b, _) in bag {
+            if let Some(seen) = self.seen.get_mut(&b) {
+                *seen -= 1;
+                if *seen == 0 {
+                    self.seen.remove(&b);
+                }
+            }
         }
     }
 
@@ -451,64 +466,310 @@ fn smoothed(projected: &[Vector], i: usize, near: &[(usize, f32)]) -> Vector {
 pub struct Model {
     pub lens: Lens,
     pub keys: Vec<Key>,
+    /// Where each message is, by its key.
+    pub place: HashMap<Key, usize>,
     /// Each message's direction, labels' teaching taken in.
     pub vectors: Vec<Vector>,
     /// Each message's nearest by its tokens themselves, as (which,
     /// `1 − cos`), nearest first: what the map is laid out from.
     pub near: Vec<Vec<(usize, f32)>>,
     /// Each message's words, by what they weigh in it: to name clusters by.
-    pub words: Vec<Vec<(String, f32)>>,
+    pub words: Vec<Arc<[(String, f32)]>>,
     /// Each message's sender, as named.
-    pub senders: Vec<String>,
+    pub senders: Vec<Arc<str>>,
     /// Each message's labels, as given.
     pub labels: Vec<Vec<String>>,
     /// Each label, folded, its name as first given, and the mean of its
     /// messages.
     pub label_vectors: BTreeMap<String, (String, Vector)>,
+    /// The plane hues are read in.
+    pub axes: Axes,
 }
 
 /// One message, as the model is given it: its record, its labels, and
 /// whether it was sent from here.
 pub type Given<'a> = (&'a Record, Vec<String>, bool);
 
-impl Model {
-    /// The model of `messages`, in the order given (the index's, by key),
-    /// as `lens` reads them, taught by their labels and by `not_it`, each
-    /// message and label, folded, it was said not to be.
-    pub fn build(messages: &[Given], not_it: &BTreeSet<(Key, String)>, lens: Lens) -> Model {
-        let tokens: Vec<Vec<(u64, String, f32)>> = messages
-            .par_iter()
-            .map(|(r, _, sent)| {
-                tokens(r, *sent, lens)
-                    .into_iter()
-                    .map(|(t, w)| (bucket(&t), t, w))
-                    .collect()
-            })
-            .collect();
-        let bags: Vec<Bag> = tokens.par_iter().map(|t| bag_of(t)).collect();
+/// How much the mail may grow, or shrink, since it was last read whole,
+/// before it is read whole again, rarity and all: by a quarter, or a fifth.
+const GROWN: f32 = 1.25;
+const SHRUNK: f32 = 0.8;
+
+/// What the model has read of each message, kept from one snapshot to the
+/// next, so that new mail is read alone and the rest is not read again.
+/// Each message's direction is made once, by how rare its tokens were
+/// then; how near messages are is always by how rare they are now.
+pub struct Corpus {
+    pub lens: Lens,
+    keys: Vec<Key>,
+    place: HashMap<Key, usize>,
+    sent: Vec<bool>,
+    bags: Vec<Bag>,
+    rarity: Rarity,
+    postings: Postings,
+    norms: Vec<f32>,
+    projected: Vec<Vector>,
+    /// Each direction made less noisy by its nearest, as it was read.
+    base: Vec<Vector>,
+    near: Vec<Vec<(usize, f32)>>,
+    words: Vec<Arc<[(String, f32)]>>,
+    senders: Vec<Arc<str>>,
+    /// How many messages there were when all were last read together.
+    whole: usize,
+    /// The plane hues are read in, found once all are read together.
+    axes: Option<Axes>,
+}
+
+/// A message read: its bag, its words and its sender.
+fn read((r, _, sent): &Given, lens: Lens) -> (Bag, Vec<(u64, String, f32)>, Arc<str>) {
+    let tokens: Vec<(u64, String, f32)> = tokens(r, *sent, lens)
+        .into_iter()
+        .map(|(t, w)| (bucket(&t), t, w))
+        .collect();
+    // Mail sent from here names no cluster by its sender.
+    let sender: Arc<str> = if *sent {
+        "".into()
+    } else {
+        r.from.as_str().into()
+    };
+    (bag_of(&tokens), tokens, sender)
+}
+
+impl Corpus {
+    /// Every one of `messages` read, in the order given (the index's, by
+    /// key), as `lens` reads them.
+    pub fn read(messages: &[Given], lens: Lens) -> Corpus {
+        let read: Vec<_> = messages.par_iter().map(|m| read(m, lens)).collect();
+        let bags: Vec<Bag> = read.iter().map(|r| r.0.clone()).collect();
         let rarity = Rarity::of(&bags);
         let norms: Vec<f32> = bags.par_iter().map(|b| rarity.norm(b)).collect();
-        let near = kin_all(&bags, &norms, &rarity, &postings(&bags), NEIGHBOURS);
+        let postings = postings(&bags);
+        let near = kin_all(&bags, &norms, &rarity, &postings, NEIGHBOURS);
         let projected: Vec<Vector> = bags.par_iter().map(|b| rarity.project(b)).collect();
-        let mut vectors: Vec<Vector> = (0..bags.len())
+        let base: Vec<Vector> = (0..bags.len())
             .into_par_iter()
             .map(|i| smoothed(&projected, i, &near[i]))
             .collect();
-        let weigh = |b: u64, w: f32| w * rarity.factor(b);
-        let words: Vec<Vec<(String, f32)>> = tokens
-            .iter()
-            .map(|t| {
-                t.iter()
-                    .filter_map(|(b, s, w)| {
-                        Some((s.strip_prefix("w:")?.to_string(), w * rarity.idf(*b)))
-                    })
-                    .collect()
+        let words = read.iter().map(|(_, t, _)| words_of(t, &rarity)).collect();
+        let keys: Vec<Key> = messages.iter().map(|(r, _, _)| r.key.clone()).collect();
+        Corpus {
+            lens,
+            place: keys
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, k)| (k, i))
+                .collect(),
+            keys,
+            sent: messages.iter().map(|m| m.2).collect(),
+            bags,
+            rarity,
+            postings,
+            norms,
+            projected,
+            base,
+            near,
+            words,
+            senders: read.into_iter().map(|r| r.2).collect(),
+            whole: messages.len(),
+            axes: None,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Follow `messages`, as they are now: read those new, let go those
+    /// gone; or, if the mail has grown or shrunk too far since it was read
+    /// whole, read it whole again. Whether anything changed.
+    pub fn follow(&mut self, messages: &[Given]) -> bool {
+        let now: HashMap<&Key, bool> = messages.iter().map(|(r, _, s)| (&r.key, *s)).collect();
+        let gone: Vec<usize> = (0..self.len())
+            .filter(|&i| now.get(&self.keys[i]) != Some(&self.sent[i]))
+            .collect();
+        let new: Vec<usize> = (0..messages.len())
+            .filter(|&m| {
+                let (r, _, sent) = &messages[m];
+                self.place
+                    .get(&r.key)
+                    .is_none_or(|&i| self.sent[i] != *sent)
             })
             .collect();
+        if gone.is_empty() && new.is_empty() {
+            return false;
+        }
+        let whole = self.whole.max(1) as f32;
+        let kept = self.len() - gone.len();
+        if messages.len() as f32 > GROWN * whole || (kept as f32) < SHRUNK * whole {
+            *self = Corpus::read(messages, self.lens);
+            return true;
+        }
+        let mut short = if gone.is_empty() {
+            Vec::new()
+        } else {
+            self.forget(&gone)
+        };
+        let first = self.len();
+        self.take(&new.iter().map(|&m| &messages[m]).collect::<Vec<_>>());
+        // The nearest of those that lost some, found again, now that the
+        // new are there too.
+        short.retain(|&i| i < first);
+        let mut acc = vec![0f32; self.len()];
+        for i in short {
+            self.near[i] = kin(
+                i,
+                NEIGHBOURS,
+                &self.bags,
+                &self.norms,
+                &self.rarity,
+                &self.postings,
+                &mut acc,
+            );
+        }
+        true
+    }
+
+    /// Let the messages `gone`, by place, go; the places of those whose
+    /// nearest lost some.
+    fn forget(&mut self, gone: &[usize]) -> Vec<usize> {
+        let mut to: Vec<Option<usize>> = vec![None; self.len()];
+        let mut kept = 0;
+        let mut g = gone.iter().peekable();
+        for (i, slot) in to.iter_mut().enumerate() {
+            if g.peek() == Some(&&i) {
+                g.next();
+                self.rarity.remove(&self.bags[i]);
+            } else {
+                *slot = Some(kept);
+                kept += 1;
+            }
+        }
+        fn keep<T>(v: &mut Vec<T>, to: &[Option<usize>]) {
+            let mut i = 0;
+            v.retain(|_| {
+                i += 1;
+                to[i - 1].is_some()
+            });
+        }
+        keep(&mut self.keys, &to);
+        keep(&mut self.sent, &to);
+        keep(&mut self.bags, &to);
+        keep(&mut self.projected, &to);
+        keep(&mut self.base, &to);
+        keep(&mut self.near, &to);
+        keep(&mut self.words, &to);
+        keep(&mut self.senders, &to);
+        let mut short = Vec::new();
+        for (i, list) in self.near.iter_mut().enumerate() {
+            let before = list.len();
+            list.retain_mut(|(j, _)| match to[*j] {
+                Some(k) => {
+                    *j = k;
+                    true
+                }
+                None => false,
+            });
+            if list.len() < before {
+                short.push(i);
+            }
+        }
+        self.place = self
+            .keys
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, k)| (k, i))
+            .collect();
+        self.postings = postings(&self.bags);
+        short
+    }
+
+    /// Read `messages`, new, after the rest.
+    fn take(&mut self, messages: &[&Given]) {
+        let first = self.len();
+        let read: Vec<_> = messages.par_iter().map(|m| read(m, self.lens)).collect();
+        for (k, (bag, _, sender)) in read.iter().enumerate() {
+            let i = first + k;
+            let (r, _, sent) = messages[k];
+            self.rarity.add(bag);
+            for &(b, w) in bag {
+                self.postings.entry(b).or_default().push((i as u32, w));
+            }
+            self.place.insert(r.key.clone(), i);
+            self.keys.push(r.key.clone());
+            self.sent.push(*sent);
+            self.bags.push(bag.clone());
+            self.senders.push(sender.clone());
+        }
+        let rarity = &self.rarity;
+        self.norms = self.bags.par_iter().map(|b| rarity.norm(b)).collect();
+        for (_, tokens, _) in &read {
+            self.words.push(words_of(tokens, rarity));
+        }
+        let n = self.len();
+        let found: Vec<Vec<(usize, f32)>> = (first..n)
+            .into_par_iter()
+            .map_init(
+                || vec![0f32; n],
+                |acc, i| {
+                    kin(
+                        i,
+                        NEIGHBOURS,
+                        &self.bags,
+                        &self.norms,
+                        rarity,
+                        &self.postings,
+                        acc,
+                    )
+                },
+            )
+            .collect();
+        self.near.extend(found);
+        // Each new message is among the nearest of those nearest it, where
+        // it is nearer than their farthest.
+        for i in first..n {
+            for k in 0..self.near[i].len() {
+                let (j, d) = self.near[i][k];
+                if j >= first {
+                    continue;
+                }
+                let list = &mut self.near[j];
+                if list.len() < NEIGHBOURS || list.last().is_some_and(|l| d < l.1) {
+                    let at = list.partition_point(|x| x.1 < d || (x.1 == d && x.0 < i));
+                    list.insert(at, (i, d));
+                    list.truncate(NEIGHBOURS);
+                }
+            }
+        }
+        for i in first..n {
+            let v = rarity.project(&self.bags[i]);
+            self.projected.push(v);
+        }
+        for i in first..n {
+            let v = smoothed(&self.projected, i, &self.near[i]);
+            self.base.push(v);
+        }
+    }
+
+    /// The model of what is read, taught by the labels of `messages` and
+    /// by `not_it`, each message and label, folded, it was said not to be.
+    pub fn model(&mut self, messages: &[Given], not_it: &BTreeSet<(Key, String)>) -> Model {
+        let n = self.len();
+        let mut labels: Vec<Vec<String>> = vec![Vec::new(); n];
+        for (r, l, _) in messages {
+            if let Some(&i) = self.place.get(&r.key) {
+                labels[i] = l.clone();
+            }
+        }
+        let rarity = &self.rarity;
+        let bags = &self.bags;
+        let mut vectors = self.base.clone();
+        let weigh = |b: u64, w: f32| w * rarity.factor(b);
         // What each label is: the mean of its messages, and the tokens seen
         // in them, by how rare each is.
         let mut members: BTreeMap<String, (String, Vec<usize>)> = BTreeMap::new();
-        for (i, (_, labels, _)) in messages.iter().enumerate() {
+        for (i, labels) in labels.iter().enumerate() {
             for l in labels {
                 members
                     .entry(fold(l))
@@ -532,10 +793,10 @@ impl Model {
                     .collect(),
             );
         }
+        let keys = &self.keys;
         vectors.par_iter_mut().enumerate().for_each(|(i, vector)| {
-            let (record, labels, _) = &messages[i];
             let mut v = *vector;
-            let mine: BTreeSet<String> = labels.iter().map(|l| fold(l)).collect();
+            let mine: BTreeSet<String> = labels[i].iter().map(|l| fold(l)).collect();
             if mine.is_empty() {
                 let total: f32 = bags[i].iter().map(|t| weigh(t.0, t.1)).sum();
                 for (folded, seen) in &label_tokens {
@@ -557,26 +818,49 @@ impl Model {
                 }
             }
             for (folded, (_, l)) in &label_vectors {
-                if not_it.contains(&(record.key.clone(), folded.clone())) {
+                if not_it.contains(&(keys[i].clone(), folded.clone())) {
                     v.iter_mut().zip(l).for_each(|(x, y)| *x -= PUSH * y);
                 }
             }
             *vector = normalised(v);
         });
+        let axes = self.axes.get_or_insert_with(|| Axes::of(&vectors)).clone();
         Model {
-            lens,
-            keys: messages.iter().map(|(r, _, _)| r.key.clone()).collect(),
+            lens: self.lens,
+            keys: self.keys.clone(),
+            place: self.place.clone(),
             vectors,
-            near,
-            words,
-            // Mail sent from here names no cluster by its sender.
-            senders: messages
-                .iter()
-                .map(|(r, _, sent)| if *sent { String::new() } else { r.from.clone() })
-                .collect(),
-            labels: messages.iter().map(|(_, l, _)| l.clone()).collect(),
+            near: self.near.clone(),
+            words: self.words.clone(),
+            senders: self.senders.clone(),
+            labels,
             label_vectors,
+            axes,
         }
+    }
+}
+
+/// The words of a message's tokens, each by what it weighs.
+fn words_of(tokens: &[(u64, String, f32)], rarity: &Rarity) -> Arc<[(String, f32)]> {
+    tokens
+        .iter()
+        .filter_map(|(b, s, w)| Some((s.strip_prefix("w:")?.to_string(), w * rarity.idf(*b))))
+        .collect()
+}
+
+impl Model {
+    /// The model of `messages`, in the order given (the index's, by key),
+    /// as `lens` reads them, taught by their labels and by `not_it`, each
+    /// message and label, folded, it was said not to be.
+    #[cfg(test)]
+    pub fn build(messages: &[Given], not_it: &BTreeSet<(Key, String)>, lens: Lens) -> Model {
+        Corpus::read(messages, lens).model(messages, not_it)
+    }
+
+    /// Each message's hue, in degrees: the angle of its direction in the
+    /// plane of the axes.
+    pub fn hues(&self) -> Vec<f32> {
+        self.vectors.par_iter().map(|v| self.axes.hue(v)).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -855,7 +1139,7 @@ pub fn cluster(model: &Model, before: &[(u32, Vector, Vec<Key>)], seed: u64) -> 
         }
     }
     let mut clusters: Vec<Cluster> = groups
-        .into_iter()
+        .into_par_iter()
         .zip(ids)
         .map(|((members, label), id)| {
             let mut sum = [0f32; DIM];
@@ -893,14 +1177,14 @@ pub fn cluster(model: &Model, before: &[(u32, Vector, Vec<Key>)], seed: u64) -> 
 /// What a cluster is named by: its three weightiest words, or, read by
 /// the people lens, its three commonest senders.
 fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
-    let mut weight: BTreeMap<&str, f32> = BTreeMap::new();
+    let mut weight: HashMap<&str, f32> = HashMap::new();
     if model.lens == Lens::People {
         for &i in members {
-            *weight.entry(model.senders[i].as_str()).or_default() += 1.0;
+            *weight.entry(model.senders[i].as_ref()).or_default() += 1.0;
         }
     } else {
         for &i in members {
-            for (w, x) in &model.words[i] {
+            for (w, x) in model.words[i].iter() {
                 *weight.entry(w.as_str()).or_default() += x;
             }
         }
@@ -1007,6 +1291,7 @@ fn graph(near: &[Vec<(usize, f32)>]) -> Vec<(usize, usize, f32)> {
 fn umap(
     edges: &[(usize, usize, f32)],
     start: Vec<Point>,
+    held: Option<&[bool]>,
     rounds: usize,
     rate: f32,
     seed: u64,
@@ -1033,6 +1318,9 @@ fn umap(
             .zip(due.par_iter_mut())
             .enumerate()
             .for_each(|(i, (p, due))| {
+                if held.is_some_and(|h| h[i]) {
+                    return;
+                }
                 let mut rng = Rng::new(
                     seed ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ ((round as u64) << 40),
                 );
@@ -1051,7 +1339,7 @@ fn umap(
                 }
             });
     }
-    centred(y)
+    if held.is_some() { y } else { centred(y) }
 }
 
 /// A step of `p` toward `q`, by t-UMAP's attraction, each part held to 4.
@@ -1135,8 +1423,10 @@ pub fn layout(model: &Model, start: Option<&[Option<Point>]>, seed: u64) -> Vec<
         }
         None => {
             let mut rng = Rng::new(seed);
-            let begun = principal(&model.vectors)
-                .into_iter()
+            let begun = model
+                .vectors
+                .iter()
+                .map(|v| model.axes.coordinates(v))
                 .map(|[a, b]| {
                     [
                         (a + 1e-4 * rng.normal()) as f32,
@@ -1147,7 +1437,49 @@ pub fn layout(model: &Model, start: Option<&[Option<Point>]>, seed: u64) -> Vec<
             (begun, if n <= 10_000 { 500 } else { 200 }, 1.0)
         }
     };
-    umap(&edges, spread(begun), rounds, rate, seed)
+    umap(&edges, spread(begun), None, rounds, rate, seed)
+}
+
+/// The messages `new` settled among the rest of `at`, which stay where
+/// they are: each begun where `place` puts it, then drawn toward its
+/// nearest and pushed from others, as UMAP lays them out, the rest held.
+pub fn settle(model: &Model, at: &mut [Point], new: &[usize], seed: u64) {
+    if new.is_empty() || at.len() < 2 {
+        return;
+    }
+    let known: Vec<Option<Point>> = {
+        let mut known: Vec<Option<Point>> = at.iter().copied().map(Some).collect();
+        for &i in new {
+            known[i] = None;
+        }
+        known
+    };
+    for &i in new {
+        at[i] = place(model, i, &known);
+    }
+    let ties = model.ties();
+    let mut edges = Vec::new();
+    for &i in new {
+        let dists: Vec<f32> = ties[i].iter().map(|&(_, d)| d).collect();
+        for (&(j, _), w) in ties[i].iter().zip(memberships(&dists)) {
+            if w > 0.0 {
+                edges.push((i, j, w));
+            }
+        }
+    }
+    let mut held = vec![true; at.len()];
+    for &i in new {
+        held[i] = false;
+    }
+    let moved = umap(
+        &edges,
+        at.to_vec(),
+        Some(&held),
+        SETTLE,
+        0.5,
+        seed ^ model.lens as u64,
+    );
+    at.copy_from_slice(&moved);
 }
 
 /// Where the message `i` goes among those placed, `at`, by message: the
@@ -1232,102 +1564,109 @@ pub fn procrustes(new: &[Point], old: &[Point], points: &[Point]) -> Vec<Point> 
         .collect()
 }
 
-/// Each message's hue, in degrees: the angle of its direction in the
-/// plane of the first two principal components of them all.
-pub fn hues(vectors: &[Vector]) -> Vec<f32> {
-    principal(vectors)
-        .into_iter()
-        .map(|[a, b]| (b.atan2(a).to_degrees().rem_euclid(360.0)) as f32)
-        .collect()
+/// The plane of the first two principal components of some directions,
+/// and their mean: where hues are read, and the map begun.
+#[derive(Clone, Debug)]
+pub struct Axes {
+    mean: [f64; DIM],
+    components: [[f64; DIM]; 2],
 }
 
-/// Each of `vectors` in the plane of their first two principal components,
-/// found by power iteration, each with a sign of its own. The products are
-/// summed a block at a time in parallel and the blocks in turn, so the
-/// result is the same on any number of threads.
-fn principal(vectors: &[Vector]) -> Vec<[f64; 2]> {
-    let n = vectors.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut mean = [0f64; DIM];
-    for v in vectors {
-        for d in 0..DIM {
-            mean[d] += f64::from(v[d]) / n as f64;
-        }
-    }
-    let centred: Vec<[f64; DIM]> = vectors
-        .iter()
-        .map(|v| {
-            let mut c = [0f64; DIM];
+impl Axes {
+    /// The axes of `vectors`, found by power iteration, each with a sign
+    /// of its own. The products are summed a block at a time in parallel
+    /// and the blocks in turn, so they are the same on any number of
+    /// threads.
+    pub fn of(vectors: &[Vector]) -> Axes {
+        let n = vectors.len().max(1);
+        let mut mean = [0f64; DIM];
+        for v in vectors {
             for d in 0..DIM {
-                c[d] = f64::from(v[d]) - mean[d];
+                mean[d] += f64::from(v[d]) / n as f64;
             }
-            c
-        })
-        .collect();
-    let times = |x: &[f64; DIM]| {
-        let blocks: Vec<[f64; DIM]> = centred
-            .par_chunks(1024)
-            .map(|block| {
-                let mut out = [0f64; DIM];
-                for c in block {
-                    let p: f64 = c.iter().zip(x).map(|(a, b)| a * b).sum();
-                    for d in 0..DIM {
-                        out[d] += p * c[d];
-                    }
+        }
+        let centred: Vec<[f64; DIM]> = vectors
+            .iter()
+            .map(|v| {
+                let mut c = [0f64; DIM];
+                for d in 0..DIM {
+                    c[d] = f64::from(v[d]) - mean[d];
                 }
-                out
+                c
             })
             .collect();
-        let mut out = [0f64; DIM];
-        for block in &blocks {
-            for d in 0..DIM {
-                out[d] += block[d];
-            }
-        }
-        out
-    };
-    let unit = |mut x: [f64; DIM]| {
-        let norm: f64 = x.iter().map(|a| a * a).sum::<f64>().sqrt();
-        if norm > 0.0 {
-            x.iter_mut().for_each(|a| *a /= norm);
-        }
-        x
-    };
-    let mut rng = Rng::new(7);
-    let mut components: Vec<[f64; DIM]> = Vec::new();
-    for _ in 0..2 {
-        let mut x = [0f64; DIM];
-        x.iter_mut().for_each(|a| *a = rng.normal());
-        for _ in 0..100 {
-            let mut next = times(&x);
-            for c in &components {
-                let p: f64 = next.iter().zip(c).map(|(a, b)| a * b).sum();
+        let times = |x: &[f64; DIM]| {
+            let blocks: Vec<[f64; DIM]> = centred
+                .par_chunks(1024)
+                .map(|block| {
+                    let mut out = [0f64; DIM];
+                    for c in block {
+                        let p: f64 = c.iter().zip(x).map(|(a, b)| a * b).sum();
+                        for d in 0..DIM {
+                            out[d] += p * c[d];
+                        }
+                    }
+                    out
+                })
+                .collect();
+            let mut out = [0f64; DIM];
+            for block in &blocks {
                 for d in 0..DIM {
-                    next[d] -= p * c[d];
+                    out[d] += block[d];
                 }
             }
-            x = unit(next);
+            out
+        };
+        let unit = |mut x: [f64; DIM]| {
+            let norm: f64 = x.iter().map(|a| a * a).sum::<f64>().sqrt();
+            if norm > 0.0 {
+                x.iter_mut().for_each(|a| *a /= norm);
+            }
+            x
+        };
+        let mut rng = Rng::new(7);
+        let mut components = [[0f64; DIM]; 2];
+        for c in 0..2 {
+            let mut x = [0f64; DIM];
+            x.iter_mut().for_each(|a| *a = rng.normal());
+            for _ in 0..100 {
+                let mut next = times(&x);
+                for done in &components[..c] {
+                    let p: f64 = next.iter().zip(done).map(|(a, b)| a * b).sum();
+                    for d in 0..DIM {
+                        next[d] -= p * done[d];
+                    }
+                }
+                x = unit(next);
+            }
+            // A sign of its own, the same whatever the start: its largest
+            // part is positive.
+            let big = (0..DIM)
+                .max_by(|&a, &b| x[a].abs().total_cmp(&x[b].abs()))
+                .unwrap_or(0);
+            if x[big] < 0.0 {
+                x.iter_mut().for_each(|a| *a = -*a);
+            }
+            components[c] = x;
         }
-        // A sign of its own, the same whatever the start: its largest part
-        // is positive.
-        let big = (0..DIM)
-            .max_by(|&a, &b| x[a].abs().total_cmp(&x[b].abs()))
-            .unwrap_or(0);
-        if x[big] < 0.0 {
-            x.iter_mut().for_each(|a| *a = -*a);
-        }
-        components.push(x);
+        Axes { mean, components }
     }
-    centred
-        .iter()
-        .map(|c| {
-            let a: f64 = c.iter().zip(&components[0]).map(|(x, y)| x * y).sum();
-            let b: f64 = c.iter().zip(&components[1]).map(|(x, y)| x * y).sum();
-            [a, b]
-        })
-        .collect()
+
+    /// `v` in the plane.
+    fn coordinates(&self, v: &Vector) -> [f64; 2] {
+        let along = |c: &[f64; DIM]| -> f64 {
+            (0..DIM)
+                .map(|d| (f64::from(v[d]) - self.mean[d]) * c[d])
+                .sum()
+        };
+        [along(&self.components[0]), along(&self.components[1])]
+    }
+
+    /// The hue of `v`, in degrees: its angle in the plane.
+    pub fn hue(&self, v: &Vector) -> f32 {
+        let [a, b] = self.coordinates(v);
+        (b.atan2(a).to_degrees().rem_euclid(360.0)) as f32
+    }
 }
 
 /// How faithful the map is to the mail: of each of up to 200 messages
@@ -1340,32 +1679,38 @@ pub fn faithfulness(model: &Model, at: &[Point]) -> f32 {
     }
     let k = 10.min(n - 1);
     let stride = n.div_ceil(200).max(1);
-    let mut total = 0.0;
-    let mut count = 0;
-    for i in (0..n).step_by(stride) {
-        let by_tokens: BTreeSet<usize> = model.near[i].iter().take(k).map(|&(j, _)| j).collect();
-        if by_tokens.is_empty() {
-            continue;
-        }
-        let mut by_place: Vec<(f32, usize)> = (0..n)
-            .filter(|&j| j != i)
-            .map(|j| {
-                let (dx, dy) = (at[i][0] - at[j][0], at[i][1] - at[j][1]);
-                (dx * dx + dy * dy, j)
-            })
-            .collect();
-        by_place.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let shared = by_place
-            .iter()
-            .take(k)
-            .filter(|(_, j)| by_tokens.contains(j))
-            .count();
-        total += shared as f32 / by_tokens.len() as f32;
-        count += 1;
-    }
-    if count == 0 {
+    let shares: Vec<f32> = (0..n)
+        .step_by(stride)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .filter_map(|i| {
+            let by_tokens: BTreeSet<usize> =
+                model.near[i].iter().take(k).map(|&(j, _)| j).collect();
+            if by_tokens.is_empty() {
+                return None;
+            }
+            let by = |a: &(f32, usize), b: &(f32, usize)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+            let mut by_place: Vec<(f32, usize)> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| {
+                    let (dx, dy) = (at[i][0] - at[j][0], at[i][1] - at[j][1]);
+                    (dx * dx + dy * dy, j)
+                })
+                .collect();
+            if by_place.len() > k {
+                by_place.select_nth_unstable_by(k, by);
+                by_place.truncate(k);
+            }
+            let shared = by_place
+                .iter()
+                .filter(|(_, j)| by_tokens.contains(j))
+                .count();
+            Some(shared as f32 / by_tokens.len() as f32)
+        })
+        .collect();
+    if shares.is_empty() {
         1.0
     } else {
-        total / count as f32
+        shares.iter().sum::<f32>() / shares.len() as f32
     }
 }
