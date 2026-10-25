@@ -11,6 +11,8 @@ pub enum Done {
     Stay,
     Send,
     Cancel,
+    /// `C-c C-a`: a file to be attached is asked for.
+    Attach,
 }
 
 pub struct Buffer {
@@ -133,6 +135,27 @@ impl Buffer {
         let n = self.lines[self.row].chars().count();
         self.col = col.min(n);
         self.preferred = self.col;
+    }
+
+    /// `new` as lines above the row `at`, point staying on its text.
+    pub fn insert_lines(&mut self, at: usize, new: &[String]) {
+        self.edited();
+        let at = at.min(self.lines.len());
+        self.lines.splice(at..at, new.iter().cloned());
+        if self.row >= at {
+            self.row += new.len();
+        }
+    }
+
+    /// `text` put in at point, as typed, its lines broken where it breaks.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        for (i, part) in text.split('\n').enumerate() {
+            if i > 0 {
+                self.newline();
+            }
+            self.insert_str(part);
+        }
     }
 
     fn line(&self) -> &str {
@@ -582,8 +605,8 @@ fn byte_at(line: &str, col: usize) -> usize {
 }
 
 /// Do what `key` does in `buf`. `prefix` is set once `C-c` is pressed, and
-/// the next key sends, cancels, or is let go. Outside this buffer `C-c`
-/// quits; here it does not.
+/// the next key sends, cancels, asks for a file, or is let go. Outside
+/// this buffer `C-c` quits; here it does not.
 pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -593,6 +616,7 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
         return match key.code {
             KeyCode::Char('c' | 'C') => Done::Send,
             KeyCode::Char('k' | 'K') => Done::Cancel,
+            KeyCode::Char('a' | 'A') => Done::Attach,
             _ => Done::Stay,
         };
     }

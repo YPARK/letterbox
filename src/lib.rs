@@ -16,6 +16,7 @@ mod mcp;
 mod model;
 mod net;
 mod oauth;
+mod pick;
 mod secret;
 mod setup;
 mod smtp;

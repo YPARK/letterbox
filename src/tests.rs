@@ -2553,6 +2553,7 @@ fn a_reply_is_addressed_to_the_sender() {
         to: vec!["a@b.c".into()],
         cc: Vec::new(),
         subject: subject.clone(),
+        attach: Vec::new(),
         body: "hi".into(),
     };
     let raw = crate::compose::bytes("me@example.com", &draft, None, None, &[]);
@@ -3029,6 +3030,7 @@ fn a_message_with_files_is_sent_in_parts_each_as_it_was() {
         to: vec!["a@b.c".into()],
         cc: Vec::new(),
         subject: "Fwd: é".into(),
+        attach: Vec::new(),
         body: "Here it is, café.".into(),
     };
     let files = vec![crate::compose::File {
@@ -3110,6 +3112,141 @@ fn a_forward_carries_the_files_of_what_it_forwards() {
         "{:?}",
         message.attachments
     );
+}
+
+#[test]
+fn files_are_picked_a_folder_at_a_time_and_sent_with_the_message() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("papers")).unwrap();
+    std::fs::write(dir.path().join("papers/notes.pdf"), b"%PDF-1.4 notes").unwrap();
+    std::fs::write(dir.path().join("papers/figure.png"), b"\x89PNG figure").unwrap();
+    std::fs::write(dir.path().join("budget.csv"), b"line,cost\n").unwrap();
+    let mut app = demo();
+    app.attach_dir = Some(dir.path().to_path_buf());
+    press(&mut app, &["c", "ada@analytical.example"]);
+    // Over the screen, which is still there beneath it.
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("From you@example.com"), "{screen}");
+    assert!(screen.contains("Inbox"), "{screen}");
+    press(&mut app, &["<c-c>", "<c-a>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::Attach(_)),
+        "{}",
+        app.status
+    );
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Attach files"), "{screen}");
+    assert!(screen.contains("papers/"), "{screen}");
+    // Typing narrows; enter goes into the folder; space marks two.
+    press(
+        &mut app,
+        &["pap", "<enter>", "<space>", "<space>", "<enter>"],
+    );
+    assert!(matches!(app.dialog, app::Dialog::Closed), "{}", app.status);
+    assert_eq!(app.status, "attached 2 files");
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.contains("/papers/figure.png\n"), "{text}");
+    assert!(text.contains("/papers/notes.pdf\n"), "{text}");
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("14 B"), "the size, beside it: {screen}");
+    // Again, from the folder last attached from; a file there once.
+    press(&mut app, &["<c-c>", "<c-a>", "<left>", "budget", "<enter>"]);
+    press(&mut app, &["<c-c>", "<c-a>", "<enter>"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert_eq!(text.matches("budget.csv").count(), 1, "{text}");
+    // A file gone by the time it is sent is said, and nothing is sent.
+    press(&mut app, &["<c-c>", "<c-a>", "<esc>"]);
+    std::fs::remove_file(dir.path().join("budget.csv")).unwrap();
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.compose.is_some());
+    assert!(app.status.contains("cannot attach"), "{}", app.status);
+    std::fs::write(dir.path().join("budget.csv"), b"line,cost\n").unwrap();
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.compose.is_none(), "{}", app.status);
+    press(&mut app, &["h", "j", "j"]);
+    assert_eq!(app.folder_name(), "Sent");
+    press(&mut app, &["l", "<enter>"]);
+    let message = app.message().expect("read").clone();
+    let mut names: Vec<&str> = message
+        .attachments
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["budget.csv", "figure.png", "notes.pdf"]);
+}
+
+#[test]
+fn a_forward_s_files_are_attach_lines_that_can_be_let_go() {
+    let mut app = demo();
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(&mut app, &["<c-f>"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Attach: ") && l.ends_with(" (forwarded)"))
+        .collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    // The lines killed, the files stay behind.
+    let row = text.lines().position(|l| l == lines[0]).unwrap();
+    app.compose.as_mut().unwrap().buffer.place(row, 0);
+    press(&mut app, &["<c-k>", "<c-k>", "<c-k>", "<c-k>"]);
+    let compose = app.compose.as_mut().unwrap();
+    compose.buffer.place(0, 4);
+    press(&mut app, &["ada@analytical.example", "<c-c>", "<c-c>"]);
+    assert!(app.compose.is_none(), "{}", app.status);
+    press(&mut app, &["h", "j", "j", "l", "<enter>"]);
+    let message = app.message().expect("read").clone();
+    assert!(message.subject.starts_with("Fwd: "), "{}", message.subject);
+    assert!(message.attachments.is_empty(), "{:?}", message.attachments);
+}
+
+#[test]
+fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let spaced = dir.path().join("a draft.txt");
+    std::fs::write(&spaced, b"draft").unwrap();
+    let plain = dir.path().join("plain.txt");
+    std::fs::write(&plain, b"plain").unwrap();
+    let mut app = demo();
+    press(&mut app, &["c"]);
+    // As terminals paste dropped files: escaped, quoted, or as addresses.
+    let escaped = spaced.display().to_string().replace(' ', "\\ ");
+    app.paste(&format!("{escaped} '{}'", plain.display()));
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.contains("a draft.txt\n"), "{text}");
+    assert!(text.contains("plain.txt\n"), "{text}");
+    let address = format!(
+        "file://{}",
+        spaced.display().to_string().replace(' ', "%20")
+    );
+    app.paste(&address);
+    assert_eq!(app.status, "attached already");
+    // Anything else is written where the cursor is.
+    app.paste("Dear Ada,\nthe engine");
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.contains("Dear Ada,\nthe engine"), "{text}");
+    assert!(!text.contains("Attach: Dear"), "{text}");
+}
+
+#[test]
+fn a_capital_said_as_its_letter_with_shift_is_the_capital() {
+    let shift = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+    let mut app = demo();
+    // A, as kitty's protocol may say it: the account form.
+    app.key(shift('a'));
+    assert!(app.dialog.form().is_some());
+    press(&mut app, &["<esc>"]);
+    // Written, it is the capital too.
+    press(&mut app, &["c"]);
+    app.key(shift('h'));
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(text.starts_with("To: H"), "{text}");
 }
 
 #[test]

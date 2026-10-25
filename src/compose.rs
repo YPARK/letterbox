@@ -12,19 +12,27 @@ enum Head {
     To,
     Cc,
     Subject,
+    Attach,
 }
 
-/// What was written: who it is to, and the text below the blank line.
+/// What was written: who it is to, the files it takes, and the text below
+/// the blank line.
 pub struct Draft {
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub subject: String,
+    /// Each `Attach` line's file: a path, or one of a forward's files.
+    pub attach: Vec<String>,
     pub body: String,
 }
 
-/// Read `To`, `Cc` and `Subject` from the lines above the first blank line
-/// of `text`. Anything else there, or a missing `To`, is said and nothing
-/// is sent.
+/// What an `Attach` line ends with when its file is one of the message
+/// forwarded, not one of this machine's.
+pub const FORWARDED: &str = " (forwarded)";
+
+/// Read `To`, `Cc`, `Subject` and each `Attach` from the lines above the
+/// first blank line of `text`. Anything else there, or a missing `To`, is
+/// said and nothing is sent.
 pub fn parse(text: &str) -> Result<Draft, String> {
     let text = text.strip_suffix('\n').unwrap_or(text);
     let Some((head, body)) = text.split_once("\n\n") else {
@@ -33,6 +41,7 @@ pub fn parse(text: &str) -> Result<Draft, String> {
     let mut to = String::new();
     let mut cc = String::new();
     let mut subject = String::new();
+    let mut attach: Vec<String> = Vec::new();
     let mut which = None;
     for line in head.lines() {
         if line.starts_with([' ', '\t']) {
@@ -43,6 +52,7 @@ pub fn parse(text: &str) -> Result<Draft, String> {
                 Head::To => &mut to,
                 Head::Cc => &mut cc,
                 Head::Subject => &mut subject,
+                Head::Attach => attach.last_mut().expect("an Attach line before"),
             };
             slot.push(' ');
             slot.push_str(line.trim());
@@ -55,7 +65,8 @@ pub fn parse(text: &str) -> Result<Draft, String> {
             "to" => Head::To,
             "cc" => Head::Cc,
             "subject" => Head::Subject,
-            _ => return Err("only To, Cc and Subject go above the message".to_string()),
+            "attach" => Head::Attach,
+            _ => return Err("only To, Cc, Subject and Attach go above the message".to_string()),
         };
         which = Some(head);
         let value = value.trim();
@@ -63,8 +74,10 @@ pub fn parse(text: &str) -> Result<Draft, String> {
             Head::To => to = value.to_string(),
             Head::Cc => cc = value.to_string(),
             Head::Subject => subject = value.to_string(),
+            Head::Attach => attach.push(value.to_string()),
         }
     }
+    attach.retain(|a| !a.is_empty());
     let to = addresses(&to)?;
     if to.is_empty() {
         return Err("say who it is to".to_string());
@@ -74,8 +87,89 @@ pub fn parse(text: &str) -> Result<Draft, String> {
         to,
         cc,
         subject,
+        attach,
         body: body.to_string(),
     })
+}
+
+/// `text` with an `Attach` line for each of `files` added under its other
+/// headers; and how many lines were added, and above which row.
+pub fn with_attached(text: &str, files: &[String]) -> (String, usize, usize) {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    let at = lines
+        .iter()
+        .position(|l| l.is_empty())
+        .unwrap_or(lines.len());
+    let added: Vec<String> = files.iter().map(|f| format!("Attach: {f}")).collect();
+    lines.splice(at..at, added.iter().map(String::as_str));
+    (lines.join("\n"), files.len(), at)
+}
+
+/// The file an `Attach` line names on this machine: `~` is home.
+pub fn path_of(value: &str) -> std::path::PathBuf {
+    match value.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None => std::path::PathBuf::from(value),
+    }
+}
+
+/// `path` as an `Attach` line names it: in home, from `~`.
+pub fn named(path: &std::path::Path) -> String {
+    match path.strip_prefix(home()) {
+        Ok(rest) if !home().as_os_str().is_empty() => format!("~/{}", rest.display()),
+        _ => path.display().to_string(),
+    }
+}
+
+fn home() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+}
+
+/// The file at `path`, to be sent: its name, its type by its extension,
+/// and its bytes.
+pub(crate) fn read_file(path: &std::path::Path) -> std::io::Result<File> {
+    let bytes = std::fs::read(path)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    Ok(File {
+        mime: mime_of(&name).to_string(),
+        name,
+        bytes,
+    })
+}
+
+/// The type of a file, by its extension; else bytes of no type said.
+pub fn mime_of(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("txt" | "log") => "text/plain",
+        Some("md") => "text/markdown",
+        Some("csv") => "text/csv",
+        Some("tsv") => "text/tab-separated-values",
+        Some("html" | "htm") => "text/html",
+        Some("json") => "application/json",
+        Some("zip") => "application/zip",
+        Some("gz") => "application/gzip",
+        Some("tar") => "application/x-tar",
+        Some("doc") => "application/msword",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("xls") => "application/vnd.ms-excel",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("ppt") => "application/vnd.ms-powerpoint",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("tex") => "text/x-tex",
+        Some("bib") => "text/x-bibtex",
+        Some("ics") => "text/calendar",
+        _ => "application/octet-stream",
+    }
 }
 
 /// `Re: …` unless `subject` already begins so.
@@ -104,6 +198,7 @@ fn prefixed(subject: &str, prefix: &str, already: &[&str]) -> String {
 }
 
 /// A file sent with a message: its name, its type, and its bytes.
+#[derive(Clone)]
 pub(crate) struct File {
     pub name: String,
     pub mime: String,
@@ -184,7 +279,13 @@ pub(crate) fn respond(
         }
         Respond::Forward => {
             let (text, row, col) = forward(message);
-            (text, (row, col), Thread::default(), files(message))
+            let files = files(message);
+            let names: Vec<String> = files
+                .iter()
+                .map(|f| format!("{}{FORWARDED}", f.name))
+                .collect();
+            let (text, _, _) = with_attached(&text, &names);
+            (text, (row, col), Thread::default(), files)
         }
     }
 }

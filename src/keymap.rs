@@ -87,6 +87,8 @@ pub enum Pane {
     Writing,
     /// Asking which folder is Trash.
     Picking,
+    /// Picking files to attach to the message being written.
+    Attaching,
     /// The map, in the middle pane.
     Map,
 }
@@ -108,7 +110,7 @@ pub struct Binding {
 }
 
 use Act::*;
-use Pane::{List, Map, Picking, Reader, Side, Writing};
+use Pane::{Attaching, List, Map, Picking, Reader, Side, Writing};
 
 pub const KEYS: &[Binding] = &[
     Binding {
@@ -120,6 +122,7 @@ pub const KEYS: &[Binding] = &[
             (List, "read"),
             (Picking, "this folder"),
             (Map, "read"),
+            (Attaching, "attach"),
         ],
         help: "open the folder, or read the message",
     },
@@ -255,7 +258,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("esc", Back)],
         name: "esc",
         hint: "esc",
-        foot: &[(Reader, "back"), (Picking, "cancel")],
+        foot: &[(Reader, "back"), (Picking, "cancel"), (Attaching, "cancel")],
         help: "back to the list; clear the search",
     },
     Binding {
@@ -398,6 +401,35 @@ pub const KEYS: &[Binding] = &[
         name: "C-g",
         hint: "C-g",
         foot: &[(Writing, "cancel")],
+        help: "",
+    },
+    Binding {
+        keys: &[],
+        name: "C-c C-a",
+        hint: "C-c C-a",
+        foot: &[(Writing, "attach")],
+        help: "in the message being written, attach files, picked a folder at a time: typing narrows, ⏎ goes into a folder, ← up, ~ home, ␣ marks; or drop them onto the terminal. Each is an Attach line, read as it is sent",
+    },
+    // Picking files to attach: the picker's keys.
+    Binding {
+        keys: &[],
+        name: "␣",
+        hint: "␣",
+        foot: &[(Attaching, "mark")],
+        help: "",
+    },
+    Binding {
+        keys: &[],
+        name: "←",
+        hint: "←",
+        foot: &[(Attaching, "up")],
+        help: "",
+    },
+    Binding {
+        keys: &[],
+        name: "~",
+        hint: "~",
+        foot: &[(Attaching, "home")],
         help: "",
     },
     Binding {
@@ -547,10 +579,10 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
         "esc" => Some(KeyCode::Esc),
         "tab" => Some(KeyCode::Tab),
         "S-tab" => Some(KeyCode::BackTab),
-        "up" => Some(KeyCode::Up),
-        "down" => Some(KeyCode::Down),
-        "left" => Some(KeyCode::Left),
-        "right" => Some(KeyCode::Right),
+        "up" | "↑" => Some(KeyCode::Up),
+        "down" | "↓" => Some(KeyCode::Down),
+        "left" | "←" => Some(KeyCode::Left),
+        "right" | "→" => Some(KeyCode::Right),
         "pgup" => Some(KeyCode::PageUp),
         "pgdn" => Some(KeyCode::PageDown),
         "home" => Some(KeyCode::Home),

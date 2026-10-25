@@ -81,14 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
-    let composing = app.compose.is_some();
-    let [side_w, list_w, read_w] = if composing {
-        if main.width >= MEDIUM {
-            [SIDEBAR, 0, main.width - SIDEBAR]
-        } else {
-            [0, 0, main.width]
-        }
-    } else if app.map.mode == crate::map::Mode::Map {
+    let [side_w, list_w, read_w] = if app.map.mode == crate::map::Mode::Map {
         map_panes(main.width, app.focus)
     } else {
         panes(main.width, app.focus)
@@ -112,13 +105,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     if read_w > 0 {
-        if app.compose.is_some() {
-            compose_pane(f, app, read);
-        } else {
-            reader(f, app, read);
-        }
+        reader(f, app, read);
     }
     keys(f, app, foot_area, foot_lines, spots);
+    if app.compose.is_some() {
+        compose_popup(f, app, main);
+    }
     let popup = match &app.dialog {
         Dialog::Closed => None,
         &Dialog::Help(scroll) => {
@@ -128,6 +120,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         Dialog::Form(form) => Some(form_dialog(f, &t, form)),
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
+        Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
@@ -471,6 +464,111 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     (area, targets)
 }
 
+/// Files to attach, picked a folder at a time: the folder, what is typed,
+/// and its entries, the one picked lit, those marked `●`, the newest `★`.
+fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -> (Rect, Targets) {
+    use crate::pick::Entry;
+    let width = f.area().width.min(84);
+    let height = f.area().height.saturating_sub(4).clamp(8, 30);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![
+        Line::styled(
+            clip(&format!("{}/", crate::compose::named(&p.dir)), room),
+            Style::new().fg(t.dim),
+        ),
+        Line::from(vec![
+            Span::styled("narrow ", Style::new().fg(t.dim)),
+            Span::styled(
+                tail(&p.filter, room.saturating_sub(9)),
+                Style::new().fg(t.text),
+            ),
+            Span::styled("▏", Style::new().fg(t.accent)),
+        ]),
+        Line::raw(""),
+    ];
+    let top = lines.len();
+    let rows = (height as usize).saturating_sub(2 + top + 2).max(1);
+    let shown = p.shown();
+    let offset = (p.row + 1).saturating_sub(rows);
+    for (i, e) in shown.iter().enumerate().skip(offset).take(rows) {
+        let (mark, name, about, style) = match e {
+            Entry::Up => (
+                "  ",
+                "..".to_string(),
+                String::new(),
+                Style::new().fg(t.dim),
+            ),
+            Entry::Dir(n) => (
+                "  ",
+                format!("{n}/"),
+                String::new(),
+                Style::new().fg(t.title),
+            ),
+            Entry::File { name, size: bytes } => {
+                let mark = if p.marked.contains(&p.dir.join(name)) {
+                    "● "
+                } else if p.newest.as_deref() == Some(name) {
+                    "★ "
+                } else {
+                    "  "
+                };
+                (
+                    mark,
+                    name.clone(),
+                    size(*bytes as usize),
+                    Style::new().fg(t.text),
+                )
+            }
+        };
+        let side = about.width();
+        let name = clip(&name, room.saturating_sub(side + 4));
+        let pad = room.saturating_sub(2 + name.width() + side);
+        let line = Line::from(vec![
+            Span::styled(mark, Style::new().fg(t.accent)),
+            Span::styled(name, style),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(about, Style::new().fg(t.dim)),
+        ]);
+        lines.push(if i == p.row {
+            line.style(Style::new().bg(t.focus))
+        } else {
+            line
+        });
+    }
+    while lines.len() < top + rows {
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::raw(""));
+    let note = match (&p.note, p.marked.len()) {
+        (Some(note), _) => Line::styled(clip(note, room), Style::new().fg(t.error)),
+        (None, 0) => Line::raw(""),
+        (None, n) => Line::styled(
+            format!("{n} marked: ⏎ attaches them"),
+            Style::new().fg(t.soft),
+        ),
+    };
+    lines.push(note);
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            "Attach files",
+            "⏎ attach · ␣ mark · C-a all · ← up · ~ home · esc",
+        )),
+        area,
+    );
+    let targets = (offset..shown.len().min(offset + rows))
+        .map(|i| {
+            (
+                spot(area, top + i - offset, 0, room as u16),
+                Target::Item(i),
+            )
+        })
+        .collect();
+    (area, targets)
+}
+
 /// The account's folders, one highlighted, asking which of them is Trash.
 fn trash_dialog(f: &mut Frame, t: &Theme, pick: &TrashPick) -> (Rect, Targets) {
     let width = f.area().width.min(72);
@@ -596,8 +694,69 @@ fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
     (area, targets)
 }
 
+/// The message being written, over the screen, faded beneath it: as wide
+/// as two thirds of it, a letter's lines at least, and as tall as it.
+fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
+    let t = app.theme;
+    let buf = f.buffer_mut();
+    for y in main.top()..main.bottom() {
+        for x in main.left()..main.right() {
+            buf[(x, y)].set_fg(t.faint);
+        }
+    }
+    // Narrow, it is the screen's, with no border to take its room.
+    if main.width < MEDIUM + 4 {
+        f.render_widget(Clear, main);
+        return compose_pane(f, app, main);
+    }
+    let area = {
+        let width = (main.width * 2 / 3).max(84).min(main.width - 4);
+        let height = main.height.saturating_sub(2).max(3);
+        Rect {
+            x: main.x + (main.width - width) / 2,
+            y: main.y + (main.height - height) / 2,
+            width,
+            height,
+        }
+    };
+    let from = app
+        .compose
+        .as_ref()
+        .and_then(|c| app.accounts.get(c.account))
+        .map(|a| a.email.clone())
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.dim))
+        .title(Span::styled(
+            format!(" From {from} "),
+            Style::new().fg(t.title).bold(),
+        ))
+        .style(Style::new().bg(t.page).fg(t.text));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    compose_pane(f, app, inner);
+}
+
+/// What an `Attach` line's file is: its size, or why it cannot be sent.
+fn attached(value: &str, forwarded: &[crate::compose::File]) -> Result<String, &'static str> {
+    if let Some(name) = value.strip_suffix(crate::compose::FORWARDED) {
+        return forwarded
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| size(f.bytes.len()))
+            .ok_or("not among those forwarded");
+    }
+    match std::fs::metadata(crate::compose::path_of(value)) {
+        Ok(m) if m.is_file() => Ok(size(m.len() as usize)),
+        Ok(_) => Err("not a file"),
+        Err(_) => Err("not found"),
+    }
+}
+
 /// The message being written: its text, the cursor reversed, and a mode
-/// line, as an Emacs buffer has one.
+/// line, as an Emacs buffer has one. Each file attached says its size.
 fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(compose) = &mut app.compose else {
         return;
@@ -621,6 +780,12 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let width = (body.width as usize).max(1);
     let scroll = compose.scroll;
+    let head = compose
+        .buffer
+        .lines()
+        .iter()
+        .position(String::is_empty)
+        .unwrap_or(0);
     let cursor_row = compose.buffer.row();
     let cursor_col = compose.buffer.col();
     let mut lines: Vec<Line> = compose
@@ -632,7 +797,17 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .take(rows)
         .map(|(i, line)| {
             let region = compose.buffer.marked(i);
-            compose_line(line, i == cursor_row, cursor_col, width, t, region)
+            let mut shown = compose_line(line, i == cursor_row, cursor_col, width, t, region);
+            if i < head
+                && let Some(value) = line.strip_prefix("Attach:").map(str::trim)
+                && !value.is_empty()
+            {
+                shown.spans.push(match attached(value, &compose.files) {
+                    Ok(size) => Span::styled(format!("  {size}"), Style::new().fg(t.dim)),
+                    Err(why) => Span::styled(format!("  {why}"), Style::new().fg(t.error)),
+                });
+            }
+            shown
         })
         .collect();
     while (lines.len() as u16) < body.height {
@@ -647,7 +822,7 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let said = match compose.buffer.searching() {
         Some(s) => Span::styled(format!("  {s}"), Style::new().fg(t.title).bold()),
         None => Span::styled(
-            "  C-c C-c send   C-c C-k or C-g cancel   C-SPC mark   C-s search",
+            "  C-c C-c send   C-c C-a attach   C-c C-k or C-g cancel   C-SPC mark   C-s search",
             Style::new().fg(t.dim),
         ),
     };
@@ -1980,7 +2155,7 @@ fn message(m: &Message, width: usize, t: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn size(bytes: usize) -> String {
+pub(crate) fn size(bytes: usize) -> String {
     match bytes {
         b if b < 1024 => format!("{b} B"),
         b if b < 1024 * 1024 => format!("{} KB", b.div_ceil(1024)),
@@ -2063,6 +2238,7 @@ fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spo
 fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
+        _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
         _ if app.compose.is_some() => Pane::Writing,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,

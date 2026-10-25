@@ -21,8 +21,8 @@ use crate::vault;
 use crate::worker::{self, Added, Answer, Ask, Reply};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -509,9 +509,16 @@ pub struct Compose {
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
-    /// The files it is sent with: a forward's, the message's it forwards.
+    /// The files of the message it forwards, sent with it while an
+    /// `Attach` line names them.
     pub files: Vec<compose::File>,
+    /// Said that what is attached is more than most servers take: a send
+    /// asked again sends it.
+    pub warned: bool,
 }
+
+/// How much attached most servers take, in bytes.
+const LARGE: usize = 25 * 1024 * 1024;
 
 /// A message to answer once it is read: where it is, and how.
 struct Pending {
@@ -563,6 +570,8 @@ pub enum Dialog {
     Label(String),
     /// What to call a label, as typed so far.
     RenameLabel(String, String),
+    /// Files to attach to the message being written, as they are picked.
+    Attach(Box<crate::pick::Picker>),
 }
 
 impl Dialog {
@@ -617,6 +626,7 @@ impl Dialog {
             Dialog::Form(form) if !form.checking => return form.step(by),
             Dialog::Files(files) => (&mut files.at, files.items.len()),
             Dialog::Trash(pick) => (&mut pick.at, pick.folders.len()),
+            Dialog::Attach(picker) => return picker.step(by),
             _ => return,
         };
         *at = at.saturating_add_signed(by).min(len.saturating_sub(1));
@@ -774,6 +784,8 @@ pub struct App {
     pub map: Map,
     /// What the map's model has read, between one snapshot and the next.
     map_corpus: Option<crate::model::Corpus>,
+    /// The folder files were last attached from.
+    pub attach_dir: Option<PathBuf>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -810,6 +822,7 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                     // A box being drawn on the map is drawn as it goes.
                     stale |= matches!(m.kind, MouseEventKind::Drag(_)) && app.map.drag.is_some();
                 }
+                Event::Paste(text) => app.paste(&text),
                 _ => {}
             }
         }
@@ -867,10 +880,11 @@ fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
 static TELLS_APART: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// The terminal, as ratatui takes it, with the mouse's clicks and wheel,
-/// and keys told apart where the terminal can.
+/// what is pasted as one, not as keys, and keys told apart where the
+/// terminal can.
 fn take() -> DefaultTerminal {
     let terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     if *TELLS_APART.get_or_init(|| {
         ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
     }) {
@@ -886,7 +900,11 @@ fn give_back() {
     if TELLS_APART.get() == Some(&true) {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = execute!(
+        std::io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture
+    );
     ratatui::restore();
 }
 
@@ -959,6 +977,7 @@ impl App {
             mapping: String::new(),
             map: Map::default(),
             map_corpus: None,
+            attach_dir: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -2242,7 +2261,11 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent) {
+        let key = capital(key);
         if self.compose.is_some() {
+            if matches!(self.dialog, Dialog::Attach(_)) {
+                return self.attach_key(key);
+            }
             return self.compose_key(key);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -2450,6 +2473,7 @@ impl App {
             },
             Dialog::Form(_) => self.form_key(key),
             Dialog::Files(_) => self.files_key(key),
+            Dialog::Attach(_) => self.attach_key(key),
             Dialog::Trash(_) => match keymap::act(key) {
                 Some(Act::Down) => self.dialog.step(1),
                 Some(Act::Up) => self.dialog.step(-1),
@@ -2525,6 +2549,8 @@ impl App {
                 self.open_item();
             }
             (Dialog::Files(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::Attach(picker), Some(Target::Item(i))) => picker.click(i),
+            (Dialog::Attach(_), _) => self.dialog = Dialog::Closed,
             (Dialog::Form(form), Some(Target::Field(i))) if !form.checking => {
                 if i == KEEP && form.at == KEEP {
                     form.turn(1);
@@ -2708,7 +2734,8 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
-        if self.compose.is_some() {
+        // Writing, only the files being picked are clicked.
+        if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_)) {
             return;
         }
         let at = self
@@ -3326,6 +3353,7 @@ impl App {
             scroll: 0,
             sending: false,
             files,
+            warned: false,
         });
     }
 
@@ -3354,6 +3382,81 @@ impl App {
                 self.status = "not sent".to_string();
             }
             Done::Send => self.send_compose(),
+            Done::Attach => {
+                let dir = self
+                    .attach_dir
+                    .clone()
+                    .filter(|d| d.is_dir())
+                    .or_else(|| Some(downloads()).filter(|d| d.is_dir()))
+                    .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()));
+                self.dialog = Dialog::Attach(Box::new(crate::pick::Picker::open(dir)));
+            }
+        }
+    }
+
+    /// A key while files to attach are picked.
+    fn attach_key(&mut self, key: KeyEvent) {
+        let Dialog::Attach(picker) = &mut self.dialog else {
+            return;
+        };
+        match picker.key(key) {
+            crate::pick::Picked::Stay => {}
+            crate::pick::Picked::Cancel => self.dialog = Dialog::Closed,
+            crate::pick::Picked::Take(paths) => {
+                self.attach_dir = Some(picker.dir.clone());
+                self.dialog = Dialog::Closed;
+                self.attach(&paths);
+            }
+        }
+    }
+
+    /// An `Attach` line for each of `paths` in the message being written,
+    /// under its other headers; those it has already, once.
+    fn attach(&mut self, paths: &[PathBuf]) {
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        let lines = compose.buffer.lines();
+        let end = lines
+            .iter()
+            .position(String::is_empty)
+            .unwrap_or(lines.len());
+        let had: Vec<&str> = lines[..end]
+            .iter()
+            .filter_map(|l| l.strip_prefix("Attach:").map(str::trim))
+            .collect();
+        let new: Vec<String> = paths
+            .iter()
+            .map(|p| compose::named(p))
+            .filter(|n| !had.contains(&n.as_str()))
+            .collect();
+        let lines: Vec<String> = new.iter().map(|n| format!("Attach: {n}")).collect();
+        compose.buffer.insert_lines(end, &lines);
+        self.status = match new.len() {
+            0 => "attached already".to_string(),
+            1 => format!("attached {}", new[0]),
+            n => format!("attached {n} files"),
+        };
+    }
+
+    /// What was pasted, or dropped onto the terminal as the paths of its
+    /// files: attached, if the message being written takes them and each
+    /// is a file; else written in, or typed into the search.
+    pub fn paste(&mut self, text: &str) {
+        if self.compose.is_some() && !self.dialog.is_open() {
+            let paths = dropped(text);
+            if !paths.is_empty() {
+                return self.attach(&paths);
+            }
+            if let Some(compose) = &mut self.compose
+                && !compose.sending
+            {
+                compose.buffer.paste(text);
+            }
+        } else if self.searching {
+            self.query.push_str(&text.replace(['\r', '\n'], " "));
+            self.found = None;
+            self.narrow();
         }
     }
 
@@ -3381,12 +3484,43 @@ impl App {
             self.status = "this account has no address to send from".to_string();
             return;
         }
+        // Each file attached, read now: a forward's, or this machine's.
+        let mut files = Vec::new();
+        for value in &draft.attach {
+            let file = match value.strip_suffix(compose::FORWARDED) {
+                Some(name) => compose
+                    .files
+                    .iter()
+                    .find(|f| f.name == name)
+                    .cloned()
+                    .ok_or_else(|| format!("{name} is not among the files forwarded")),
+                None => compose::read_file(&compose::path_of(value))
+                    .map_err(|e| format!("cannot attach {value}: {e}")),
+            };
+            match file {
+                Ok(f) => files.push(f),
+                Err(e) => {
+                    self.status = e;
+                    return;
+                }
+            }
+        }
+        let total: usize = files.iter().map(|f| f.bytes.len()).sum();
+        if total > LARGE && !compose.warned {
+            self.status = format!(
+                "{} attached is more than most servers take, {}: C-c C-c again sends it",
+                crate::ui::size(total),
+                crate::ui::size(LARGE)
+            );
+            self.compose.as_mut().expect("open").warned = true;
+            return;
+        }
         let raw = compose::bytes(
             &email,
             &draft,
             compose.thread.in_reply_to.as_deref(),
             compose.thread.references.as_deref(),
-            &compose.files,
+            &files,
         );
         let answer = compose.thread.answering.clone();
         self.compose.as_mut().expect("open").sending = true;
@@ -4427,6 +4561,88 @@ fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
     let path = dir.join(format!("{uid}-{}", safe_name(name)));
     vault::write_private(&path, bytes)?;
     Ok(path)
+}
+
+/// `key` as the table reads it: a letter said in lower case with Shift
+/// alone, as some terminals say it once keys are told apart, in upper case,
+/// as the rest say it.
+fn capital(key: KeyEvent) -> KeyEvent {
+    match key.code {
+        KeyCode::Char(c) if c.is_lowercase() && key.modifiers == KeyModifiers::SHIFT => {
+            let mut up = c.to_uppercase();
+            match (up.next(), up.next()) {
+                (Some(u), None) => KeyEvent {
+                    code: KeyCode::Char(u),
+                    ..key
+                },
+                _ => key,
+            }
+        }
+        _ => key,
+    }
+}
+
+/// The files `text` names, as a terminal pastes those dropped on it:
+/// their paths, each quoted or its spaces escaped, or their `file://`
+/// addresses; none unless each is a file named from the root or home.
+fn dropped(text: &str) -> Vec<PathBuf> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = text.trim().chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => word.push(c),
+            None if c == '\\' => word.extend(chars.next()),
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c.is_whitespace() => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            None => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    let paths: Vec<PathBuf> = words
+        .iter()
+        .map(|w| match w.strip_prefix("file://") {
+            Some(rest) => PathBuf::from(unescaped(rest)),
+            None => compose::path_of(w),
+        })
+        .collect();
+    if paths.iter().all(|p| p.is_absolute() && p.is_file()) {
+        paths
+    } else {
+        Vec::new()
+    }
+}
+
+/// `s` with each `%` and two hex digits the byte they stand for.
+fn unescaped(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `$LETTERBOX_DOWNLOADS`, else `~/Downloads`.
