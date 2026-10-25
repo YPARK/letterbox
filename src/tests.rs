@@ -5643,7 +5643,7 @@ fn shown_of(app: &App, id: u32) -> usize {
 }
 
 #[test]
-fn farther_than_all_of_it_each_cluster_is_one_node_as_big_as_how_many_it_holds() {
+fn farther_than_all_of_it_each_cluster_is_one_node_the_bigger_the_more_it_holds() {
     let mut app = demo_map();
     let _ = app::screen(&mut app, 150, 45);
     press(&mut app, &["Z"]);
@@ -5654,7 +5654,7 @@ fn farther_than_all_of_it_each_cluster_is_one_node_as_big_as_how_many_it_holds()
     let s = app.map.snapshot.clone().unwrap();
     let with_mail = s.groups.iter().filter(|g| shown_of(&app, g.id) > 0).count();
     assert_eq!(app.map.nodes.len(), with_mail, "one node each");
-    // As big as how many: the more, the wider.
+    // The more, the wider: its area as the root of how many.
     let mut by_count: Vec<(usize, f32)> = app
         .map
         .nodes
@@ -5667,6 +5667,11 @@ fn farther_than_all_of_it_each_cluster_is_one_node_as_big_as_how_many_it_holds()
         "{by_count:?}"
     );
     assert!(by_count.last().unwrap().1 > by_count[0].1, "{by_count:?}");
+    let &(most, widest) = by_count.last().unwrap();
+    for &(n, r) in by_count.iter().filter(|&&(_, r)| r > 1.0) {
+        let damped = widest * (n as f32 / most as f32).powf(0.25);
+        assert!((r - damped).abs() < 1e-3, "{n}: {r} not {damped}");
+    }
     // Each named once, by its node, with how many it holds.
     let biggest = s
         .groups

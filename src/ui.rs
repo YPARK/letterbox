@@ -1684,7 +1684,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     head.push(Span::styled(what, dim));
     let key = if app.map.clusters {
-        "   ⬤ as big as how many it holds, bright with unread  ◆ label  ◇ cluster"
+        "   ⬤ the bigger the more it holds, bright with unread  ◆ label  ◇ cluster"
     } else {
         "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster"
     };
@@ -2066,7 +2066,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// The map from farther than all of it: each cluster one round node, its
-/// area as big as how many of its messages are shown, in its hue, bright
+/// area growing with the root of how many of its messages are shown, in its hue, bright
 /// with mail unread, its name and how many beside it. Drawn in half cells,
 /// whose halves are about as tall as a cell is wide, so that round is round.
 fn cluster_nodes(
@@ -2129,16 +2129,23 @@ fn cluster_nodes(
             r: 0.0,
         });
     }
-    // The biggest a quarter of the map's height across, the rest by their
-    // area, none smaller than a cell.
+    // Each one's area as the root of how many it holds, so that one cluster
+    // of much does not leave the rest specks; all of them a sixth of the
+    // map, the biggest no more than a fifth of its height across, and none
+    // smaller than a cell.
     let (x0, x1) = (f32::from(canvas.x), f32::from(canvas.right()));
     let (y0, y1) = (2.0 * f32::from(canvas.y), 2.0 * f32::from(canvas.bottom()));
     let most = nodes.iter().map(|n| n.n).max().unwrap_or(1) as f32;
-    let biggest = (f32::from(canvas.height) / 4.0)
+    let share = |n: &Node| (n.n as f32 / most).powf(0.25);
+    let areas: f32 = nodes.iter().map(|n| share(n).powi(2)).sum();
+    let room = (x1 - x0) * (y1 - y0) / 6.0;
+    let biggest = (room / (std::f32::consts::PI * areas.max(1.0)))
+        .sqrt()
+        .min(f32::from(canvas.height) / 5.0)
         .min(f32::from(canvas.width) / 8.0)
         .max(1.0);
     for n in &mut nodes {
-        n.r = (biggest * (n.n as f32 / most).sqrt()).max(1.0);
+        n.r = (biggest * share(n)).max(1.0);
     }
     // Those that overlap pushed apart, the smaller the more, a column clear
     // between them, and kept on the map.
@@ -2194,6 +2201,7 @@ fn cluster_nodes(
     };
     let buf = f.buffer_mut();
     let mut runs: Vec<(Rect, u32)> = Vec::new();
+    let mut filled: std::collections::BTreeSet<(u16, u16)> = std::collections::BTreeSet::new();
     for n in &nodes {
         let g = &s.groups[n.at];
         let colour = if !lit(n) {
@@ -2229,6 +2237,7 @@ fn cluster_nodes(
                     .set_char(glyph)
                     .set_style(Style::new().fg(colour).bg(t.page));
                 run = Some((run.map_or(x, |r| r.0), x));
+                filled.insert((x, y));
             }
             if let Some((a, b)) = run {
                 runs.push((Rect::new(a, y, b - a + 1, 1), n.id));
@@ -2266,27 +2275,36 @@ fn cluster_nodes(
                 i32::from(canvas.right().saturating_sub(width)),
             )
         };
-        let clear = |x: u16, y: u16| {
+        // Clear of the other names, and of every node but on it at last.
+        let clear = |x: u16, y: u16, on_it: bool| {
             taken
                 .iter()
                 .all(|&(tx, ty, tw)| ty != y || x + width <= tx || tx + tw <= x)
+                && (on_it || (x..x + width).all(|x| !filled.contains(&(x, y))))
         };
-        let spot = [
+        let beside = [
             (right, row),
             (left, row),
+            (right, row - 1),
+            (left, row - 1),
+            (right, row + 1),
+            (left, row + 1),
             (within(middle), top),
             (within(middle), bottom),
-            (within(middle), row),
         ]
-        .into_iter()
-        .filter(|&(x, y)| {
-            x >= i32::from(canvas.x)
-                && x + i32::from(width) <= i32::from(canvas.right())
-                && y >= i32::from(canvas.y)
-                && y < i32::from(canvas.bottom())
-        })
-        .map(|(x, y)| (x as u16, y as u16))
-        .find(|&(x, y)| clear(x, y));
+        .map(|at| (at, false));
+        let spot = beside
+            .into_iter()
+            .chain([((within(middle), row), true)])
+            .filter(|&((x, y), _)| {
+                x >= i32::from(canvas.x)
+                    && x + i32::from(width) <= i32::from(canvas.right())
+                    && y >= i32::from(canvas.y)
+                    && y < i32::from(canvas.bottom())
+            })
+            .map(|((x, y), on_it)| (x as u16, y as u16, on_it))
+            .find(|&(x, y, on_it)| clear(x, y, on_it))
+            .map(|(x, y, _)| (x, y));
         let Some((x, y)) = spot else {
             continue;
         };
