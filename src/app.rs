@@ -477,6 +477,8 @@ pub enum Target {
     /// the cluster's number.
     Map,
     Anchor(u32),
+    /// A branch of a cluster's tree, by its row.
+    Branch(usize),
     /// An attachment or link in the list of them, by its place.
     Item(usize),
 }
@@ -2908,6 +2910,10 @@ impl App {
             }
             Some(Target::List | Target::Message(_)) => self.pick(by),
             Some(Target::Reader) => self.scroll_by(3 * by),
+            // The wheel on a cluster's tree goes along it.
+            Some(Target::Map | Target::Branch(_)) if self.map.tree.is_some() => {
+                self.map_step(0, by.signum() as i32)
+            }
             // The wheel on the map zooms, about where it is.
             Some(Target::Map | Target::Anchor(_)) => {
                 let factor = if by < 0 {
@@ -2951,6 +2957,7 @@ impl App {
             }
             Some(Target::List) => self.focus = Focus::List,
             Some(Target::Anchor(id)) => self.anchor_click(id),
+            Some(Target::Branch(row)) => self.branch_click(row),
             Some(Target::Message(i)) => {
                 self.focus = Focus::List;
                 self.list.select(Some(i));
@@ -3777,6 +3784,10 @@ impl App {
                 self.status = "the search let go".to_string();
                 return true;
             }
+            Act::ZoomIn if self.map.tree.is_some() => {
+                self.map.tree_in(jiff::Timestamp::now().as_second());
+                return true;
+            }
             Act::ZoomIn => {
                 self.map.zoom_picked(map::ZOOM_STEP);
                 return true;
@@ -3800,6 +3811,14 @@ impl App {
                 }
                 return true;
             }
+            // In a cluster's tree, ⏎ goes into the branch picked, or, a
+            // message, reads it.
+            Act::Open if self.map.tree.is_some() => {
+                if !self.map.tree_in(jiff::Timestamp::now().as_second()) {
+                    self.read_dot();
+                }
+                return true;
+            }
             Act::NextMessage | Act::PreviousMessage if !self.query.is_empty() => {
                 let by = if act == Act::NextMessage { 1 } else { -1 };
                 let now = jiff::Timestamp::now().as_second();
@@ -3811,6 +3830,10 @@ impl App {
             }
             Act::Back if self.map.suggesting.is_some() && self.map.region.is_none() => {
                 self.map.suggesting = None;
+                return true;
+            }
+            Act::Back if self.map.tree.is_some() && self.map.region.is_none() => {
+                self.map.close_tree();
                 return true;
             }
             _ => {}
@@ -3930,7 +3953,16 @@ impl App {
     /// Move the map's cursor that way, and read what it picks once moving
     /// pauses, where the message read is beside the map.
     fn map_step(&mut self, dx: i32, dy: i32) {
-        if self.map.clusters {
+        let now = jiff::Timestamp::now().as_second();
+        if self.map.tree.is_some() {
+            match dx.signum() {
+                1 => {
+                    self.map.tree_in(now);
+                }
+                -1 => self.map.tree_out(),
+                _ => self.map.tree_along(dy as isize, now),
+            }
+        } else if self.map.clusters {
             self.map.step_node(dx, dy);
         } else {
             self.map.step(dx, dy);
@@ -3969,13 +4001,15 @@ impl App {
     }
 
     /// Open as the mail was last looked at: the map, from as far as its
-    /// clusters if they were shown, else the list.
+    /// clusters if they were shown, else the list. Never looked at, the
+    /// list, and the map, when it is, from its clusters.
     pub fn recall_look(&mut self) {
         let Some(said) = self
             .look_file
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
         else {
+            self.map.clusters = true;
             return;
         };
         let mut words = said.split_whitespace();
@@ -3992,7 +4026,7 @@ impl App {
             return;
         };
         let look = match self.map.mode {
-            Mode::Map if self.map.clusters => "map clusters",
+            Mode::Map if self.map.clusters || self.map.tree.is_some() => "map clusters",
             Mode::Map => "map",
             Mode::List => "list",
         };
@@ -4824,6 +4858,8 @@ impl App {
         let (Some(s), Some(at)) = (self.map.snapshot.clone(), self.map.preview.take()) else {
             return;
         };
+        // Laid out again, the clusters' nodes are put where they now are.
+        self.map.pins.clear();
         let layout = s
             .model
             .keys
@@ -4846,6 +4882,30 @@ impl App {
     }
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
+    /// A click on a branch of a cluster's tree picks it; on the one
+    /// picked, goes into it, or reads it; on the cluster, goes back to
+    /// the clusters.
+    fn branch_click(&mut self, row: usize) {
+        self.focus = Focus::List;
+        let Some(path) = self.map.branches.get(row).cloned() else {
+            return;
+        };
+        // The cluster itself: back to the clusters.
+        if path.is_empty() {
+            return self.map.close_tree();
+        }
+        let now = jiff::Timestamp::now().as_second();
+        let picked = self.map.tree_picked(now).map(|(_, p)| p);
+        if picked.as_ref() == Some(&path) {
+            self.map_act(Act::Open);
+        } else {
+            self.map.pick_branch(&path, now);
+            if self.side_by_side {
+                self.due = Some((Instant::now(), Due::Message));
+            }
+        }
+    }
+
     fn anchor_click(&mut self, id: u32) {
         self.focus = Focus::List;
         if self.map.moving.is_some() {

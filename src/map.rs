@@ -4,6 +4,7 @@
 //! the screen's thread and made again as the index changes: clusters
 //! follow each change, and the layout moves only when asked to.
 
+use crate::forest::{self, Branch};
 use crate::index::labels::System;
 use crate::index::record::Place;
 use crate::index::{Index, Key, Lens, Record};
@@ -684,6 +685,29 @@ pub struct Map {
     /// The nodes drawn, while it is: their group's number, their middle,
     /// across and down in cells, and their radius, in columns.
     pub nodes: Vec<(u32, [f32; 2], f32)>,
+    /// Where each node was first put, as shares of the map across and down,
+    /// by the lens and its group's number: it stays there.
+    pub pins: BTreeMap<(Lens, u32), [f32; 2]>,
+    /// A cluster opened from its node, shown as its tree.
+    pub tree: Option<Tree>,
+    /// The centres each cluster's parts were split by, and how many it
+    /// held then, by its number: its parts hold while it holds about as
+    /// many.
+    pub parts: BTreeMap<u32, (usize, Vec<Vector>)>,
+    /// The way to each branch of the tree drawn, by its row.
+    pub branches: Vec<Vec<usize>>,
+}
+
+/// A cluster looked at as its tree.
+#[derive(Clone, Debug)]
+pub struct Tree {
+    pub id: u32,
+    /// How far down the branch picked is: one for a part of the cluster.
+    pub depth: usize,
+    /// The first row of it drawn.
+    pub top: usize,
+    /// It as last grown, of which snapshot and how many messages shown.
+    grown: Option<(usize, usize, Arc<Branch>)>,
 }
 
 /// How near the map is looked at: how many times nearer than all of it,
@@ -752,6 +776,13 @@ impl Map {
     /// Look nearer by `factor`, or farther, below one, keeping the point
     /// `fixed` of the map, as shares, where it is on the screen.
     fn zoom_by(&mut self, factor: f32, fixed: [f32; 2]) {
+        // Farther than a cluster's tree, the clusters.
+        if self.tree.is_some() {
+            if factor < 1.0 {
+                self.close_tree();
+            }
+            return;
+        }
         // Farther than all of it, the clusters; nearer from them, all of it.
         if self.clusters {
             self.clusters = factor < 1.0;
@@ -781,45 +812,144 @@ impl Map {
     pub fn zoom_all(&mut self) {
         self.zoom = None;
         self.clusters = false;
+        self.tree = None;
     }
 
-    /// Open the cluster `id` from its node: the map narrowed to it, its
-    /// message nearest its middle picked, and looked at near enough to
-    /// have all of its largest part in sight.
+    /// Open the cluster `id` from its node, as its tree, its newest
+    /// message picked, and the part it is in.
     pub fn open_node(&mut self, id: u32) {
         let Some(s) = self.snapshot.clone() else {
             return;
         };
-        let Some(at) = s.groups.iter().position(|g| g.id == id) else {
+        let Some(g) = s.group(id) else {
             return;
         };
         self.clusters = false;
+        self.zoom = None;
         self.focused = Focused::Cluster(id);
-        self.cursor = s.central(at).map(|i| s.dots[i].key.clone());
-        let (Some(v), Some(places)) = (self.view, s.at.as_ref()) else {
-            return;
-        };
-        let shares: Vec<[f32; 2]> = s.groups[at]
-            .core
-            .iter()
-            .filter_map(|&i| places.get(i).map(|&p| v.share(p)))
-            .collect();
-        let span = |a: usize| {
-            let lo = shares.iter().map(|p| p[a]).fold(f32::MAX, f32::min);
-            let hi = shares.iter().map(|p| p[a]).fold(f32::MIN, f32::max);
-            (lo, hi)
-        };
-        if shares.is_empty() {
-            return;
-        }
-        let ((x0, x1), (y0, y1)) = (span(0), span(1));
-        // A fifth again round it, so that its edge is not the screen's.
-        let wide = (x1 - x0).max(y1 - y0).max(1.0 / NEAREST) * 1.2;
-        let scale = (1.0 / wide).clamp(1.0, NEAREST);
-        self.zoom = (scale > 1.0).then(|| Zoom {
-            scale,
-            centre: kept_in([(x0 + x1) / 2.0, (y0 + y1) / 2.0], scale),
+        self.tree = Some(Tree {
+            id,
+            depth: 1,
+            top: 0,
+            grown: None,
         });
+        let newest = g.members.iter().copied().max_by_key(|&i| {
+            let d = &s.dots[i];
+            (d.date.unwrap_or(d.arrived), i)
+        });
+        self.cursor = newest.map(|i| s.dots[i].key.clone());
+    }
+
+    /// Back from a cluster's tree to the clusters, its node among them.
+    pub fn close_tree(&mut self) {
+        self.tree = None;
+        self.clusters = true;
+        self.focused = Focused::All;
+    }
+
+    /// The tree of the cluster opened, grown again only when the snapshot
+    /// or what of it is shown has changed; its parts as they were while
+    /// it holds about as many.
+    pub fn grown(&mut self, now: i64) -> Option<Arc<Branch>> {
+        let s = self.snapshot.clone()?;
+        let shown = self.shown(now);
+        let of = Arc::as_ptr(&s) as usize;
+        let id = self.tree.as_ref()?.id;
+        if let Some((o, n, b)) = &self.tree.as_ref()?.grown
+            && *o == of
+            && *n == shown.len()
+        {
+            return Some(b.clone());
+        }
+        let held = s
+            .group(id)?
+            .members
+            .iter()
+            .filter(|i| shown.binary_search(i).is_ok())
+            .count();
+        let kept: Option<Vec<Vector>> = self
+            .parts
+            .get(&id)
+            .filter(|(then, _)| {
+                let (then, held) = (*then as f32, held as f32);
+                held >= then * 0.8 && held <= then * 1.25
+            })
+            .map(|(_, c)| c.clone());
+        let (branch, centres) = forest::grow(&s, id, &shown, kept.as_deref())?;
+        if kept.is_none() {
+            self.parts.insert(id, (held, centres));
+        }
+        let branch = Arc::new(branch);
+        self.tree.as_mut()?.grown = Some((of, shown.len(), branch.clone()));
+        Some(branch)
+    }
+
+    /// The tree, and the way to the branch picked in it: the one the
+    /// message picked is under, as far down as it is looked at. The newest
+    /// message is picked if none of it is.
+    pub fn tree_picked(&mut self, now: i64) -> Option<(Arc<Branch>, Vec<usize>)> {
+        let root = self.grown(now)?;
+        let path = match self.picked().and_then(|i| root.path_to(i)) {
+            Some(path) => path,
+            None => {
+                let i = root.newest()?;
+                self.cursor = Some(self.snapshot.as_ref()?.dots[i].key.clone());
+                root.path_to(i)?
+            }
+        };
+        let t = self.tree.as_mut()?;
+        t.depth = t.depth.clamp(1, path.len().max(1));
+        Some((root.clone(), path[..t.depth.min(path.len())].to_vec()))
+    }
+
+    /// Pick the branch `by` after the one picked, as far down, or before:
+    /// the newest message under it.
+    pub fn tree_along(&mut self, by: isize, now: i64) {
+        let Some((root, path)) = self.tree_picked(now) else {
+            return;
+        };
+        let all = root.at_depth(path.len());
+        let at = all.iter().position(|p| *p == path).unwrap_or(0);
+        let next = (at as isize + by).clamp(0, all.len() as isize - 1) as usize;
+        if let Some(i) = all.get(next).and_then(|p| root.at(p)?.newest()) {
+            self.cursor = self.snapshot.as_ref().map(|s| s.dots[i].key.clone());
+        }
+    }
+
+    /// Go into the branch picked, to the one under it the message picked
+    /// is under; whether there was one to go into.
+    pub fn tree_in(&mut self, now: i64) -> bool {
+        let Some((root, path)) = self.tree_picked(now) else {
+            return false;
+        };
+        let inner = root.at(&path).is_some_and(|b| !b.is_leaf());
+        if let Some(t) = self.tree.as_mut().filter(|_| inner) {
+            t.depth = path.len() + 1;
+        }
+        inner
+    }
+
+    /// Go out of the branch picked to the one it is under; out of the
+    /// cluster's parts, back to the clusters.
+    pub fn tree_out(&mut self) {
+        match &mut self.tree {
+            Some(t) if t.depth > 1 => t.depth -= 1,
+            _ => self.close_tree(),
+        }
+    }
+
+    /// Pick the branch the way `path` goes to: the newest message under it.
+    pub fn pick_branch(&mut self, path: &[usize], now: i64) {
+        let Some(root) = self.grown(now) else {
+            return;
+        };
+        let Some(i) = root.at(path).and_then(Branch::newest) else {
+            return;
+        };
+        self.cursor = self.snapshot.as_ref().map(|s| s.dots[i].key.clone());
+        if let Some(t) = &mut self.tree {
+            t.depth = path.len().max(1);
+        }
     }
 
     /// Pick the node nearest that way, `dx` across and `dy` down, from the
@@ -1132,6 +1262,10 @@ impl Map {
         self.focused = Focused::Cluster(s.groups[next].id);
         if let Some(i) = s.central(next) {
             self.cursor = Some(s.dots[i].key.clone());
+        }
+        // Looked at as a tree, the next cluster's tree.
+        if self.tree.is_some() {
+            self.open_node(s.groups[next].id);
         }
     }
 }

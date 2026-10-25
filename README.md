@@ -134,7 +134,7 @@ letterbox search grant report --account Work
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
-| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds. The wheel zooms too |
+| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
@@ -236,10 +236,19 @@ what is seen follows the message picked as it moves. `Z` from all of it
 shows its clusters: each one round node, its area growing with the
 square root of how many messages it holds, so that small ones are seen
 beside a big one, bright where any is unread, with its name and how
-many beside it. The arrows go from node to node, and `⏎` or a click
-opens one, the map narrowed to it and near enough to see all of it; `z`
-goes back to all of the map. letterbox opens as you left it: the list
-or the map, and its clusters if they were shown. `/` searches it as you type: the messages
+many beside it. A node stays where it was first put, until the map is
+laid out again. The arrows go from node to node, and `⏎` or a click
+opens one as a tree, drawn from the left: the cluster, its parts by what
+they are about, the threads of each by their subject, and their
+messages, oldest first, so that new mail comes at the end and nothing
+else moves. Only the branch picked and those it is under are open; the
+rest are closed, as big as how many they hold. `j` and `k` go along a
+level, `l` or `⏎` into the branch picked, `h` out of it, and `⏎` on a
+message reads it; `esc`, or `h` from the parts, goes back to the
+clusters, and `[` `]` to the next cluster's tree. `z` from the clusters
+goes back to all of the map, its dots. The map opens at its clusters;
+after that, letterbox opens as you left it: the list or the map, and
+its clusters if they were shown. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.

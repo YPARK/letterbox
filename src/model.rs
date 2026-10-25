@@ -1174,9 +1174,70 @@ pub fn cluster(model: &Model, before: &[(u32, Vector, Vec<Key>)], seed: u64) -> 
     }
 }
 
+/// A cluster's parts: its `members`, by their place in the model, split
+/// by angle into about the root of a quarter of how many they are, at most
+/// eight, none for fewer than twelve. Given the `centres` the parts had,
+/// each member goes to the nearest of them, so that the parts hold from one
+/// look to the next. Each part's members, in turn, and the centres.
+pub fn parts(
+    model: &Model,
+    members: &[usize],
+    centres: Option<&[Vector]>,
+    seed: u64,
+) -> (Vec<Vec<usize>>, Vec<Vector>) {
+    let vectors: Vec<Vector> = members.iter().map(|&i| model.vectors[i]).collect();
+    let k = if members.len() < 12 {
+        1
+    } else {
+        ((members.len() as f64 / 4.0).sqrt().ceil() as usize).clamp(2, 8)
+    };
+    let (of, k) = match centres.filter(|c| !c.is_empty()) {
+        Some(c) => {
+            let near = |v: &Vector| {
+                (0..c.len())
+                    .max_by(|&a, &b| dot(v, &c[a]).total_cmp(&dot(v, &c[b])).then(b.cmp(&a)))
+                    .unwrap_or(0)
+            };
+            (vectors.iter().map(near).collect(), c.len())
+        }
+        None => (kmeans(&vectors, k, Vec::new(), &mut Rng::new(seed)), k),
+    };
+    let mut parts = vec![Vec::new(); k];
+    let mut sums = vec![[0f32; DIM]; k];
+    for (j, &c) in of.iter().enumerate() {
+        parts[c].push(members[j]);
+        sums[c]
+            .iter_mut()
+            .zip(&vectors[j])
+            .for_each(|(s, x)| *s += x);
+    }
+    let centres = match centres.filter(|c| !c.is_empty()) {
+        Some(c) => c.to_vec(),
+        None => sums.into_iter().map(normalised).collect(),
+    };
+    (parts, centres)
+}
+
+/// What a part of a cluster is named by: its two weightiest words, or
+/// senders, not those the cluster is named by.
+pub fn part_words(model: &Model, members: &[usize], without: &[String]) -> Vec<String> {
+    let mut words = ranked_words(model, members);
+    words.retain(|w| !without.contains(w));
+    words.truncate(2);
+    words
+}
+
 /// What a cluster is named by: its three weightiest words, or, read by
 /// the people lens, its three commonest senders.
 fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
+    let mut words = ranked_words(model, members);
+    words.truncate(3);
+    words
+}
+
+/// The words of `members`, the weightiest first, or, read by the people
+/// lens, their senders, the commonest first.
+fn ranked_words(model: &Model, members: &[usize]) -> Vec<String> {
     let mut weight: HashMap<&str, f32> = HashMap::new();
     if model.lens == Lens::People {
         for &i in members {
@@ -1192,7 +1253,7 @@ fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
     let mut all: Vec<(&str, f32)> = weight.into_iter().filter(|(w, _)| !w.is_empty()).collect();
     all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
     all.into_iter()
-        .take(3)
+        .take(8)
         .map(|(w, _)| w.to_string())
         .collect()
 }

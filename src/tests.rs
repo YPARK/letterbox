@@ -5694,19 +5694,14 @@ fn farther_than_all_of_it_each_cluster_is_one_node_the_bigger_the_more_it_holds(
     }
     let other = group(&app);
     assert_ne!(other, first, "on to another node");
-    // ⏎ opens it: narrowed to it, its messages again, all of it in sight.
+    // ⏎ opens it, as its tree.
     press(&mut app, &["<enter>"]);
-    let _ = app::screen(&mut app, 150, 45);
+    let screen = app::screen(&mut app, 150, 45);
     assert!(!app.map.clusters);
+    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
     assert_eq!(app.map.focused, crate::map::Focused::Cluster(other));
-    let core = &s.group(other).unwrap().core;
-    let shown = app.map.shown(jiff::Timestamp::now().as_second());
-    assert!(
-        core.iter()
-            .filter(|i| shown.contains(i))
-            .all(|i| app.map.cells.contains_key(i)),
-        "all of it in sight"
-    );
+    assert!(screen.contains("as a tree"), "{screen}");
+    assert_eq!(group(&app), other, "a message of it picked");
     // 0, all of it; z from its clusters, all of it again.
     press(&mut app, &["0", "Z", "z"]);
     assert!(!app.map.clusters);
@@ -5733,9 +5728,16 @@ fn a_node_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
         .unwrap();
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), r.x, r.y));
     assert!(!app.map.clusters);
-    assert_eq!(app.map.focused, crate::map::Focused::Cluster(id));
+    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(id));
     let p = app.map.picked().unwrap();
     assert!(app.map.snapshot.as_ref().unwrap().picked_by(id, p));
+    // The wheel out of the tree: the clusters again.
+    let _ = app::screen(&mut app, 150, 45);
+    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(app.map.tree.is_some(), "the wheel goes along it");
+    press(&mut app, &["Z"]);
+    assert!(app.map.tree.is_none() && app.map.clusters);
     // Out to the clusters by the wheel, and in again: all of it.
     press(&mut app, &["0"]);
     app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
@@ -5743,6 +5745,143 @@ fn a_node_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
     app.mouse(mouse(MouseEventKind::ScrollUp, x, y));
     assert!(!app.map.clusters);
     assert!(app.map.zoom.is_none());
+}
+
+/// The demo's map, its Grant opened as its tree, drawn.
+fn grant_tree() -> (App, u32) {
+    let mut app = demo_map();
+    press(&mut app, &["Z"]);
+    let id = app
+        .map
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some("Grant"))
+        .unwrap()
+        .id;
+    app.map.open_node(id);
+    let _ = app::screen(&mut app, 150, 45);
+    (app, id)
+}
+
+#[test]
+fn a_cluster_opened_is_a_tree_of_its_parts_threads_and_messages_oldest_first() {
+    let (mut app, id) = grant_tree();
+    let now = jiff::Timestamp::now().as_second();
+    let root = app.map.grown(now).unwrap();
+    let s = app.map.snapshot.clone().unwrap();
+    // Each message of it shown a leaf, once.
+    let mut leaves = Vec::new();
+    fn gather(b: &crate::forest::Branch, out: &mut Vec<usize>) {
+        if b.is_leaf() {
+            out.extend(&b.messages);
+        }
+        for c in &b.branches {
+            gather(c, out);
+        }
+    }
+    gather(&root, &mut leaves);
+    let shown = app.map.shown(now);
+    let mut members: Vec<usize> = s
+        .group(id)
+        .unwrap()
+        .members
+        .iter()
+        .copied()
+        .filter(|i| shown.contains(i))
+        .collect();
+    members.sort();
+    leaves.sort();
+    assert_eq!(leaves, members);
+    // Parts, at least two of seventeen, and in each branch the oldest first,
+    // and the branches by when they began: new mail comes at the end.
+    assert!(root.branches.len() >= 2, "{root:?}");
+    let when = |i: usize| s.dots[i].date.unwrap_or(s.dots[i].arrived);
+    fn check(b: &crate::forest::Branch, when: &dyn Fn(usize) -> i64) {
+        assert!(b.messages.windows(2).all(|w| when(w[0]) <= when(w[1])));
+        let firsts: Vec<i64> = b.branches.iter().map(|c| when(c.messages[0])).collect();
+        assert!(firsts.windows(2).all(|w| w[0] <= w[1]), "{firsts:?}");
+        for c in &b.branches {
+            check(c, when);
+        }
+    }
+    check(&root, &when);
+    // The parts hold, grown again.
+    app.map.tree.as_mut().unwrap().depth = 1;
+    let again = app.map.grown(now).unwrap();
+    assert_eq!(*again, *root);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("Grant as a tree"), "{screen}");
+    assert!(screen.contains("├─") && screen.contains("└─"), "{screen}");
+}
+
+#[test]
+fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
+    let (mut app, _) = grant_tree();
+    let now = jiff::Timestamp::now().as_second();
+    let path = |app: &mut App| app.map.tree_picked(now).unwrap().1;
+    assert_eq!(path(&mut app).len(), 1, "a part picked");
+    // j and k along the parts.
+    press(&mut app, &["k", "k", "k"]);
+    assert_eq!(path(&mut app), vec![0], "the first part");
+    press(&mut app, &["j"]);
+    assert_eq!(path(&mut app), vec![1]);
+    press(&mut app, &["k"]);
+    // l into it, h out of it.
+    press(&mut app, &["l"]);
+    let inside = path(&mut app);
+    assert_eq!(inside.len(), 2);
+    assert_eq!(inside[0], 0);
+    press(&mut app, &["h"]);
+    assert_eq!(path(&mut app), vec![0]);
+    // Down to a message with ⏎, and it is read.
+    for _ in 0..4 {
+        press(&mut app, &["<enter>"]);
+    }
+    let p = app.map.picked().unwrap();
+    let subject = app.map.snapshot.as_ref().unwrap().dots[p].subject.clone();
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains(&subject), "{subject}\n{screen}");
+    // A click on a branch picks it; on it again, goes into it.
+    let _ = app::screen(&mut app, 150, 45);
+    let row = app.map.branches.iter().position(|b| *b == vec![1]).unwrap();
+    click_at(&mut app, app::Target::Branch(row));
+    assert_eq!(path(&mut app), vec![1]);
+    let _ = app::screen(&mut app, 150, 45);
+    let row = app.map.branches.iter().position(|b| *b == vec![1]).unwrap();
+    click_at(&mut app, app::Target::Branch(row));
+    assert_eq!(path(&mut app).len(), 2, "into it");
+    // h out, and out again: the clusters; esc from a tree, too.
+    press(&mut app, &["h", "h"]);
+    assert!(app.map.tree.is_none() && app.map.clusters);
+    press(&mut app, &["<enter>"]);
+    assert!(app.map.tree.is_some());
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.tree.is_none() && app.map.clusters);
+}
+
+#[test]
+fn the_clusters_nodes_stay_where_they_were_put() {
+    let mut app = demo_map();
+    press(&mut app, &["Z"]);
+    let _ = app::screen(&mut app, 150, 45);
+    let before = app.map.nodes.clone();
+    press(&mut app, &["l", "j"]);
+    let _ = app::screen(&mut app, 150, 45);
+    let close = |a: &[(u32, [f32; 2], f32)], b: &[(u32, [f32; 2], f32)]| {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| {
+                x.0 == y.0 && (x.1[0] - y.1[0]).abs() < 0.6 && (x.1[1] - y.1[1]).abs() < 0.6
+            })
+    };
+    assert!(
+        close(&before, &app.map.nodes),
+        "{before:?}\n{:?}",
+        app.map.nodes
+    );
+    assert!(!app.map.pins.is_empty());
 }
 
 #[test]

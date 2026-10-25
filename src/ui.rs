@@ -1662,7 +1662,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         app.map.since.name(),
         shown.len()
     );
-    if app.map.clusters {
+    if let Some(g) = app.map.tree.as_ref().and_then(|tree| s.group(tree.id)) {
+        what = format!(" · {} as a tree{what}", g.name());
+    } else if app.map.clusters {
         what = format!(" · its clusters{what}");
     } else if app.map.scale() > 1.0 {
         what = format!(" · ×{:.1} nearer{what}", app.map.scale());
@@ -1674,6 +1676,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         what.push_str(&format!(", {new} new"));
     }
     match app.map.focused {
+        Focused::Cluster(_) if app.map.tree.is_some() => {}
         Focused::Cluster(id) => {
             if let Some(g) = s.group(id) {
                 what.push_str(&format!(" · in {}", g.name()));
@@ -1683,7 +1686,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Focused::All => {}
     }
     head.push(Span::styled(what, dim));
-    let key = if app.map.clusters {
+    let key = if app.map.tree.is_some() {
+        "   h out  l in  j/k along  ⏎ read  • one  ● a few  ⬤ many"
+    } else if app.map.clusters {
         "   ⬤ the bigger the more it holds, bright with unread  ◆ label  ◇ cluster"
     } else {
         "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster"
@@ -1788,6 +1793,10 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             app.map.cells.insert(i, c);
             app.map.drawn.entry(c).or_default().push(i);
         }
+    }
+    if app.map.tree.is_some() {
+        app.map.drawn.clear();
+        return tree_pane(f, app, &s, canvas, now);
     }
     if app.map.clusters {
         app.map.drawn.clear();
@@ -2065,6 +2074,222 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// A cluster opened as its tree, from the left: the cluster, its parts,
+/// their threads and their messages, each branch a row with its own
+/// branches beside it and down. Open are the branch picked and those it is
+/// under; the rest are closed, as big as how many they hold.
+fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rect, now: i64) {
+    use crate::forest::Branch;
+    let t = app.theme;
+    app.map.branches.clear();
+    let Some((root, picked)) = app.map.tree_picked(now) else {
+        return;
+    };
+    let query = app.query.clone();
+    let found = app.map.hits(&query).map(|h| h.matched.clone());
+    struct Row {
+        path: Vec<usize>,
+        row: usize,
+        open: bool,
+    }
+    // Each closed branch a row of its own, in turn; an open one on the row
+    // of its first.
+    fn lay(
+        b: &Branch,
+        path: Vec<usize>,
+        picked: &[usize],
+        rows: &mut Vec<Row>,
+        next: &mut usize,
+    ) -> usize {
+        let open = !b.is_leaf() && picked.starts_with(&path);
+        let row = if open {
+            let mut first = None;
+            for (k, c) in b.branches.iter().enumerate() {
+                let mut p = path.clone();
+                p.push(k);
+                let r = lay(c, p, picked, rows, next);
+                first.get_or_insert(r);
+            }
+            first.unwrap_or(*next)
+        } else {
+            *next += 1;
+            *next - 1
+        };
+        rows.push(Row { path, row, open });
+        row
+    }
+    let mut rows = Vec::new();
+    let mut count = 0;
+    lay(&root, Vec::new(), &picked, &mut rows, &mut count);
+    let row_of: std::collections::HashMap<Vec<usize>, usize> =
+        rows.iter().map(|r| (r.path.clone(), r.row)).collect();
+    // What is seen moves only to keep the branch picked in sight.
+    let h = usize::from(canvas.height);
+    let at = row_of.get(&picked).copied().unwrap_or(0);
+    let mut top = app.map.tree.as_ref().map_or(0, |t| t.top);
+    if at < top {
+        top = at;
+    } else if at >= top + h {
+        top = at + 1 - h;
+    }
+    top = top.min(count.saturating_sub(h));
+    if let Some(tree) = &mut app.map.tree {
+        tree.top = top;
+    }
+    // What each says: its mark, its name, how many it holds.
+    let said_of = |b: &Branch| {
+        let newest = b.newest().unwrap_or(0);
+        let d = &s.dots[newest];
+        let unread = b
+            .messages
+            .iter()
+            .filter(|&&i| !s.dots[i].flags.seen)
+            .count();
+        let new = b
+            .messages
+            .iter()
+            .filter(|&&i| app.map.is_new(&s.dots[i], now))
+            .count();
+        let hits = found
+            .as_ref()
+            .map(|m| b.messages.iter().filter(|&&i| m[i]).count());
+        let glyph = match b.messages.len() {
+            1 if d.flags.flagged => '⚑',
+            1 if d.mine => '▪',
+            1 if d.system.sent => '▹',
+            1 => '•',
+            2..=4 => '●',
+            _ => '⬤',
+        };
+        let mut said = format!("{glyph} {}", b.name);
+        if !b.is_leaf() {
+            said.push_str(&format!(" {}", b.messages.len()));
+            match hits {
+                Some(n) if n > 0 => said.push_str(&format!(" · {n} found")),
+                _ if new > 0 => said.push_str(&format!(" · {new} new")),
+                _ if unread > 0 => said.push_str(&format!(" · {unread} unread")),
+                _ => {}
+            }
+        } else if let Some(at) = d.date {
+            said.push_str(&format!(" · {}", short_date(at, &Zoned::now())));
+        }
+        (said, newest, unread, hits)
+    };
+    rows.sort_by(|a, b| a.path.cmp(&b.path));
+    let said: Vec<_> = rows
+        .iter()
+        .map(|r| root.at(&r.path).map(&said_of))
+        .collect();
+    // Each level as wide as what its open branch says, to a point, and a
+    // line's room after it.
+    let levels = root.levels();
+    let mut lefts = vec![u32::from(canvas.x) + 1; levels + 1];
+    for d in 0..levels {
+        let widest = rows
+            .iter()
+            .zip(&said)
+            .filter(|(r, _)| r.open && r.path.len() == d)
+            .filter_map(|(_, w)| w.as_ref().map(|w| w.0.width()))
+            .max()
+            .unwrap_or(8)
+            .clamp(8, 30) as u32;
+        lefts[d + 1] = lefts[d] + widest + 4;
+    }
+    let right = canvas.right();
+    let buf = f.buffer_mut();
+    let mut spots: Vec<(Rect, usize)> = Vec::new();
+    for (r, said) in rows.iter().zip(said) {
+        let (Some(b), Some((said, newest, unread, hits))) = (root.at(&r.path), said) else {
+            continue;
+        };
+        if r.row < top || r.row >= top + h {
+            continue;
+        }
+        let y = canvas.y + (r.row - top) as u16;
+        let x = lefts[r.path.len()];
+        if x >= u32::from(right) {
+            continue;
+        }
+        let x = x as u16;
+        let column = (lefts[r.path.len() + 1] - u32::from(x)) as u16;
+        let room = if r.open {
+            column.saturating_sub(3)
+        } else {
+            right.saturating_sub(x)
+        };
+        let said = clip(&said, usize::from(room));
+        let width = said.width() as u16;
+        let mut colour = t.hue(s.hues[newest]);
+        if hits == Some(0) {
+            colour = t.rule;
+        } else if unread == 0 {
+            colour = crate::theme::mix(colour, t.page, 0.4);
+        }
+        let style = if r.path == picked {
+            Style::new().fg(t.title).bg(t.focus).bold()
+        } else if hits == Some(0) {
+            Style::new().fg(t.dim).bg(t.page)
+        } else if picked.starts_with(&r.path) || unread > 0 {
+            Style::new().fg(t.title).bg(t.page).bold()
+        } else {
+            Style::new().fg(t.soft).bg(t.page)
+        };
+        let mut chars = said.chars();
+        if let Some(g) = chars.next() {
+            let glyph_style = if r.path == picked {
+                style
+            } else {
+                Style::new().fg(colour).bg(t.page).bold()
+            };
+            buf[(x, y)].set_char(g).set_style(glyph_style);
+        }
+        buf.set_stringn(x + 1, y, chars.as_str(), usize::from(width), style);
+        spots.push((Rect::new(x, y, width.max(1), 1), app.map.branches.len()));
+        app.map.branches.push(r.path.clone());
+        if !r.open {
+            continue;
+        }
+        // Its branches, beside it and down: a line from it, and one down
+        // to each.
+        let line = Style::new().fg(t.rule).bg(t.page);
+        let down = x + column - 2;
+        if down + 1 >= right {
+            continue;
+        }
+        for x in x + width + 1..down {
+            buf[(x, y)].set_char('─').set_style(line);
+        }
+        let kids: Vec<usize> = (0..b.branches.len())
+            .filter_map(|k| {
+                let mut p = r.path.clone();
+                p.push(k);
+                row_of.get(&p).copied()
+            })
+            .collect();
+        let (first, last) = (r.row, kids.last().copied().unwrap_or(r.row));
+        for row in first..=last {
+            if row < top || row >= top + h {
+                continue;
+            }
+            let y = canvas.y + (row - top) as u16;
+            let (bend, on) = match (row == first, kids.contains(&row), row == last) {
+                (true, _, true) => ('─', true),
+                (true, _, false) => ('┬', true),
+                (false, true, true) => ('└', true),
+                (false, true, false) => ('├', true),
+                (false, false, _) => ('│', false),
+            };
+            buf[(down, y)].set_char(bend).set_style(line);
+            if on {
+                buf[(down + 1, y)].set_char('─').set_style(line);
+            }
+        }
+    }
+    for (spot, row) in spots {
+        app.targets.push((spot, Target::Branch(row)));
+    }
+}
+
 /// The map from farther than all of it: each cluster one round node, its
 /// area growing with the root of how many of its messages are shown, in its hue, bright
 /// with mail unread, its name and how many beside it. Drawn in half cells,
@@ -2091,7 +2316,11 @@ fn cluster_nodes(
         // Across in columns, down in half rows.
         centre: [f32; 2],
         r: f32,
+        // Where it was put before, to stay.
+        pinned: bool,
     }
+    let (x0, x1) = (f32::from(canvas.x), f32::from(canvas.right()));
+    let (y0, y1) = (2.0 * f32::from(canvas.y), 2.0 * f32::from(canvas.bottom()));
     let mut nodes: Vec<Node> = Vec::new();
     for (at, g) in s.groups.iter().enumerate() {
         let members: Vec<usize> = g
@@ -2113,6 +2342,11 @@ fn cluster_nodes(
         let k = core.len().max(1) as f32;
         let x = core.iter().map(|c| c.0 as f32).sum::<f32>() / k + 0.5;
         let y = core.iter().map(|c| c.1 as f32).sum::<f32>() / k + 0.5;
+        let pin = app.map.pins.get(&(s.lens, g.id));
+        let centre = match pin {
+            Some(p) => [x0 + p[0] * (x1 - x0), y0 + p[1] * (y1 - y0)],
+            None => [x, 2.0 * y],
+        };
         nodes.push(Node {
             id: g.id,
             at,
@@ -2125,16 +2359,15 @@ fn cluster_nodes(
             hits: found
                 .as_ref()
                 .map(|m| members.iter().filter(|&&i| m[i]).count()),
-            centre: [x, 2.0 * y],
+            centre,
             r: 0.0,
+            pinned: pin.is_some(),
         });
     }
     // Each one's area as the root of how many it holds, so that one cluster
     // of much does not leave the rest specks; all of them a sixth of the
     // map, the biggest no more than a fifth of its height across, and none
     // smaller than a cell.
-    let (x0, x1) = (f32::from(canvas.x), f32::from(canvas.right()));
-    let (y0, y1) = (2.0 * f32::from(canvas.y), 2.0 * f32::from(canvas.bottom()));
     let most = nodes.iter().map(|n| n.n).max().unwrap_or(1) as f32;
     let share = |n: &Node| (n.n as f32 / most).powf(0.25);
     let areas: f32 = nodes.iter().map(|n| share(n).powi(2)).sum();
@@ -2147,8 +2380,9 @@ fn cluster_nodes(
     for n in &mut nodes {
         n.r = (biggest * share(n)).max(1.0);
     }
-    // Those that overlap pushed apart, the smaller the more, a column clear
-    // between them, and kept on the map.
+    // Those that overlap pushed apart, the smaller the more and those put
+    // before not unless both were, a column clear between them, and kept on
+    // the map.
     for _ in 0..40 {
         let mut moved = false;
         for a in 0..nodes.len() {
@@ -2167,7 +2401,11 @@ fn cluster_nodes(
                     (1.0, 0.0)
                 };
                 let (ra, rb) = (nodes[a].r, nodes[b].r);
-                let (wa, wb) = (rb / (ra + rb), ra / (ra + rb));
+                let (wa, wb) = match (nodes[a].pinned, nodes[b].pinned) {
+                    (true, false) => (0.0, 1.0),
+                    (false, true) => (1.0, 0.0),
+                    _ => (rb / (ra + rb), ra / (ra + rb)),
+                };
                 let gap = need - d;
                 nodes[a].centre = [pa[0] - ux * gap * wa, pa[1] - uy * gap * wa];
                 nodes[b].centre = [pb[0] + ux * gap * wb, pb[1] + uy * gap * wb];
@@ -2188,6 +2426,13 @@ fn cluster_nodes(
         }
     }
     let picked = app.map.picked().and_then(|i| s.group_of(i)).map(|g| g.id);
+    for n in &nodes {
+        let share = [
+            (n.centre[0] - x0) / (x1 - x0).max(1.0),
+            (n.centre[1] - y0) / (y1 - y0).max(1.0),
+        ];
+        app.map.pins.insert((s.lens, n.id), share);
+    }
     app.map.nodes = nodes
         .iter()
         .map(|n| (n.id, [n.centre[0], n.centre[1] / 2.0], n.r))
