@@ -1270,6 +1270,12 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .filter_map(|&i| s.clustering.of.get(i).copied())
         .collect();
     let ground = t.ground();
+    let marked: std::collections::BTreeSet<usize> = app
+        .map
+        .region
+        .iter()
+        .flat_map(|r| r.keys.iter().filter_map(|k| s.find(k)))
+        .collect();
     let buf = f.buffer_mut();
     for (&(x, y), members) in &app.map.drawn {
         let first = picked.filter(|p| members.contains(p)).unwrap_or(members[0]);
@@ -1317,10 +1323,68 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::new().fg(colour).bg(t.page)
         };
+        if !new_here && members.iter().any(|i| marked.contains(i)) {
+            style = style.bg(t.row);
+        }
         if picked.is_some_and(|p| members.contains(&p)) {
             style = Style::new().fg(t.title).bg(t.focus).bold();
         }
         buf[(x, y)].set_char(glyph).set_style(style);
+    }
+    // A box being drawn, or what is marked, drawn round.
+    let corners = |(a, b): ((u16, u16), (u16, u16))| {
+        ((a.0.min(b.0), a.1.min(b.1)), (a.0.max(b.0), a.1.max(b.1)))
+    };
+    let round = app
+        .map
+        .drag
+        .filter(|(a, b)| a != b)
+        .map(corners)
+        .or_else(|| app.map.region.as_ref().and_then(|r| r.boxed))
+        .or_else(|| {
+            let cells: Vec<(u16, u16)> = marked
+                .iter()
+                .filter_map(|i| app.map.cells.get(i).copied())
+                .collect();
+            let x0 = cells.iter().map(|c| c.0).min()?;
+            let x1 = cells.iter().map(|c| c.0).max()?;
+            let y0 = cells.iter().map(|c| c.1).min()?;
+            let y1 = cells.iter().map(|c| c.1).max()?;
+            Some((
+                (
+                    x0.saturating_sub(1).max(canvas.x),
+                    y0.saturating_sub(1).max(canvas.y),
+                ),
+                (
+                    (x1 + 1).min(canvas.right() - 1),
+                    (y1 + 1).min(canvas.bottom() - 1),
+                ),
+            ))
+        });
+    if let Some(((x0, y0), (x1, y1))) = round {
+        let edge = Style::new().fg(t.accent).bg(t.page);
+        let inside = |x: u16, y: u16| {
+            x >= canvas.x && x < canvas.right() && y >= canvas.y && y < canvas.bottom()
+        };
+        for x in x0..=x1 {
+            for (y, glyph) in [(y0, '─'), (y1, '─')] {
+                if inside(x, y) && !app.map.drawn.contains_key(&(x, y)) {
+                    buf[(x, y)].set_char(glyph).set_style(edge);
+                }
+            }
+        }
+        for y in y0..=y1 {
+            for x in [x0, x1] {
+                if inside(x, y) && !app.map.drawn.contains_key(&(x, y)) {
+                    buf[(x, y)].set_char('│').set_style(edge);
+                }
+            }
+        }
+        for (x, y, glyph) in [(x0, y0, '┌'), (x1, y0, '┐'), (x0, y1, '└'), (x1, y1, '┘')] {
+            if inside(x, y) {
+                buf[(x, y)].set_char(glyph).set_style(edge);
+            }
+        }
     }
     // Each cluster's anchor, at the middle of what of it is drawn: a label's
     // in its hue, one not yet a label tinted, with its words.

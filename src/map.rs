@@ -385,6 +385,19 @@ pub struct Map {
     pub anchors: Vec<(u16, u16, u16, u32)>,
     /// The cell last clicked, and which of its messages it picked.
     pub clicked: Option<((u16, u16), usize)>,
+    /// What is marked, to act on all of it.
+    pub region: Option<Region>,
+    /// A box being drawn with the mouse: where it was begun, and where the
+    /// mouse is now.
+    pub drag: Option<((u16, u16), (u16, u16))>,
+}
+
+/// What is marked on the map: the messages of a cluster, or those in a
+/// box drawn, and the box, by its corners, if it was drawn.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Region {
+    pub keys: Vec<Key>,
+    pub boxed: Option<((u16, u16), (u16, u16))>,
 }
 
 impl Map {

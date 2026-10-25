@@ -742,6 +742,15 @@ impl Store for Imap {
         })
     }
 
+    fn archive(&mut self, folder: &str, uid: u32, message_id: &str) -> anyhow::Result<()> {
+        if self.kind()? == Kind::Gmail {
+            // On Gmail, out of the Inbox is without its label: All Mail
+            // has it still.
+            return self.store_flags(folder, uid, "-X-GM-LABELS.SILENT (\\Inbox)");
+        }
+        crate::store::to_archive(self, folder, uid, message_id)
+    }
+
     fn rename_label(&mut self, old: &str, new: &str) -> anyhow::Result<()> {
         let kind = self.kind()?;
         let folders = self.folders()?;

@@ -4631,6 +4631,14 @@ fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
 
 // ---- the map, on the screen ----
 
+/// A click on the map at `x`, `y`: pressed and let go in the same cell.
+fn map_click(app: &mut App, x: u16, y: u16) {
+    let _ = app::screen(app, 120, 40);
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    app.settle(Duration::from_secs(5));
+}
+
 /// The demo, its map shown.
 fn demo_map() -> App {
     let mut app = demo();
@@ -4810,13 +4818,10 @@ fn a_click_on_the_map_picks_and_a_click_on_an_anchor_narrows() {
         .or_else(|| app.map.drawn.iter().next())
         .map(|(c, m)| (c, m.clone()))
         .unwrap();
-    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
-    app.settle(Duration::from_secs(5));
+    map_click(&mut app, x, y);
     assert_eq!(app.map.picked(), Some(members[0]));
     if members.len() > 1 {
-        let _ = app::screen(&mut app, 120, 40);
-        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
-        app.settle(Duration::from_secs(5));
+        map_click(&mut app, x, y);
         assert_eq!(app.map.picked(), Some(members[1]));
     }
     let _ = app::screen(&mut app, 120, 40);
@@ -4890,4 +4895,141 @@ fn the_map_says_why_it_is_not_there() {
         app.status
     );
     assert_eq!(app.map.mode, crate::map::Mode::List);
+}
+
+// ---- regions of the map ----
+
+/// The messages of the demo's map, by subject, and whether each is read.
+fn map_seen(app: &App) -> std::collections::BTreeMap<String, bool> {
+    let s = app.map.snapshot.as_ref().unwrap();
+    s.dots
+        .iter()
+        .map(|d| (d.subject.clone(), d.flags.seen))
+        .collect()
+}
+
+#[test]
+fn v_marks_the_cluster_and_u_marks_it_all_read() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    // The cluster of the Grant's mail, with unread mail in it.
+    let picked = s
+        .dots
+        .iter()
+        .position(|d| d.subject.starts_with("R01"))
+        .unwrap();
+    app.map.cursor = Some(s.dots[picked].key.clone());
+    press(&mut app, &["v"]);
+    let region = app.map.region.clone().expect("marked");
+    let cluster = s.group_of(picked).unwrap();
+    assert_eq!(region.keys.len(), cluster.members.len());
+    assert!(app.status.contains("marked"), "{}", app.status);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains('┌') && screen.contains('│'), "{screen}");
+    press(&mut app, &["u"]);
+    let seen = map_seen(&app);
+    for &i in &cluster.members {
+        assert!(seen[&s.dots[i].subject], "{} read", s.dots[i].subject);
+    }
+    // On the server too.
+    let r01 = app
+        .shown
+        .iter()
+        .find(|m| m.subject.starts_with("R01"))
+        .unwrap();
+    assert!(r01.flags.seen);
+    press(&mut app, &["u"]);
+    assert!(
+        !map_seen(&app)[&s.dots[picked].subject],
+        "and all unread again"
+    );
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_none());
+}
+
+#[test]
+fn a_box_dragged_on_the_map_marks_what_is_in_it() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 120, 40);
+    let (&first, _) = app.map.drawn.iter().next().unwrap();
+    let (&last, _) = app.map.drawn.iter().next_back().unwrap();
+    let ((x0, y0), (x1, y1)) = (first, last);
+    let (left, right) = (x0.min(x1), x0.max(x1));
+    let (top, bottom) = (y0.min(y1), y0.max(y1));
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), left, top));
+    app.mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        right,
+        bottom,
+    ));
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains('┌'), "drawn as it goes: {screen}");
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), right, bottom));
+    let inside = app
+        .map
+        .cells
+        .values()
+        .filter(|&&(x, y)| (left..=right).contains(&x) && (top..=bottom).contains(&y))
+        .count();
+    let region = app.map.region.clone().expect("marked");
+    assert_eq!(region.keys.len(), inside);
+    assert!(inside >= 2);
+}
+
+#[test]
+fn what_is_marked_is_trashed_or_archived_at_once() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    let builds: Vec<crate::index::Key> = s
+        .dots
+        .iter()
+        .filter(|d| d.address == "ci@runner.example")
+        .map(|d| d.key.clone())
+        .collect();
+    assert_eq!(builds.len(), 3);
+    app.map.region = Some(crate::map::Region {
+        keys: builds,
+        boxed: None,
+    });
+    press(&mut app, &["d"]);
+    assert!(app.map.region.is_none());
+    let s = app.map.snapshot.clone().unwrap();
+    assert!(
+        s.dots
+            .iter()
+            .filter(|d| d.address == "ci@runner.example")
+            .all(|d| !d.system.inbox),
+        "{}",
+        app.status
+    );
+    // Archived: out of the Inbox, into Archive.
+    let hotel: Vec<crate::index::Key> = s
+        .dots
+        .iter()
+        .filter(|d| d.address == "stay@hotel.example" || d.address == "travel@uni.example")
+        .map(|d| d.key.clone())
+        .collect();
+    app.map.region = Some(crate::map::Region {
+        keys: hotel,
+        boxed: None,
+    });
+    press(&mut app, &["a"]);
+    let s = app.map.snapshot.clone().unwrap();
+    for d in s
+        .dots
+        .iter()
+        .filter(|d| d.address == "stay@hotel.example" || d.address == "travel@uni.example")
+    {
+        assert!(!d.system.inbox, "{}", d.subject);
+        assert!(
+            d.places.iter().any(|p| p.folder == "Archive"),
+            "{}",
+            d.subject
+        );
+    }
+    // A click, pressed and let go in one cell, is no box.
+    let _ = app::screen(&mut app, 120, 40);
+    let (&(x, y), _) = app.map.drawn.iter().next().unwrap();
+    map_click(&mut app, x, y);
+    assert!(app.map.region.is_none());
 }

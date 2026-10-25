@@ -60,6 +60,8 @@ pub enum Act {
     Colours,
     /// The areas with nothing new dimmed, or not.
     NewOnly,
+    /// The cluster of the message picked marked, or let go.
+    Mark,
 }
 
 /// Where the foot's hints are for.
@@ -233,8 +235,8 @@ pub const KEYS: &[Binding] = &[
         keys: &[("a", SaveFiles)],
         name: "a",
         hint: "a",
-        foot: &[(Reader, "save files")],
-        help: "save its attachments to Downloads",
+        foot: &[(Reader, "save files"), (Map, "archive")],
+        help: "save its attachments to Downloads; in the map, take it, or what is marked, out of the Inbox",
     },
     Binding {
         keys: &[("esc", Back)],
@@ -320,6 +322,13 @@ pub const KEYS: &[Binding] = &[
         hint: "r",
         foot: &[(Map, "read")],
         help: "in the map, show or hide read mail; elsewhere, say which keys reply",
+    },
+    Binding {
+        keys: &[("v", Mark)],
+        name: "v",
+        hint: "v",
+        foot: &[(Map, "mark")],
+        help: "in the map, mark the cluster of the message picked, or drag a box over some; m, d, a, u and s then act on all of it, and v again lets it go",
     },
     Binding {
         keys: &[("!", NewOnly)],

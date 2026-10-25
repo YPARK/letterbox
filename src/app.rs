@@ -799,7 +799,11 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
             );
             match event {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
-                Event::Mouse(m) => app.mouse(m),
+                Event::Mouse(m) => {
+                    app.mouse(m);
+                    // A box being drawn on the map is drawn as it goes.
+                    stale |= matches!(m.kind, MouseEventKind::Drag(_)) && app.map.drag.is_some();
+                }
                 _ => {}
             }
         }
@@ -1183,6 +1187,13 @@ impl App {
             | Answer::Mapping(_)
             | Answer::Drawn(_)
             | Answer::Realm { .. } => {}
+            Answer::Archived(result) => match result {
+                Ok(()) => {
+                    self.reload(a);
+                    self.map_pass(a);
+                }
+                Err(e) => self.status = format!("cannot archive it: {}", first_line(&e)),
+            },
             Answer::Mapped(passed) => {
                 self.mapping = match passed {
                     Ok(_) => String::new(),
@@ -2346,6 +2357,7 @@ impl App {
                     "read mail shown".to_string()
                 };
             }
+            Act::Mark => self.mark_cluster(),
             Act::MapView => self.show_map(),
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
@@ -2650,10 +2662,12 @@ impl App {
         let by = match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if at == Some(Target::Map) && !self.dialog.is_open() {
-                    return self.map_click(m.column, m.row);
+                    return self.map_press(m.column, m.row);
                 }
                 return self.click(at);
             }
+            MouseEventKind::Drag(MouseButton::Left) => return self.map_drag(m.column, m.row),
+            MouseEventKind::Up(MouseButton::Left) => return self.map_release(m.column, m.row),
             MouseEventKind::ScrollDown => 1,
             MouseEventKind::ScrollUp => -1,
             _ => return,
@@ -3329,6 +3343,20 @@ impl App {
     /// Do what a key does in the map, with the focus on it; whether it
     /// was the map's to do.
     fn map_act(&mut self, act: Act) -> bool {
+        if self.map.region.is_some() {
+            match act {
+                Act::Seen => return self.region_flag(Flag::Seen),
+                Act::Flag => return self.region_flag(Flag::Flagged),
+                Act::Trash => return self.region_trash(),
+                Act::SaveFiles => return self.region_archive(),
+                Act::Back => {
+                    self.map.region = None;
+                    self.status = "let go".to_string();
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match act {
             Act::Down => self.map_step(0, 1),
             Act::Up => self.map_step(0, -1),
@@ -3338,6 +3366,12 @@ impl App {
             Act::Seen => self.dot_flag(Flag::Seen),
             Act::Flag => self.dot_flag(Flag::Flagged),
             Act::Trash => self.delete_dot(),
+            Act::SaveFiles => {
+                if let Some(dot) = self.dot() {
+                    self.mark(vec![dot.key], None);
+                    self.region_archive();
+                }
+            }
             Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,
             Act::Back
             | Act::Top
@@ -3634,6 +3668,180 @@ impl App {
         if self.side_by_side {
             self.read_dot();
         }
+    }
+
+    /// Mark the cluster of the message picked on the map; or, marked, let
+    /// what is marked go.
+    fn mark_cluster(&mut self) {
+        if self.map.mode != Mode::Map {
+            return;
+        }
+        if self.map.region.take().is_some() {
+            self.status = "let go".to_string();
+            return;
+        }
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let Some(g) = self.map.picked().and_then(|i| s.group_of(i)) else {
+            self.status = "no message picked: the arrows or hjkl pick one".to_string();
+            return;
+        };
+        let keys = g.members.iter().map(|&i| s.dots[i].key.clone()).collect();
+        self.mark(keys, None);
+    }
+
+    /// Mark the messages `keys`, in the box `boxed` if they were drawn
+    /// round, and say what is done with them.
+    fn mark(&mut self, keys: Vec<crate::index::Key>, boxed: Option<((u16, u16), (u16, u16))>) {
+        if keys.is_empty() {
+            self.map.region = None;
+            self.status = "nothing marked: the box holds no message".to_string();
+            return;
+        }
+        self.status = format!(
+            "{} marked: d trashes them, a archives them, u and s mark them, v lets them go",
+            keys.len()
+        );
+        self.map.region = Some(map::Region { keys, boxed });
+    }
+
+    /// The messages marked on the map.
+    fn region_dots(&self) -> Vec<map::Dot> {
+        let (Some(s), Some(r)) = (&self.map.snapshot, &self.map.region) else {
+            return Vec::new();
+        };
+        r.keys
+            .iter()
+            .filter_map(|k| s.find(k).map(|i| s.dots[i].clone()))
+            .collect()
+    }
+
+    /// Mark every message marked on the map as `flag` says: all of them,
+    /// unless all of them are, and then none.
+    fn region_flag(&mut self, flag: Flag) -> bool {
+        let dots = self.region_dots();
+        let has = |d: &map::Dot| match flag {
+            Flag::Seen => d.flags.seen,
+            Flag::Flagged => d.flags.flagged,
+            Flag::Answered => d.flags.answered,
+        };
+        let on = !dots.iter().all(has);
+        for d in &dots {
+            if has(d) == on {
+                continue;
+            }
+            let Some((a, folder, uid)) = self.place_of(d) else {
+                continue;
+            };
+            self.marked(a, &folder, uid, flag, on);
+            self.ask(
+                a,
+                Ask::Set {
+                    folder,
+                    uid,
+                    flag,
+                    on,
+                },
+            );
+        }
+        let what = match (flag, on) {
+            (Flag::Seen, true) => "read",
+            (Flag::Seen, false) => "unread",
+            (Flag::Flagged, true) => "flagged",
+            (Flag::Flagged, false) => "unflagged",
+            (Flag::Answered, _) => "answered",
+        };
+        self.status = format!("{} marked {what}", dots.len());
+        true
+    }
+
+    /// Move every message marked on the map to its account's Trash.
+    fn region_trash(&mut self) -> bool {
+        let dots = self.region_dots();
+        let mut moved = 0;
+        for d in &dots {
+            let Some(listed) = self.listed_dot(d) else {
+                continue;
+            };
+            let Some(trash) = self.trash_of(listed.account) else {
+                continue;
+            };
+            let s = listed.summary;
+            self.move_to_trash(listed.account, listed.folder, s.uid, s.message_id, trash);
+            moved += 1;
+        }
+        self.map.region = None;
+        self.status = if moved < dots.len() {
+            format!(
+                "{moved} of {} moved to Trash: d on one alone says which folder is Trash",
+                dots.len()
+            )
+        } else {
+            format!("{moved} moved to Trash · d there puts one back, for 7 days")
+        };
+        true
+    }
+
+    /// Take every message marked on the map that is in the Inbox out of it,
+    /// given no label.
+    fn region_archive(&mut self) -> bool {
+        let dots = self.region_dots();
+        let mut archived = 0;
+        for d in dots.iter().filter(|d| d.system.inbox) {
+            let Some((a, folder, uid)) = self.place_of(d) else {
+                continue;
+            };
+            self.ask(
+                a,
+                Ask::Archive {
+                    folder,
+                    uid,
+                    message_id: d.message_id.clone(),
+                },
+            );
+            archived += 1;
+        }
+        self.map.region = None;
+        self.status = format!("{archived} archived, out of the Inbox");
+        true
+    }
+
+    /// The mouse pressed on the map, at `column`, `row`: a box begun.
+    fn map_press(&mut self, column: u16, row: u16) {
+        self.map.drag = Some(((column, row), (column, row)));
+    }
+
+    /// The mouse moved, pressed, to `column`, `row`: the box drawn so far.
+    fn map_drag(&mut self, column: u16, row: u16) {
+        if let Some((start, _)) = self.map.drag {
+            self.map.drag = Some((start, (column, row)));
+        }
+    }
+
+    /// The mouse let go at `column`, `row`: where it was pressed, a click;
+    /// else what is in the box drawn, marked.
+    fn map_release(&mut self, column: u16, row: u16) {
+        let Some((start, _)) = self.map.drag.take() else {
+            return;
+        };
+        if start == (column, row) {
+            return self.map_click(column, row);
+        }
+        let (x0, x1) = (start.0.min(column), start.0.max(column));
+        let (y0, y1) = (start.1.min(row), start.1.max(row));
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let keys = self
+            .map
+            .cells
+            .iter()
+            .filter(|&(_, &(x, y))| (x0..=x1).contains(&x) && (y0..=y1).contains(&y))
+            .map(|(&i, _)| s.dots[i].key.clone())
+            .collect();
+        self.focus = Focus::List;
+        self.mark(keys, Some(((x0, y0), (x1, y1))));
     }
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.

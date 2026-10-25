@@ -47,6 +47,12 @@ pub enum Ask {
         folder: String,
         uid: u32,
     },
+    /// Take a message out of the Inbox, given no label.
+    Archive {
+        folder: String,
+        uid: u32,
+        message_id: String,
+    },
     /// Send `raw`. `answer` is the message it replies to, marked answered
     /// once the send is taken.
     Send {
@@ -125,6 +131,7 @@ pub enum Answer {
     Mapping(String),
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
+    Archived(Result<(), String>),
     /// The map made again from the index; not a store's answer.
     Drawn(Box<crate::map::Snapshot>),
 }
@@ -209,6 +216,11 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
                 trashed,
             }
         }
+        Ask::Archive {
+            folder,
+            uid,
+            message_id,
+        } => Answer::Archived(store.archive(&folder, uid, &message_id).map_err(text)),
         Ask::Expunge { folder, uid } => Answer::Expunged {
             result: store.expunge(&folder, uid).map_err(text),
             folder,

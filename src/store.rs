@@ -169,6 +169,39 @@ pub trait Store: Send {
     fn rename_label(&mut self, _old: &str, _new: &str) -> anyhow::Result<()> {
         Err(unsupported("rename a label"))
     }
+    /// Take the message `uid` of `folder` out of the Inbox, given no label:
+    /// moved to Archive, made if there is none.
+    fn archive(&mut self, folder: &str, uid: u32, message_id: &str) -> anyhow::Result<()> {
+        to_archive(self, folder, uid, message_id)
+    }
+}
+
+/// Move the message `uid` of `folder` of `store` to Archive, made if it has
+/// none, unless it is there already.
+pub fn to_archive<S: Store + ?Sized>(
+    store: &mut S,
+    folder: &str,
+    uid: u32,
+    message_id: &str,
+) -> anyhow::Result<()> {
+    let archive = store
+        .folders()?
+        .into_iter()
+        .find(|f| f.role == crate::mail::Role::Archive && f.selectable)
+        .map(|f| f.path);
+    let archive = match archive {
+        Some(a) => a,
+        None => {
+            store.create("Archive")?;
+            "Archive".to_string()
+        }
+    };
+    if archive == folder {
+        return Ok(());
+    }
+    store
+        .relocate(folder, uid, &archive, message_id)
+        .map(|_| ())
 }
 
 /// What filing a message did: where it was moved to and its UID there, if

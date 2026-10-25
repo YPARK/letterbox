@@ -127,7 +127,7 @@ letterbox search grant report --account Work
 | `C-f` | forward it, its files with it |
 | `o` | open the message in the browser, as its HTML |
 | `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
-| `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`) |
+| `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`); in the map, take it, or what is marked, out of the Inbox |
 | `C-n`, `C-S-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed |
@@ -140,6 +140,7 @@ letterbox search grant report --account Work
 | `C` | in the map, colour by what it is about, by how near the message picked, or by its state |
 | `r` | in the map, show or hide read mail; elsewhere, say which keys reply |
 | `!` | in the map, dim the areas with nothing new |
+| `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `a`, `u` and `s` then act on all of it, `a` taking it out of the Inbox |
 | `?` | all the keys |
 | `q` | quit |
 
