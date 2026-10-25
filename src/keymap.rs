@@ -53,6 +53,10 @@ pub enum Act {
     ShowSent,
     /// In the map, only the mail not yet filed under a label, or all.
     Unfiled,
+    /// The Inbox, looked through beside the map, shown or closed.
+    Review,
+    /// What was chosen for each message looked through, done.
+    Apply,
     /// The message read made wider, or narrower.
     Wider,
     Narrower,
@@ -103,6 +107,8 @@ pub enum Pane {
     Viewing,
     /// The map, in the middle pane.
     Map,
+    /// The Inbox looked through, beside the map.
+    Review,
 }
 
 pub struct Binding {
@@ -122,7 +128,7 @@ pub struct Binding {
 }
 
 use Act::*;
-use Pane::{Attaching, List, Map, Picking, Reader, Side, Viewing, Writing};
+use Pane::{Attaching, List, Map, Picking, Reader, Review as Reviewing, Side, Viewing, Writing};
 
 /// What the map's view menu changes, by the key that changes it there.
 pub const VIEW: &[(char, Act, &str)] = &[
@@ -147,6 +153,7 @@ pub const KEYS: &[Binding] = &[
             (Picking, "this folder"),
             (Map, "read"),
             (Attaching, "attach"),
+            (Reviewing, "read"),
         ],
         help: "open the folder, or read the message",
     },
@@ -154,7 +161,12 @@ pub const KEYS: &[Binding] = &[
         keys: &[("j", Down), ("down", Down), ("k", Up), ("up", Up)],
         name: "j k",
         hint: "j/k",
-        foot: &[(Side, "move"), (Picking, "move"), (Map, "move")],
+        foot: &[
+            (Side, "move"),
+            (Picking, "move"),
+            (Map, "move"),
+            (Reviewing, "move"),
+        ],
         help: "move; in a message, scroll; in the map, to the nearest message that way, as h and l; the arrows too",
     },
     Binding {
@@ -180,8 +192,8 @@ pub const KEYS: &[Binding] = &[
         ],
         name: "space b",
         hint: "␣",
-        foot: &[(Reader, "page")],
-        help: "a page down, or up, in the message",
+        foot: &[(Reader, "page"), (Reviewing, "keep")],
+        help: "a page down, or up, in the message; in the Inbox looked through, keep it there",
     },
     Binding {
         keys: &[("n", NextMessage), ("p", PreviousMessage)],
@@ -201,7 +213,12 @@ pub const KEYS: &[Binding] = &[
         keys: &[("d", Trash)],
         name: "d",
         hint: "d",
-        foot: &[(List, "trash"), (Reader, "trash"), (Map, "trash")],
+        foot: &[
+            (List, "trash"),
+            (Reader, "trash"),
+            (Map, "trash"),
+            (Reviewing, "discard"),
+        ],
         help: "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
     },
     Binding {
@@ -344,7 +361,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("m", Move)],
         name: "m",
         hint: "m",
-        foot: &[(Map, "move to")],
+        foot: &[(Map, "move to"), (Reviewing, "move to")],
         help: "in the map, move the message picked, or what is marked, onto a cluster or a label: then ⏎ on one, or a click on its anchor. It is given the label and taken out of the Inbox",
     },
     Binding {
@@ -358,7 +375,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("y", FileFirst), ("Y", FileAll), ("-", NotIt)],
         name: "y Y -",
         hint: "y/Y",
-        foot: &[],
+        foot: &[(Reviewing, "as suggested")],
         help: "a message not yet filed, filed where it would go, or, Y, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; - says it is not one, and the map learns it",
     },
     Binding {
@@ -374,6 +391,20 @@ pub const KEYS: &[Binding] = &[
         hint: "z/Z",
         foot: &[(Map, "zoom")],
         help: "in the map, look nearer, about the message picked, or farther; 0 all of it. Farther than all of it, each cluster is one node, the bigger the more it holds: ⏎ or a click opens it as a tree of its parts, threads and messages, gone along by j and k, into by l or ⏎, out of by h or esc. The wheel zooms about where it is; what is seen follows the message picked",
+    },
+    Binding {
+        keys: &[("i", Review)],
+        name: "i",
+        hint: "i",
+        foot: &[(Map, "review"), (Reviewing, "close")],
+        help: "the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; m moves it, or picks where, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
+    },
+    Binding {
+        keys: &[("$", Apply)],
+        name: "$",
+        hint: "$",
+        foot: &[(Reviewing, "apply")],
+        help: "in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded",
     },
     Binding {
         keys: &[(",", View)],

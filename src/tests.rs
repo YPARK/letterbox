@@ -3675,7 +3675,7 @@ fn the_foot_and_the_help_come_from_the_table() {
         assert!(foot.contains(&hint), "{hint} in {foot}");
     }
     press(&mut app, &["?"]);
-    let help = app::screen(&mut app, 100, 80);
+    let help = app::screen(&mut app, 100, 110);
     for (name, _) in crate::keymap::help() {
         assert!(help.contains(name), "{name} in {help}");
     }
@@ -6842,4 +6842,98 @@ fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
         rect.y,
     ));
     assert!(app.compose.is_none(), "{}", app.status);
+}
+
+#[test]
+fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    assert!(app.review.is_some());
+    assert_eq!(app.focus, app::Focus::Reader);
+    let rows = app.review_rows();
+    assert_eq!(rows.len(), INBOX);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("Inbox · 33 to look through"), "{screen}");
+    assert!(screen.contains("Apply  $"), "{screen}");
+    assert!(screen.contains("✓ keep"), "{screen}");
+    let s = app.map.snapshot.clone().unwrap();
+    // The one picked is picked on the map too.
+    assert_eq!(app.map.picked(), Some(rows[0]));
+    // d discards it, and goes on; space keeps; y takes what is suggested.
+    press(&mut app, &["d"]);
+    assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    assert_eq!(app.map.picked(), Some(rows[1]));
+    press(&mut app, &["k", "<space>"]);
+    assert_eq!(app.choice(rows[0]), app::Choice::Keep);
+    // ← and → go round what may be done.
+    press(&mut app, &["k", "<right>"]);
+    assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    // One suggested to go somewhere: y files it there.
+    let going = rows
+        .iter()
+        .position(|&i| s.suggestion(i).is_some())
+        .unwrap();
+    let label = s.suggestion(rows[going]).unwrap().to_string();
+    for _ in 0..going {
+        press(&mut app, &["j"]);
+    }
+    press(&mut app, &["d", "k", "y"]);
+    assert_eq!(app.choice(rows[going]), app::Choice::Move(label.clone()));
+    // One with nowhere to go: m picks where on the map; esc comes back.
+    let nowhere = rows
+        .iter()
+        .position(|&i| s.suggestion(i).is_none() && i != rows[0])
+        .unwrap();
+    app.focus = app::Focus::Reader;
+    let key = s.dots[rows[nowhere]].key.clone();
+    app.review.as_mut().unwrap().picked = Some(key.clone());
+    press(&mut app, &["m"]);
+    assert_eq!(app.focus, app::Focus::List);
+    assert!(app.map.moving.is_some());
+    press(&mut app, &["<esc>"]);
+    assert_eq!(app.focus, app::Focus::Reader);
+    assert!(app.review.as_ref().unwrap().relabel.is_none());
+    // m again, and a click on a label: chosen, not done yet.
+    app.review.as_mut().unwrap().picked = Some(key.clone());
+    press(&mut app, &["m"]);
+    let grant = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some("Grant"))
+        .unwrap()
+        .id;
+    press(&mut app, &["0"]);
+    click_at(&mut app, app::Target::Anchor(grant));
+    assert_eq!(app.choice(rows[nowhere]), app::Choice::Move("Grant".into()));
+    assert!(
+        dot_labels(&app, &s.dots[rows[nowhere]].subject).1,
+        "still in the Inbox"
+    );
+    // $ asks; n leaves it; $ and y do it all.
+    app.focus = app::Focus::Reader;
+    press(&mut app, &["$"]);
+    assert!(app.status.contains("(y or n)"), "{}", app.status);
+    press(&mut app, &["n"]);
+    assert!(app.review.as_ref().unwrap().chosen.len() >= 2);
+    press(&mut app, &["$", "y"]);
+    let (labels, inbox) = dot_labels(&app, &s.dots[rows[going]].subject);
+    assert!(labels.contains(&label) && !inbox, "{labels:?}");
+    let (labels, inbox) = dot_labels(&app, &s.dots[rows[nowhere]].subject);
+    assert!(
+        labels.contains(&"Grant".to_string()) && !inbox,
+        "{labels:?}"
+    );
+    assert!(app.status.contains("filed"), "{}", app.status);
+    let trashed = &s.dots[rows[0]].subject;
+    let s = app.map.snapshot.clone().unwrap();
+    assert!(
+        s.dots
+            .iter()
+            .filter(|d| &d.subject == trashed)
+            .all(|d| !d.system.inbox),
+        "discarded"
+    );
+    // i closes it.
+    press(&mut app, &["i"]);
+    assert!(app.review.is_none());
 }

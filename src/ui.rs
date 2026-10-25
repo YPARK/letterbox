@@ -119,7 +119,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     if read_w > 0 {
-        reader(f, app, read);
+        if app.map.mode == crate::map::Mode::Map && app.review.as_ref().is_some_and(|r| !r.reading)
+        {
+            review_pane(f, app, read);
+        } else {
+            reader(f, app, read);
+        }
     }
     // The line before the message, to drag: it and a column either side,
     // as one alone is hard to hit.
@@ -2694,6 +2699,201 @@ fn empty(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The Inbox looked through, beside the map: each message, newest first,
+/// with what may be done with it, what will be done lit; and a button that
+/// does it all.
+fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
+    use crate::app::Choice;
+    let t = app.theme;
+    let focused = app.focus == Focus::Reader;
+    f.render_widget(Block::new().style(Style::new().bg(t.page)), area);
+    app.targets.push((area, Target::Reader));
+    if area.height < 4 || area.width < 24 {
+        return;
+    }
+    let Some(s) = app.map.snapshot.clone() else {
+        return;
+    };
+    let rows = app.review_rows();
+    let picked = app
+        .review
+        .as_ref()
+        .and_then(|r| r.picked.as_ref())
+        .and_then(|k| s.find(k));
+    let (filed, discarded, kept) =
+        rows.iter()
+            .fold((0, 0, 0), |(a, b, c), &i| match app.choice(i) {
+                Choice::Move(_) => (a + 1, b, c),
+                Choice::Discard => (a, b + 1, c),
+                Choice::Keep => (a, b, c + 1),
+            });
+    // Its heading: how many, what will be done, and the button that does it.
+    let x = area.x + 1;
+    let width = area.width.saturating_sub(2);
+    let head = format!(" Inbox · {} to look through ", rows.len());
+    let button = " Apply  $ ";
+    let buf = f.buffer_mut();
+    buf.set_stringn(
+        x,
+        area.y,
+        &head,
+        usize::from(width),
+        Style::new().fg(t.title).bold(),
+    );
+    let right = x + width;
+    if right > x + head.width() as u16 + button.width() as u16 {
+        let bx = right - button.width() as u16;
+        buf.set_string(
+            bx,
+            area.y,
+            button,
+            Style::new().fg(t.on_accent).bg(t.accent).bold(),
+        );
+        if let Some(key) = keymap::key_named("$") {
+            app.targets.push((
+                Rect::new(bx, area.y, button.width() as u16, 1),
+                Target::Key(key),
+            ));
+        }
+    }
+    let counts = format!(" {filed} to file · {discarded} to discard · {kept} to keep");
+    buf.set_stringn(
+        x,
+        area.y + 1,
+        &counts,
+        usize::from(width),
+        Style::new().fg(t.soft),
+    );
+    for cx in x..right {
+        buf[(cx, area.y + 2)]
+            .set_char('─')
+            .set_style(Style::new().fg(t.rule));
+    }
+    if rows.is_empty() {
+        buf.set_stringn(
+            x,
+            area.y + 4,
+            " Nothing in an Inbox.",
+            usize::from(width),
+            Style::new().fg(t.dim),
+        );
+        return;
+    }
+    // Two lines a message; what is seen moves to keep the one picked in it.
+    let room = usize::from(area.height.saturating_sub(3)) / 2;
+    let at = picked
+        .and_then(|p| rows.iter().position(|&i| i == p))
+        .unwrap_or(0);
+    let mut top = app.review.as_ref().map_or(0, |r| r.top);
+    if at < top {
+        top = at;
+    } else if at >= top + room.max(1) {
+        top = at + 1 - room.max(1);
+    }
+    if let Some(r) = &mut app.review {
+        r.top = top;
+    }
+    let now = Zoned::now();
+    let mut y = area.y + 3;
+    for (row, &i) in rows.iter().enumerate().skip(top).take(room) {
+        let d = &s.dots[i];
+        let is_picked = Some(i) == picked;
+        let ground = if is_picked && focused {
+            t.focus
+        } else if is_picked {
+            t.row
+        } else {
+            t.page
+        };
+        for cx in x..right {
+            buf[(cx, y)]
+                .set_char(' ')
+                .set_style(Style::new().bg(ground));
+            buf[(cx, y + 1)]
+                .set_char(' ')
+                .set_style(Style::new().bg(ground));
+        }
+        let from = if d.from.is_empty() {
+            &d.address
+        } else {
+            &d.from
+        };
+        let date = d.date.map(|at| short_date(at, &now)).unwrap_or_default();
+        let mark = if d.flags.seen { "  " } else { "● " };
+        let said = format!("{mark}{} — {}", clip(from, 22), d.subject);
+        let room_said = usize::from(width).saturating_sub(date.width() + 2);
+        let style = if d.flags.seen {
+            Style::new().fg(t.soft).bg(ground)
+        } else {
+            Style::new().fg(t.title).bg(ground).bold()
+        };
+        buf.set_stringn(x, y, clip(&said, room_said), room_said, style);
+        buf.set_string(
+            right.saturating_sub(date.width() as u16),
+            y,
+            &date,
+            Style::new().fg(t.dim).bg(ground),
+        );
+        app.targets
+            .push((Rect::new(x, y, width, 1), Target::ReviewRow(row)));
+        // What may be done with it, what will be done lit.
+        let chosen = app.choice(i);
+        let suggested = crate::app::App::suggested(&s, i);
+        let label = match &chosen {
+            Choice::Move(l) => Some(l.clone()),
+            _ => s.suggestion(i).map(str::to_string),
+        };
+        let options = [
+            (
+                match &label {
+                    Some(l) => format!("→ {}", clip(l, 18)),
+                    None => "move to…".to_string(),
+                },
+                matches!(chosen, Choice::Move(_)),
+                t.accent,
+                t.on_accent,
+                matches!(suggested, Choice::Move(_)),
+            ),
+            (
+                "keep".to_string(),
+                chosen == Choice::Keep,
+                t.title,
+                t.page,
+                suggested == Choice::Keep,
+            ),
+            (
+                "discard".to_string(),
+                chosen == Choice::Discard,
+                t.error,
+                t.on_accent,
+                suggested == Choice::Discard,
+            ),
+        ];
+        let mut cx = x + 2;
+        for (k, (what, on, bg, fg, _)) in options.iter().enumerate() {
+            let chip = if *on {
+                format!(" ✓ {what} ")
+            } else {
+                format!(" [ ] {what} ")
+            };
+            let w = chip.width() as u16;
+            if cx + w > right {
+                break;
+            }
+            let style = if *on {
+                Style::new().fg(*fg).bg(*bg).bold()
+            } else {
+                Style::new().fg(t.dim).bg(ground)
+            };
+            buf.set_string(cx, y + 1, &chip, style);
+            app.targets
+                .push((Rect::new(cx, y + 1, w, 1), Target::Choose(row, k as u8)));
+            cx += w + 1;
+        }
+        y += 2;
+    }
+}
+
 fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let block = Block::new()
@@ -3106,6 +3306,12 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if app.compose.is_some() => Pane::Writing,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,
+        Focus::Reader
+            if app.map.mode == crate::map::Mode::Map
+                && app.review.as_ref().is_some_and(|r| !r.reading) =>
+        {
+            Pane::Review
+        }
         Focus::List => Pane::List,
         Focus::Reader => Pane::Reader,
     };

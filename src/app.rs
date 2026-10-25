@@ -479,6 +479,10 @@ pub enum Target {
     Anchor(u32),
     /// A branch of a cluster's tree, by its row.
     Branch(usize),
+    /// A message in the Inbox looked through, by its row; and one of what
+    /// may be done with it: moved, kept or discarded.
+    ReviewRow(usize),
+    Choose(usize, u8),
     /// An attachment or link in the list of them, by its place.
     Item(usize),
 }
@@ -578,6 +582,35 @@ pub struct Files {
 /// scrolled so far; the form to add an account; the message's files and
 /// links; which folder is Trash; whether to remove an account; what to
 /// call one, as typed so far.
+/// The Inbox looked through beside the map, each message given what to do
+/// with it: what is suggested, unless another was chosen; all of it done at
+/// once, when asked.
+#[derive(Default)]
+pub struct Review {
+    /// The message picked in it.
+    pub picked: Option<crate::index::Key>,
+    /// What was chosen for each message, where it is not what is suggested.
+    pub chosen: std::collections::BTreeMap<crate::index::Key, Choice>,
+    /// The first message shown.
+    pub top: usize,
+    /// Whether the message picked is read in its place.
+    pub reading: bool,
+    /// Whether it is asked whether to do it all.
+    pub asking: bool,
+    /// The message whose label is being picked on the map.
+    pub relabel: Option<crate::index::Key>,
+}
+
+/// What to do with a message in the Inbox.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Choice {
+    /// Filed under the label, out of the Inbox.
+    Move(String),
+    Keep,
+    /// To the Trash.
+    Discard,
+}
+
 #[derive(Default)]
 pub enum Dialog {
     #[default]
@@ -804,6 +837,8 @@ pub struct App {
     /// The map is not begun: no key was ever made for it. It is begun once
     /// it is asked for, and agreed to.
     pub map_later: bool,
+    /// The Inbox, being looked through beside the map.
+    pub review: Option<Review>,
     /// Each account's second connection, kept for its sync while the map
     /// is not begun.
     twins: Vec<Option<Box<dyn Store>>>,
@@ -1023,6 +1058,7 @@ impl App {
             index: Arc::new(Mutex::new(index)),
             map_off,
             map_later,
+            review: None,
             twins: Vec::new(),
             open_map: open_map_index,
             syncs: Vec::new(),
@@ -2387,6 +2423,15 @@ impl App {
         if self.dialog.is_open() {
             return self.dialog_key(key);
         }
+        if let Some(r) = self.review.as_mut().filter(|r| r.asking) {
+            r.asking = false;
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
+                self.apply_review();
+            } else {
+                self.status = "nothing done · $ when it is as you want it".to_string();
+            }
+            return;
+        }
         if self.searching {
             match key.code {
                 KeyCode::Esc => {
@@ -2429,6 +2474,9 @@ impl App {
 
     /// Do what a key in the table does, where the focus is.
     fn act(&mut self, act: Act) {
+        if self.review_act(act) {
+            return;
+        }
         if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
             return;
         }
@@ -2436,6 +2484,11 @@ impl App {
         match act {
             Act::Quit => self.quit = true,
             Act::Help => self.dialog = Dialog::Help(0),
+            Act::Review => self.open_review(),
+            Act::Apply => {
+                self.status =
+                    "$ does what was chosen in the Inbox looked through: i opens it".to_string()
+            }
             Act::Search => {
                 self.searching = true;
                 if self.focus == Focus::Side {
@@ -2911,6 +2964,8 @@ impl App {
             }
             Some(Target::List | Target::Message(_)) => self.pick(by),
             Some(Target::Reader) => self.scroll_by(3 * by),
+            // The wheel on the Inbox looked through goes along it.
+            Some(Target::ReviewRow(_) | Target::Choose(..)) => self.review_step(by),
             // The wheel on a cluster's tree goes along it.
             Some(Target::Map | Target::Branch(_)) if self.map.tree.is_some() => {
                 self.map_step(0, by.signum() as i32)
@@ -2959,6 +3014,8 @@ impl App {
             Some(Target::List) => self.focus = Focus::List,
             Some(Target::Anchor(id)) => self.anchor_click(id),
             Some(Target::Branch(row)) => self.branch_click(row),
+            Some(Target::ReviewRow(row)) => self.review_click(row),
+            Some(Target::Choose(row, which)) => self.choice_click(row, which),
             Some(Target::Message(i)) => {
                 self.focus = Focus::List;
                 self.list.select(Some(i));
@@ -3751,6 +3808,12 @@ impl App {
                 Act::Back => {
                     self.map.moving = None;
                     self.status = "not moved".to_string();
+                    // Picking where a message looked through goes: back to it.
+                    if let Some(r) = &mut self.review
+                        && r.relabel.take().is_some()
+                    {
+                        self.focus = Focus::Reader;
+                    }
                     return true;
                 }
                 _ => {}
@@ -4596,6 +4659,18 @@ impl App {
     fn file_keys(&mut self, keys: Vec<crate::index::Key>, label: &str) {
         let label = label.trim().to_string();
         self.map.moving = None;
+        // Picked for a message looked through: chosen, to be done with the
+        // rest.
+        if let Some(r) = &mut self.review
+            && let Some(k) = r.relabel.take()
+            && keys == [k.clone()]
+            && !label.is_empty()
+        {
+            r.chosen.insert(k, Choice::Move(label.clone()));
+            self.status = format!("to go to {label} · $ does it, with the rest");
+            self.focus = Focus::Reader;
+            return;
+        }
         if label.is_empty() || keys.is_empty() {
             self.status = "not filed".to_string();
             return;
@@ -4941,6 +5016,313 @@ impl App {
     }
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
+    /// The messages in an Inbox, to look through: newest first, by their
+    /// place in the map; none sent from here.
+    pub fn review_rows(&self) -> Vec<usize> {
+        let Some(s) = &self.map.snapshot else {
+            return Vec::new();
+        };
+        let mut rows: Vec<usize> = (0..s.dots.len())
+            .filter(|&i| s.dots[i].system.inbox && !s.dots[i].system.sent)
+            .collect();
+        rows.sort_by_key(|&i| {
+            let d = &s.dots[i];
+            std::cmp::Reverse((d.date.unwrap_or(d.arrived), i))
+        });
+        rows
+    }
+
+    /// What is suggested for the message `i` of `s`: filed where it would
+    /// go, else kept.
+    pub fn suggested(s: &map::Snapshot, i: usize) -> Choice {
+        s.suggestion(i)
+            .map_or(Choice::Keep, |l| Choice::Move(l.to_string()))
+    }
+
+    /// What is to be done with the message `i` of the map: what was chosen,
+    /// else what is suggested.
+    pub fn choice(&self, i: usize) -> Choice {
+        let Some(s) = &self.map.snapshot else {
+            return Choice::Keep;
+        };
+        self.review
+            .as_ref()
+            .and_then(|r| r.chosen.get(&s.dots[i].key))
+            .cloned()
+            .unwrap_or_else(|| Self::suggested(s, i))
+    }
+
+    /// Open the Inbox to look through beside the map; or close it, what was
+    /// chosen let go.
+    fn open_review(&mut self) {
+        if self.review.take().is_some() {
+            self.focus = Focus::List;
+            self.map.moving = None;
+            self.status = "the Inbox looked through, closed".to_string();
+            return;
+        }
+        if self.map.mode != Mode::Map {
+            self.show_map();
+            if self.map.mode != Mode::Map {
+                return;
+            }
+        }
+        let first = self.review_rows().first().copied();
+        self.review = Some(Review::default());
+        self.focus = Focus::Reader;
+        self.pick_review(first);
+        self.status =
+            "the Inbox, to look through: m move, space keep, d discard, y as suggested, $ does it"
+                .to_string();
+    }
+
+    /// Pick the message `i` of the map in the Inbox looked through, and on
+    /// the map.
+    fn pick_review(&mut self, i: Option<usize>) {
+        let key = i.and_then(|i| Some(self.map.snapshot.as_ref()?.dots[i].key.clone()));
+        if let Some(r) = &mut self.review {
+            r.picked = key.clone();
+            r.reading = false;
+        }
+        if key.is_some() {
+            self.map.cursor = key;
+        }
+    }
+
+    /// The message picked in the Inbox looked through, by its place in the
+    /// map, and in it.
+    fn review_at(&self) -> Option<(usize, usize)> {
+        let s = self.map.snapshot.as_ref()?;
+        let i = s.find(self.review.as_ref()?.picked.as_ref()?)?;
+        let at = self.review_rows().iter().position(|&j| j == i)?;
+        Some((i, at))
+    }
+
+    /// Pick the message `by` after the one picked, or before.
+    fn review_step(&mut self, by: isize) {
+        let rows = self.review_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let at = self.review_at().map_or(0, |(_, at)| at as isize + by);
+        self.pick_review(Some(rows[at.clamp(0, rows.len() as isize - 1) as usize]));
+    }
+
+    /// Choose `c` for the message `i`; then, `on`, go on to the next.
+    fn choose(&mut self, i: usize, c: Choice, on: bool) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let key = s.dots[i].key.clone();
+        if let Some(r) = &mut self.review {
+            if c == Self::suggested(&s, i) {
+                r.chosen.remove(&key);
+            } else {
+                r.chosen.insert(key, c);
+            }
+        }
+        if on {
+            self.review_step(1);
+        }
+    }
+
+    /// Move the message `i`: where it would go, if it would go anywhere and
+    /// is not to go there already; else pick where on the map.
+    fn choose_move(&mut self, i: usize, on: bool) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        if let Some(label) = s.suggestion(i)
+            && !matches!(self.choice(i), Choice::Move(_))
+        {
+            return self.choose(i, Choice::Move(label.to_string()), on);
+        }
+        let key = s.dots[i].key.clone();
+        if let Some(r) = &mut self.review {
+            r.relabel = Some(key.clone());
+        }
+        self.map.cursor = Some(key.clone());
+        self.map.moving = Some(vec![key]);
+        self.focus = Focus::List;
+        self.status = "where it goes: a click on a cluster, or ⏎ on one; N a new label; esc stops"
+            .to_string();
+    }
+
+    /// Do what a key does in the Inbox looked through, with the focus on
+    /// it; whether it was its to do.
+    fn review_act(&mut self, act: Act) -> bool {
+        if self.focus != Focus::Reader || self.map.mode != Mode::Map {
+            return false;
+        }
+        let Some(r) = &mut self.review else {
+            return false;
+        };
+        // Reading one, esc goes back to the rest.
+        if r.reading {
+            if act == Act::Back {
+                r.reading = false;
+                return true;
+            }
+            if act == Act::Review {
+                self.open_review();
+                return true;
+            }
+            return false;
+        }
+        let picked = self.review_at().map(|(i, _)| i);
+        match (act, picked) {
+            (Act::Down, _) => self.review_step(1),
+            (Act::Up, _) => self.review_step(-1),
+            (Act::Top, _) => self.review_step(isize::MIN / 2),
+            (Act::End, _) => self.review_step(isize::MAX / 2),
+            (Act::Left | Act::Right, Some(i)) => {
+                let label = match self.choice(i) {
+                    Choice::Move(l) => Some(l),
+                    _ => self
+                        .map
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.suggestion(i))
+                        .map(str::to_string),
+                };
+                let mut all: Vec<Choice> = label.into_iter().map(Choice::Move).collect();
+                all.extend([Choice::Keep, Choice::Discard]);
+                let now = self.choice(i);
+                let at = all.iter().position(|c| *c == now).unwrap_or(0) as isize;
+                let by = if act == Act::Right { 1 } else { -1 };
+                let next = all[(at + by).rem_euclid(all.len() as isize) as usize].clone();
+                self.choose(i, next, false);
+            }
+            (Act::Move, Some(i)) => self.choose_move(i, true),
+            (Act::ScreenDown, Some(i)) => self.choose(i, Choice::Keep, true),
+            (Act::Trash, Some(i)) => self.choose(i, Choice::Discard, true),
+            (Act::FileFirst, Some(i)) => {
+                let suggested = self
+                    .map
+                    .snapshot
+                    .as_ref()
+                    .map_or(Choice::Keep, |s| Self::suggested(s, i));
+                self.choose(i, suggested, true);
+            }
+            (Act::Open, Some(_)) => {
+                self.read_dot();
+                if let Some(r) = &mut self.review {
+                    r.reading = true;
+                }
+            }
+            (Act::Apply, _) => self.ask_apply(),
+            (Act::Back | Act::Review, _) => self.open_review(),
+            (
+                Act::Left
+                | Act::Right
+                | Act::Move
+                | Act::ScreenDown
+                | Act::Trash
+                | Act::FileFirst
+                | Act::Open,
+                None,
+            ) => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// How many of the Inbox looked through are to be filed, discarded and
+    /// kept.
+    fn review_counts(&self) -> (usize, usize, usize) {
+        let (mut filed, mut discarded, mut kept) = (0, 0, 0);
+        for i in self.review_rows() {
+            match self.choice(i) {
+                Choice::Move(_) => filed += 1,
+                Choice::Discard => discarded += 1,
+                Choice::Keep => kept += 1,
+            }
+        }
+        (filed, discarded, kept)
+    }
+
+    /// Ask whether to do what was chosen in the Inbox looked through.
+    fn ask_apply(&mut self) {
+        let (filed, discarded, kept) = self.review_counts();
+        if filed + discarded == 0 {
+            self.status = "nothing to do: each is kept in the Inbox".to_string();
+            return;
+        }
+        if let Some(r) = &mut self.review {
+            r.asking = true;
+        }
+        self.status =
+            format!("File {filed}, discard {discarded}, keep {kept} in the Inbox? (y or n)");
+    }
+
+    /// Do what was chosen in the Inbox looked through: each to be moved
+    /// filed under its label, each to be discarded moved to the Trash.
+    fn apply_review(&mut self) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let mut moves: std::collections::BTreeMap<String, Vec<crate::index::Key>> =
+            std::collections::BTreeMap::new();
+        let mut discard = Vec::new();
+        for i in self.review_rows() {
+            let key = s.dots[i].key.clone();
+            match self.choice(i) {
+                Choice::Move(label) => moves.entry(label).or_default().push(key),
+                Choice::Discard => discard.push(key),
+                Choice::Keep => {}
+            }
+        }
+        if let Some(r) = &mut self.review {
+            r.relabel = None;
+            r.chosen.clear();
+        }
+        let filed: usize = moves.values().map(Vec::len).sum();
+        for (label, keys) in moves {
+            self.file_keys(keys, &label);
+        }
+        self.map.suggesting = None;
+        let mut said = format!("{filed} filed");
+        if !discard.is_empty() {
+            self.map.region = Some(map::Region {
+                keys: discard,
+                boxed: None,
+            });
+            self.region_trash();
+            said = format!("{said} · {}", self.status);
+        }
+        self.status = said;
+        let first = self.review_rows().first().copied();
+        self.pick_review(first);
+    }
+
+    /// A click on a message in the Inbox looked through picks it; on the
+    /// one picked, reads it.
+    fn review_click(&mut self, row: usize) {
+        let Some(&i) = self.review_rows().get(row) else {
+            return;
+        };
+        self.focus = Focus::Reader;
+        if self.review_at().is_some_and(|(j, _)| j == i) {
+            self.review_act(Act::Open);
+        } else {
+            self.pick_review(Some(i));
+        }
+    }
+
+    /// A click on one of what may be done with a message looked through.
+    fn choice_click(&mut self, row: usize, which: u8) {
+        let Some(&i) = self.review_rows().get(row) else {
+            return;
+        };
+        self.focus = Focus::Reader;
+        self.pick_review(Some(i));
+        match which {
+            0 => self.choose_move(i, false),
+            1 => self.choose(i, Choice::Keep, false),
+            _ => self.choose(i, Choice::Discard, false),
+        }
+    }
+
     /// A click on a branch of a cluster's tree picks it; on the one
     /// picked, goes into it, or reads it; on the cluster, goes back to
     /// the clusters.

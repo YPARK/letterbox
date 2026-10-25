@@ -144,6 +144,8 @@ letterbox search grant report --account Work
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
+| `i` | the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; `m` moves it, or picks where, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
+| `$` | in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
 | `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
@@ -271,7 +273,17 @@ the clusters, shown with `f`, say which would take what is shown. `y`
 files it there, `Y` marks every message that would go there too and,
 pressed again, files them all, and `-` says it is not one for that
 label, which the map learns. No subject is read to say where: only what
-the mail is about and who it is from, as the map has it. The map has no sidebar beside it, as its
+the mail is about and who it is from, as the map has it.
+
+`i` opens the Inbox beside the map, to look through: every message still
+in an Inbox, newest first, each with what may be done with it, `→ Grant`,
+`keep` or `discard`, and what is suggested already picked: filed where it
+would go, else kept. `m` files it where it would go, or, pressed again or
+with nowhere suggested, picks where on the map; `space` keeps it, `d`
+discards it, and `y` takes what is suggested; each goes on to the next.
+`←` and `→` go round them, and a click picks one. Nothing is done until
+`$`, or the Apply button, asks and is told `y`: then each is filed, or
+moved to the Trash, at once. The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages
 that fit nowhere; `M-l` lists the cluster the map is narrowed to.
