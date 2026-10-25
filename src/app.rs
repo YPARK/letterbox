@@ -4663,8 +4663,53 @@ impl App {
         s.model.suggestions(label, &s.not_it)
     }
 
-    /// File the first of the suggestions too, or all of them.
+    /// The message picked, if it is filed under no label yet, and the label
+    /// it would go to.
+    fn picked_suggestion(&self) -> Option<(usize, String)> {
+        let s = self.map.snapshot.as_ref()?;
+        let i = self.map.picked()?;
+        Some((i, s.suggestion(i)?.to_string()))
+    }
+
+    /// File the message picked, not yet filed, where it would go; or, all,
+    /// mark every message shown that would go there too, and, marked, file
+    /// them.
+    fn file_where_suggested(&mut self, all: bool) -> bool {
+        let (Some(s), Some((i, label))) = (self.map.snapshot.clone(), self.picked_suggestion())
+        else {
+            return false;
+        };
+        if !all {
+            self.file_keys(vec![s.dots[i].key.clone()], &label);
+            return true;
+        }
+        let now = jiff::Timestamp::now().as_second();
+        let keys: Vec<crate::index::Key> = self
+            .map
+            .shown(now)
+            .into_iter()
+            .filter(|&j| s.suggestion(j) == Some(label.as_str()))
+            .map(|j| s.dots[j].key.clone())
+            .collect();
+        if self.map.region.as_ref().is_some_and(|r| r.keys == keys) {
+            self.file_keys(keys, &label);
+        } else {
+            self.status = format!(
+                "{} would go to {label}, marked: Y files them, esc lets go",
+                keys.len()
+            );
+            self.map.region = Some(map::Region { keys, boxed: None });
+        }
+        true
+    }
+
+    /// File the first of the suggestions too, or all of them: those for the
+    /// message picked, if it is filed under no label yet, else those for the
+    /// label last filed under.
     fn file_suggested(&mut self, all: bool) {
+        if self.file_where_suggested(all) {
+            return;
+        }
         let (Some(s), Some(label)) = (self.map.snapshot.clone(), self.map.suggesting.clone())
         else {
             self.status =
@@ -4690,12 +4735,16 @@ impl App {
     /// Say the first suggestion is not one for its label: it is suggested
     /// no more, and pushed away from it.
     fn not_it(&mut self) {
-        let (Some(s), Some(label)) = (self.map.snapshot.clone(), self.map.suggesting.clone())
-        else {
+        let Some(s) = self.map.snapshot.clone() else {
             return;
         };
-        let Some(&(i, _)) = self.suggestions().first() else {
-            return;
+        let (i, label) = match (self.picked_suggestion(), self.map.suggesting.clone()) {
+            (Some(picked), _) => picked,
+            (None, Some(label)) => match self.suggestions().first() {
+                Some(&(i, _)) => (i, label),
+                None => return,
+            },
+            (None, None) => return,
         };
         let kept = self
             .index

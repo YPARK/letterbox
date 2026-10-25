@@ -232,6 +232,20 @@ impl Snapshot {
             .copied()
     }
 
+    /// Where the message `i`, filed under no label, would go: the label of
+    /// the cluster it is in, unless it was said not to be one for it.
+    pub fn suggestion(&self, i: usize) -> Option<&str> {
+        let d = self.dots.get(i)?;
+        if !d.labels.is_empty() || d.system.sent {
+            return None;
+        }
+        let label = self.group_of(i)?.label.as_deref()?;
+        let turned_down = self
+            .not_it
+            .contains(&(d.key.clone(), crate::index::fold(label)));
+        (!turned_down).then_some(label)
+    }
+
     pub fn group(&self, id: u32) -> Option<&Group> {
         self.groups.iter().find(|g| g.id == id)
     }

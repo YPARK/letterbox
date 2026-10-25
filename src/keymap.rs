@@ -359,7 +359,7 @@ pub const KEYS: &[Binding] = &[
         name: "y Y -",
         hint: "y/Y",
         foot: &[],
-        help: "once filed, the label's first suggestion filed too, or all of them; - says the first is not one, and the map learns it",
+        help: "a message not yet filed, filed where it would go, or, Y, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; - says it is not one, and the map learns it",
     },
     Binding {
         keys: &[("M-r", Relayout)],

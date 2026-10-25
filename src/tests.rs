@@ -6754,3 +6754,60 @@ fn the_view_shows_only_the_mail_not_yet_filed() {
     press(&mut app, &[",", "f", "<esc>"]);
     assert_eq!(app.map.shown(now).len(), all);
 }
+
+#[test]
+fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
+    let mut app = demo_map();
+    press(&mut app, &[",", "f", "<esc>"]);
+    let now = jiff::Timestamp::now().as_second();
+    let s = app.map.snapshot.clone().unwrap();
+    let going: Vec<(usize, String)> = app
+        .map
+        .shown(now)
+        .into_iter()
+        .filter_map(|i| Some((i, s.suggestion(i)?.to_string())))
+        .collect();
+    assert!(!going.is_empty(), "some would go to a label");
+    let (first, label) = going[0].clone();
+    // Where it would go, beside it, by the cluster it lies in.
+    assert_eq!(
+        s.group_of(first).unwrap().label.as_deref(),
+        Some(label.as_str())
+    );
+    app.map.cursor = Some(s.dots[first].key.clone());
+    press(&mut app, &["<enter>"]);
+    let screen = app::screen(&mut app, 150, 60);
+    assert!(screen.contains(&format!("Would go to {label}")), "{screen}");
+    // y: filed there.
+    press(&mut app, &["y"]);
+    let subject = &s.dots[first].subject;
+    let (labels, _) = dot_labels(&app, subject);
+    assert!(labels.contains(&label), "{labels:?}");
+    // -: not it, and it is suggested there no more.
+    let s = app.map.snapshot.clone().unwrap();
+    let would = |app: &App, s: &crate::map::Snapshot| -> Vec<usize> {
+        app.map
+            .shown(now)
+            .into_iter()
+            .filter(|&i| s.suggestion(i) == Some(label.as_str()))
+            .collect()
+    };
+    let turned = would(&app, &s)[0];
+    app.map.cursor = Some(s.dots[turned].key.clone());
+    press(&mut app, &["-"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let at = s.find(&s.dots[turned].key.clone()).unwrap();
+    assert_ne!(s.suggestion(at), Some(label.as_str()));
+    // Y: the rest that would go there marked, and, again, filed.
+    let rest = would(&app, &s);
+    assert!(rest.len() >= 2, "{}", rest.len());
+    app.map.cursor = Some(s.dots[rest[0]].key.clone());
+    press(&mut app, &["Y"]);
+    assert_eq!(app.map.region.as_ref().unwrap().keys.len(), rest.len());
+    assert!(app.status.contains("marked"), "{}", app.status);
+    press(&mut app, &["Y"]);
+    for &i in &rest {
+        let (labels, _) = dot_labels(&app, &s.dots[i].subject);
+        assert!(labels.contains(&label), "{}: {labels:?}", s.dots[i].subject);
+    }
+}

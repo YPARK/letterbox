@@ -2516,6 +2516,9 @@ fn cluster_nodes(
         let mut said = format!(" {} {}", clip(&g.name(), 22), n.n);
         match n.hits {
             Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
+            // Only what is not yet filed: where it would go, if anywhere.
+            _ if app.map.unfiled_only && g.label.is_some() => said.push_str(" · would go here"),
+            _ if app.map.unfiled_only => said.push_str(" · no label yet"),
             _ if n.new > 0 => said.push_str(&format!(" · {} new", n.new)),
             _ if n.unread > 0 => said.push_str(&format!(" · {} unread", n.unread)),
             _ => {}
@@ -2867,6 +2870,14 @@ fn mapped(app: &App, width: usize) -> Option<(Vec<Line<'static>>, Vec<Line<'stat
             (near, home)
         }
         None => {
+            // Filed under no label yet: where it would go.
+            if let Some(label) = s.suggestion(i) {
+                let said =
+                    format!("Would go to {label} · y files it there, Y all like it, - not it");
+                for l in wrap(&said, width) {
+                    tail.push(Line::styled(l, Style::new().fg(t.title).bold()));
+                }
+            }
             tail.push(Line::styled(
                 "Near it, by angle",
                 Style::new().fg(t.title).bold(),
