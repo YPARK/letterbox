@@ -2529,6 +2529,9 @@ impl App {
             | Act::FileAll
             | Act::NotIt
             | Act::View
+            | Act::ZoomIn
+            | Act::ZoomOut
+            | Act::ZoomAll
             | Act::Relayout => {
                 self.status = "M-g shows the map, where mail is filed".to_string();
             }
@@ -2900,6 +2903,15 @@ impl App {
             }
             Some(Target::List | Target::Message(_)) => self.pick(by),
             Some(Target::Reader) => self.scroll_by(3 * by),
+            // The wheel on the map zooms, about where it is.
+            Some(Target::Map | Target::Anchor(_)) => {
+                let factor = if by < 0 {
+                    map::ZOOM_STEP
+                } else {
+                    1.0 / map::ZOOM_STEP
+                };
+                self.map.zoom_at(factor, m.column, m.row);
+            }
             _ => {}
         }
     }
@@ -3758,6 +3770,18 @@ impl App {
                 self.map.hits = None;
                 self.narrow();
                 self.status = "the search let go".to_string();
+                return true;
+            }
+            Act::ZoomIn => {
+                self.map.zoom_picked(map::ZOOM_STEP);
+                return true;
+            }
+            Act::ZoomOut => {
+                self.map.zoom_picked(1.0 / map::ZOOM_STEP);
+                return true;
+            }
+            Act::ZoomAll => {
+                self.map.zoom = None;
                 return true;
             }
             Act::NextMessage | Act::PreviousMessage if !self.query.is_empty() => {

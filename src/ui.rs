@@ -1608,6 +1608,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     app.targets.push((area, Target::List));
     app.map.cells.clear();
     app.map.drawn.clear();
+    app.map.places.clear();
     app.map.anchors.clear();
     if area.height == 0 || area.width == 0 {
         return;
@@ -1661,6 +1662,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         app.map.since.name(),
         shown.len()
     );
+    if app.map.scale() > 1.0 {
+        what = format!(" · ×{:.1} nearer{what}", app.map.scale());
+    }
     if unread > 0 {
         what.push_str(&format!(", {unread} unread"));
     }
@@ -1737,27 +1741,48 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     let (w, h) = (canvas.width.saturating_sub(2).max(1), canvas.height.max(1));
-    let cell = |p: [f32; 2]| -> (u16, u16) {
-        let fx = if x1 > x0 {
-            (p[0] - x0) / (x1 - x0)
-        } else {
-            0.5
-        };
-        let fy = if y1 > y0 {
-            (p[1] - y0) / (y1 - y0)
-        } else {
-            0.5
-        };
-        let cx = (fx * f32::from(w - 1)).round() as u16;
-        let cy = (fy * f32::from(h - 1)).round() as u16;
-        (canvas.x + 1 + cx.min(w - 1), canvas.y + cy.min(h - 1))
+    let view = crate::map::View {
+        x: canvas.x + 1,
+        y: canvas.y,
+        w,
+        h,
+        bounds: [x0, x1, y0, y1],
     };
-    for &i in &shown {
-        let c = cell(at[i]);
-        app.map.cells.insert(i, c);
-        app.map.drawn.entry(c).or_default().push(i);
-    }
+    app.map.view = Some(view);
     let picked = app.map.picked();
+    // Zoomed in, what is seen follows the message picked.
+    if let Some(p) = picked.filter(|p| shown.contains(p)) {
+        app.map.follow(view.share(at[p]));
+    }
+    let (scale, centre) = app
+        .map
+        .zoom
+        .map_or((1.0, [0.5, 0.5]), |z| (z.scale, z.centre));
+    // Each place as a cell, on the screen or past it, as zoomed.
+    let place = |p: [f32; 2]| -> (i32, i32) {
+        let f = view.share(p);
+        let seen = |a: usize| (f[a] - centre[a]) * scale + 0.5;
+        (
+            i32::from(view.x) + (seen(0) * f32::from(w - 1)).round() as i32,
+            i32::from(view.y) + (seen(1) * f32::from(h - 1)).round() as i32,
+        )
+    };
+    let on_screen = |(x, y): (i32, i32)| -> Option<(u16, u16)> {
+        let inside = x >= i32::from(view.x)
+            && x < i32::from(view.x + w)
+            && y >= i32::from(view.y)
+            && y < i32::from(view.y + h);
+        inside.then_some((x as u16, y as u16))
+    };
+    let cell = |p: [f32; 2]| on_screen(place(p));
+    for &i in &shown {
+        let at_cell = place(at[i]);
+        app.map.places.insert(i, at_cell);
+        if let Some(c) = on_screen(at_cell) {
+            app.map.cells.insert(i, c);
+            app.map.drawn.entry(c).or_default().push(i);
+        }
+    }
     // What has anything new, by cluster: the rest dimmed, when asked.
     let lively: std::collections::BTreeSet<usize> = shown
         .iter()
@@ -1779,7 +1804,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     if preview.is_some() {
         let trail = Style::new().fg(t.rule).bg(t.page);
         for &i in &shown {
-            let (from, to) = (cell(old[i]), cell(at[i]));
+            let (Some(from), Some(to)) = (cell(old[i]), cell(at[i])) else {
+                continue;
+            };
             let steps = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
             for k in 1..steps {
                 let along = f32::from(k) / f32::from(steps);

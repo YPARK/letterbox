@@ -79,6 +79,10 @@ pub enum Act {
     NotIt,
     /// The map laid out again, to keep or drop once seen.
     Relayout,
+    /// The map looked at nearer, or farther, or all of it.
+    ZoomIn,
+    ZoomOut,
+    ZoomAll,
 }
 
 /// Where the foot's hints are for.
@@ -351,7 +355,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("y", FileFirst), ("Y", FileAll), ("-", NotIt)],
         name: "y Y -",
         hint: "y/Y",
-        foot: &[(Map, "file too")],
+        foot: &[],
         help: "once filed, the label's first suggestion filed too, or all of them; - says the first is not one, and the map learns it",
     },
     Binding {
@@ -360,6 +364,13 @@ pub const KEYS: &[Binding] = &[
         hint: "M-r",
         foot: &[],
         help: "in the map, lay it out again from where it is, and show what moved: ⏎ keeps it, esc drops it. Said when the map keeps under 70% of each message's nearest near it",
+    },
+    Binding {
+        keys: &[("z", ZoomIn), ("Z", ZoomOut), ("0", ZoomAll)],
+        name: "z Z 0",
+        hint: "z/Z",
+        foot: &[(Map, "zoom")],
+        help: "in the map, look nearer, about the message picked, or farther; 0 all of it. The wheel zooms about where it is; what is seen follows the message picked",
     },
     Binding {
         keys: &[(",", View)],

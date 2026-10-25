@@ -652,6 +652,51 @@ pub struct Map {
     pub relaying: bool,
     /// The messages that hold what is searched for, as last found.
     pub hits: Option<Hits>,
+    /// How near the map is looked at; none for all of it.
+    pub zoom: Option<Zoom>,
+    /// Where the map was last drawn, and the bounds of all of it.
+    pub view: Option<View>,
+    /// Where each message shown is, as a cell, on the screen or past it.
+    pub places: BTreeMap<usize, (i32, i32)>,
+}
+
+/// How near the map is looked at: how many times nearer than all of it,
+/// and the middle of what is seen, as shares of all of it, across and down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Zoom {
+    pub scale: f32,
+    pub centre: [f32; 2],
+}
+
+/// Where the map was drawn: its first cell, how many across and down, and
+/// the bounds of all of it laid onto them, left, right, top and bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct View {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub bounds: [f32; 4],
+}
+
+impl View {
+    /// Where `p` is in all of the map, as shares across and down.
+    pub fn share(&self, p: Point) -> [f32; 2] {
+        let [x0, x1, y0, y1] = self.bounds;
+        let along = |v: f32, lo: f32, hi: f32| if hi > lo { (v - lo) / (hi - lo) } else { 0.5 };
+        [along(p[0], x0, x1), along(p[1], y0, y1)]
+    }
+}
+
+/// How much nearer, at most, the map is looked at than all of it.
+const NEAREST: f32 = 64.0;
+/// How much nearer each step of the zoom is.
+pub const ZOOM_STEP: f32 = 1.5;
+
+/// The middle of what is seen, kept so that what is seen is of the map.
+fn kept_in(centre: [f32; 2], scale: f32) -> [f32; 2] {
+    let half = 0.5 / scale;
+    centre.map(|c| c.clamp(half, 1.0 - half))
 }
 
 /// The messages of a snapshot that hold every word searched for.
@@ -673,6 +718,77 @@ pub struct Region {
 }
 
 impl Map {
+    /// How many times nearer than all of it the map is looked at.
+    pub fn scale(&self) -> f32 {
+        self.zoom.map_or(1.0, |z| z.scale)
+    }
+
+    /// Look nearer by `factor`, or farther, below one, keeping the point
+    /// `fixed` of the map, as shares, where it is on the screen.
+    fn zoom_by(&mut self, factor: f32, fixed: [f32; 2]) {
+        let z = self.zoom.unwrap_or(Zoom {
+            scale: 1.0,
+            centre: [0.5, 0.5],
+        });
+        let scale = (z.scale * factor).clamp(1.0, NEAREST);
+        if scale <= 1.0 {
+            self.zoom = None;
+            return;
+        }
+        let centre = [0, 1].map(|a| fixed[a] - (fixed[a] - z.centre[a]) * z.scale / scale);
+        self.zoom = Some(Zoom {
+            scale,
+            centre: kept_in(centre, scale),
+        });
+    }
+
+    /// Zoom by `factor` at the cell `column`, `row` of the map, as the
+    /// wheel does: what is under it stays under it.
+    pub fn zoom_at(&mut self, factor: f32, column: u16, row: u16) {
+        let Some(v) = self.view else {
+            return;
+        };
+        let z = self.zoom.unwrap_or(Zoom {
+            scale: 1.0,
+            centre: [0.5, 0.5],
+        });
+        let on = |c: u16, at: u16, n: u16| {
+            (f32::from(c.saturating_sub(at)) / f32::from(n.max(2) - 1)) - 0.5
+        };
+        let fixed = [
+            z.centre[0] + on(column, v.x, v.w) / z.scale,
+            z.centre[1] + on(row, v.y, v.h) / z.scale,
+        ];
+        self.zoom_by(factor, fixed);
+    }
+
+    /// Zoom by `factor` about the message picked, else the middle.
+    pub fn zoom_picked(&mut self, factor: f32) {
+        let fixed = (|| {
+            let (v, s, i) = (self.view?, self.snapshot.as_ref()?, self.picked()?);
+            Some(v.share(s.at.as_ref()?.get(i).copied()?))
+        })()
+        .or(self.zoom.map(|z| z.centre))
+        .unwrap_or([0.5, 0.5]);
+        self.zoom_by(factor, fixed);
+    }
+
+    /// Keep the message picked in sight: past the outer tenth of what is
+    /// seen, what is seen is moved to have it in the middle.
+    pub fn follow(&mut self, picked: [f32; 2]) {
+        let Some(z) = &mut self.zoom else {
+            return;
+        };
+        let mut centre = z.centre;
+        for a in 0..2 {
+            let seen = (picked[a] - z.centre[a]) * z.scale + 0.5;
+            if !(0.1..=0.9).contains(&seen) {
+                centre[a] = picked[a];
+            }
+        }
+        z.centre = kept_in(centre, z.scale);
+    }
+
     /// Which messages hold every word of `query`, in their subject, sender,
     /// address, first lines or labels, case let go: none for no words.
     /// Found again only once the query or the snapshot changes.
@@ -841,7 +957,7 @@ impl Map {
         let Some(s) = self.snapshot.clone() else {
             return;
         };
-        let here = self.picked().and_then(|i| self.cells.get(&i).copied());
+        let here = self.picked().and_then(|i| self.places.get(&i).copied());
         let Some((x0, y0)) = here else {
             // None picked: the message nearest the middle of what is drawn.
             let n = self.cells.len().max(1) as f32;
@@ -861,17 +977,15 @@ impl Map {
             self.cursor = near.map(|i| s.dots[i].key.clone());
             return;
         };
+        // Every message shown, on the screen or past it, zoomed in.
         let picked = self.picked();
         // A cell is about twice as tall as it is wide: rows count double.
         let best = self
-            .cells
+            .places
             .iter()
             .filter(|(i, _)| Some(**i) != picked)
             .filter_map(|(&i, &(x, y))| {
-                let (ex, ey) = (
-                    f32::from(x) - f32::from(x0),
-                    2.0 * (f32::from(y) - f32::from(y0)),
-                );
+                let (ex, ey) = ((x - x0) as f32, 2.0 * (y - y0) as f32);
                 let along = ex * dx as f32 + ey * dy as f32;
                 let across = (ex * dy as f32 - ey * dx as f32).abs();
                 let same = (x, y) == (x0, y0);

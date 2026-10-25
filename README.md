@@ -134,6 +134,7 @@ letterbox search grant report --account Work
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
+| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
@@ -229,7 +230,9 @@ shows what moved, with trails, to keep or drop.
 The arrows and `h` `j` `k` `l` go to the nearest message that way, and
 the message read beside the map follows, with its labels, the cluster it
 is in, and the five messages nearest it. `[` and `]` narrow the map to
-one cluster after another. `/` searches it as you type: the messages
+one cluster after another. `z` looks nearer, about the message picked,
+`Z` farther, and `0` at all of it; the wheel zooms about where it is, and
+what is seen follows the message picked as it moves. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.

@@ -5592,6 +5592,48 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
     assert_eq!(divider(&mut app), narrowest);
 }
 
+#[test]
+fn the_map_zooms_by_keys_and_wheel_and_follows_the_message_picked() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 150, 45);
+    let all = app.map.cells.len();
+    assert_eq!(all, app.map.places.len(), "all of it in sight");
+    let cells_together = app.map.drawn.len();
+    press(&mut app, &["z", "z", "z"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(app.map.scale() > 3.0);
+    assert!(
+        app.map.cells.len() < app.map.places.len(),
+        "some out of sight"
+    );
+    let picked = app.map.picked().unwrap();
+    assert!(
+        app.map.cells.contains_key(&picked),
+        "the one picked in sight"
+    );
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("nearer"), "{screen}");
+    // Moving on past the edge, what is seen follows.
+    for _ in 0..12 {
+        press(&mut app, &["l"]);
+        let _ = app::screen(&mut app, 150, 45);
+        let p = app.map.picked().unwrap();
+        assert!(app.map.cells.contains_key(&p), "followed");
+    }
+    // 0: all of it again.
+    press(&mut app, &["0"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(app.map.zoom.is_none());
+    assert_eq!(app.map.drawn.len(), cells_together);
+    // The wheel, up on the map: nearer, about where it is; down, back.
+    let v = app.map.view.unwrap();
+    let (x, y) = (v.x + v.w / 2, v.y + v.h / 2);
+    app.mouse(mouse(MouseEventKind::ScrollUp, x, y));
+    assert!(app.map.scale() > 1.0);
+    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
+    assert!(app.map.zoom.is_none());
+}
+
 /// The labels of the map's message with `subject`, and whether it is in
 /// the Inbox.
 fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {
