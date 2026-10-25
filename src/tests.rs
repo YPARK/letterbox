@@ -5011,8 +5011,9 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("Map · words and people"), "{screen}");
     assert!(screen.contains("◆  Grant"), "{screen}");
+    // No sidebar beside it: what it would say, the map says itself.
     assert!(
-        screen.contains(" MAP") && screen.contains("Every cluster"),
+        !screen.contains(" DEMO") && !screen.contains("Every cluster"),
         "{screen}"
     );
     assert!(screen.contains("% faithful"), "{screen}");
@@ -5077,28 +5078,19 @@ fn the_map_is_narrowed_to_a_cluster_and_listed() {
     assert!(group.members.contains(&app.map.picked().unwrap()));
     press(&mut app, &["<esc>"]);
     assert_eq!(app.map.focused, crate::map::Focused::All);
-    // The Grant cluster in the sidebar: in the map it narrows it, in the
-    // list it lists it.
+    // Grant's anchor clicked narrows the map to it, and the list lists it.
     let grant = app
-        .rows
+        .map
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .groups
         .iter()
-        .position(|r| match r {
-            app::Row::Cluster(id) => {
-                app.map
-                    .snapshot
-                    .as_ref()
-                    .unwrap()
-                    .group(*id)
-                    .unwrap()
-                    .label
-                    .as_deref()
-                    == Some("Grant")
-            }
-            _ => false,
-        })
-        .expect("Grant in the sidebar");
-    click_at(&mut app, app::Target::Row(grant));
-    assert!(matches!(app.map.focused, crate::map::Focused::Cluster(_)));
+        .find(|g| g.label.as_deref() == Some("Grant"))
+        .expect("Grant on the map")
+        .id;
+    click_at(&mut app, app::Target::Anchor(grant));
+    assert_eq!(app.map.focused, crate::map::Focused::Cluster(grant));
     press(&mut app, &["<m-l>"]);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     assert_eq!(app.folder_name(), "Grant");
@@ -5565,15 +5557,19 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
     app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x - 20, 10));
     assert!(!app.resizing);
     assert_eq!(divider(&mut app), x - 20, "the message twenty wider");
+    // The map keeps its width too.
+    press(&mut app, &["<m-g>"]);
+    assert_eq!(divider(&mut app), x - 20);
+    press(&mut app, &["<m-l>"]);
     // Not past what leaves the list room.
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x - 20, 10));
     app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 10));
     app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, 10));
     let narrowest = divider(&mut app);
-    assert!(narrowest > 24, "{narrowest}");
-    // The map keeps it too.
-    press(&mut app, &["<m-g>"]);
-    assert_eq!(divider(&mut app), narrowest);
+    assert!(
+        narrowest >= 24 + 24,
+        "past the sidebar, the list 24 wide: {narrowest}"
+    );
 }
 
 /// The labels of the map's message with `subject`, and whether it is in

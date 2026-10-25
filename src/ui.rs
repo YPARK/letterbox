@@ -57,15 +57,17 @@ pub fn panes(width: u16, focus: Focus) -> [u16; 3] {
     }
 }
 
-/// The panes' widths with the map in the middle: as `panes`, but the map
-/// wider than a list, as wide as the message read where there is room.
+/// The panes' widths with the map in the middle: no sidebar, for the map
+/// shows what it would, its clusters and labels, on itself; the map in its
+/// room and the list's, as wide as the message read where there is room.
 pub fn map_panes(width: u16, focus: Focus) -> [u16; 3] {
     match panes(width, focus) {
         [side, list, read] if list > 0 && read > 0 => {
             let map = ((list + read) / 2).max(list);
-            [side, map, list + read - map]
+            [0, side + map, list + read - map]
         }
-        other => other,
+        [_, _, read] if read == width => [0, 0, width],
+        _ => [0, width, 0],
     }
 }
 

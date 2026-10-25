@@ -202,7 +202,7 @@ trash = "Deleted Items"
 ## The map
 
 `M-g` (⌘G or Super+G where the terminal passes it on, or a click on Map
-at the top right) shows a second way into your mail, in the list's place: every
+at the top right) shows a second way into your mail, in place of the sidebar and the list: every
 message of every account laid out as a map, near what it is about and
 who it is from, in clusters, coloured by how they are related. Filing a
 message is moving it onto a cluster; letterbox learns from what you file
@@ -235,9 +235,10 @@ and `p` go from one to the next, newest first, and `esc` lets it go.
 by a key, kept open to change more: `w` lays it out by words and people,
 by words alone or by people alone; `t` shows all of it, this week's or
 today's; `r` hides read mail, `s` the mail you sent, and `n` dims the
-clusters with nothing new. The
-sidebar lists the clusters too, and the messages that fit nowhere; `M-l`
-lists the one picked.
+clusters with nothing new. The map has no sidebar beside it, as its
+clusters and labels are on it; `tab` goes between it and the message
+read. In the list, the sidebar lists the clusters too, and the messages
+that fit nowhere; `M-l` lists the cluster the map is narrowed to.
 
 `m` moves the message picked onto a cluster: `enter` on a message of
 it, or a click on its anchor. It is given the cluster's label and taken

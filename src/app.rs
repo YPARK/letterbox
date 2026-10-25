@@ -2439,6 +2439,14 @@ impl App {
                 self.narrow();
             }
             Act::Back => {}
+            // The map has no sidebar: between it and the message read.
+            Act::NextPane | Act::PreviousPane if self.map.mode == Mode::Map => {
+                self.focus = if self.focus == Focus::List && self.reading.is_some() {
+                    Focus::Reader
+                } else {
+                    Focus::List
+                };
+            }
             Act::NextPane => {
                 self.focus = match self.focus {
                     Focus::Side => Focus::List,
@@ -3939,6 +3947,15 @@ impl App {
     fn show_list(&mut self) {
         if self.map.mode == Mode::Map {
             self.looked_now();
+            // What the map was narrowed to is what is listed.
+            let narrowed = match self.map.focused {
+                Focused::Cluster(id) => Some(Row::Cluster(id)),
+                Focused::Loners => Some(Row::Loners),
+                Focused::All => None,
+            };
+            if let Some(i) = narrowed.and_then(|n| self.rows.iter().position(|r| *r == n)) {
+                self.row = i;
+            }
         }
         self.map.mode = Mode::List;
         if self.focus == Focus::Reader && !self.side_by_side {
