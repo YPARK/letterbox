@@ -2375,6 +2375,9 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "list_messages",
             "search_messages",
             "read_message",
+            "nearest_messages",
+            "suggest_label",
+            "would_throw_away",
             "mark_message"
         ]
     );
@@ -8918,4 +8921,118 @@ fn what_a_message_answers_is_read_from_its_headers() {
     assert_eq!(r.read_as, 2, "read again from older mail");
     let items = crate::imap::indexed_items(false);
     assert!(items.contains("IN-REPLY-TO") && items.contains("REFERENCES"));
+}
+
+// ---- the map, for an agent ----
+
+#[test]
+fn an_agent_asks_what_is_near_a_message_where_it_would_go_and_whether_it_would_be_thrown_away() {
+    use serde_json::json;
+    let mut server = crate::mcp::Server::new(std::path::Path::new("/nowhere"), true).unwrap();
+    // Listed as read only.
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .unwrap();
+    for name in ["nearest_messages", "suggest_label", "would_throw_away"] {
+        let tool = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} listed"));
+        assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+    }
+    let page = call(&mut server, "list_messages", json!({ "limit": 50 }));
+    let r01 = page["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["subject"].as_str().unwrap_or_default().contains("R01"))
+        .expect("the R01 letter in the Inbox")["uid"]
+        .clone();
+    // Near it: the grant's letters, nearest first.
+    let near = call(
+        &mut server,
+        "nearest_messages",
+        json!({ "uid": r01, "limit": 5 }),
+    );
+    assert_eq!(near["isError"], false, "{near}");
+    let nearest = near["structuredContent"]["nearest"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(nearest.len(), 5);
+    let degrees: Vec<f64> = nearest
+        .iter()
+        .map(|m| m["degrees"].as_f64().unwrap())
+        .collect();
+    assert!(degrees.windows(2).all(|w| w[0] <= w[1]), "{degrees:?}");
+    assert!(
+        nearest
+            .iter()
+            .any(|m| m["labels"].as_array().unwrap().iter().any(|l| l == "Grant")),
+        "{nearest:?}"
+    );
+    assert!(
+        nearest
+            .iter()
+            .all(|m| m["uid"].is_u64() && m["folder"].is_string())
+    );
+    // Where it would go, and the labels nearest it.
+    let sug = call(&mut server, "suggest_label", json!({ "uid": r01 }));
+    let labels = sug["structuredContent"]["labels"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!labels.is_empty() && labels[0]["degrees"].is_f64(), "{sug}");
+    if let Some(go) = sug["structuredContent"]["would_go_to"].as_str() {
+        assert_eq!(labels[0]["name"], go);
+    }
+    // Nothing taught yet: it says so, and throws nothing away.
+    let thrown = call(&mut server, "would_throw_away", json!({ "uid": r01 }));
+    let t = &thrown["structuredContent"];
+    assert_eq!(t["ready"], false, "{thrown}");
+    assert_eq!(t["would_throw_away"], false);
+    assert!(t["odds"].is_f64());
+    // One not there: why not.
+    let none = call(&mut server, "nearest_messages", json!({ "uid": 999_999 }));
+    assert_eq!(none["isError"], true);
+}
+
+#[test]
+fn the_index_read_only_reads_all_of_it_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let (a, b) = (record("a", "Notes on the engine"), record("b", "Photo 51"));
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![Cached::Upsert(Box::new(a.clone()))])
+            .unwrap();
+        index.teach(&a.key, false).unwrap();
+        index.flush().unwrap();
+    }
+    let files = |d: &std::path::Path| {
+        let mut f: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        f.sort();
+        f
+    };
+    let before = files(dir.path());
+    let mut read = Index::read_only(dir.path(), &id);
+    assert!(read.records.contains_key(&a.key));
+    assert_eq!(read.filter.kept, 1);
+    // Changed in memory only.
+    read.cache(vec![Cached::Upsert(Box::new(b.clone()))])
+        .unwrap();
+    read.flush().unwrap();
+    drop(read);
+    assert_eq!(files(dir.path()), before, "nothing written");
+    assert!(
+        !Index::open_with(dir.path(), &id)
+            .records
+            .contains_key(&b.key)
+    );
 }

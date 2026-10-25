@@ -6,7 +6,9 @@
 //!
 //! Each account's store is opened as it is first asked of, and kept open.
 //! No message is sent, moved or deleted here; reading one does not mark it
-//! read.
+//! read. The map's index is read, never written, as letterbox may be
+//! writing it: what is near a message, where it would be filed, and
+//! whether it would be thrown away.
 
 use crate::config::{self, Account};
 use crate::mail::{self, Folder, Summary};
@@ -36,6 +38,16 @@ struct Opened {
 
 pub struct Server {
     accounts: Vec<Opened>,
+    demo: bool,
+    /// The map's index and what it makes, read as it is first asked of; or
+    /// why it cannot be.
+    map: Option<Result<Mapped, String>>,
+}
+
+/// The map's index, read only, and the snapshot it makes.
+struct Mapped {
+    index: crate::index::Index,
+    snapshot: crate::map::Snapshot,
 }
 
 impl Server {
@@ -57,7 +69,11 @@ impl Server {
                 })
                 .collect()
         };
-        Ok(Server { accounts })
+        Ok(Server {
+            accounts,
+            demo,
+            map: None,
+        })
     }
 
     /// Answer messages on stdin until it closes.
@@ -171,6 +187,65 @@ impl Server {
         Ok(opened.store.as_mut().expect("opened above"))
     }
 
+    /// The map's index, read only, and its snapshot: the demo's made from
+    /// its mail; read as it is first asked of.
+    fn mapped(&mut self) -> anyhow::Result<&Mapped> {
+        if self.map.is_none() {
+            let made = self.read_map().map_err(|e| format!("{e:#}"));
+            self.map = Some(made);
+        }
+        match self.map.as_ref().expect("read above") {
+            Ok(m) => Ok(m),
+            Err(e) => bail!("{e}"),
+        }
+    }
+
+    fn read_map(&mut self) -> anyhow::Result<Mapped> {
+        let index = if self.demo {
+            let shared = std::sync::Mutex::new(crate::index::Index::memory());
+            let mut twin = self.store(None)?.twin().context("the demo's mail")?;
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let now = jiff::Timestamp::now().as_second();
+            crate::index::sync::pass(twin.as_mut(), &shared, now, &stop, &mut |_| {})?;
+            shared.into_inner().unwrap_or_else(|e| e.into_inner())
+        } else {
+            // Its key in a vault with a key file is read without asking.
+            if !crate::vault::is_open() {
+                let _ = crate::vault::unlock_by_key();
+            }
+            crate::index::Index::read(&crate::index::key::dir(), secret::find)?
+                .context("the map is not begun: open letterbox and press M to begin it")?
+        };
+        let snapshot = crate::map::compute(crate::map::input(
+            &index,
+            crate::index::Lens::Both,
+            None,
+            None,
+            false,
+        ));
+        Ok(Mapped { index, snapshot })
+    }
+
+    /// The message `uid` of `folder` of the account named, by its place in
+    /// the map.
+    fn on_map(&mut self, account: Option<&str>, folder: &str, uid: u32) -> anyhow::Result<usize> {
+        let ident = self.store(account)?.ident();
+        let m = self.mapped()?;
+        m.index
+            .key_at(&ident, folder, uid)
+            .and_then(|k| m.snapshot.find(&k))
+            .with_context(|| format!("message {uid} of {folder} is not on the map yet"))
+    }
+
+    /// The account named for the store known as `ident`.
+    fn name_of(&mut self, ident: &str) -> String {
+        let names: Vec<String> = self.accounts.iter().map(|a| a.name.clone()).collect();
+        names
+            .into_iter()
+            .find(|n| self.store(Some(n)).is_ok_and(|s| s.ident() == ident))
+            .unwrap_or_else(|| ident.to_string())
+    }
+
     fn tool(&mut self, name: &str, args: &Value) -> anyhow::Result<Value> {
         let text = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
         let number = |k: &str| args.get(k).and_then(Value::as_u64).map(|n| n as usize);
@@ -207,6 +282,76 @@ impl Server {
                     "shown": shown,
                     "messages": page.summaries.iter().map(summary).collect::<Vec<_>>(),
                     "more": offset + shown < page.total as usize,
+                }))
+            }
+            "nearest_messages" => {
+                let uid = number("uid").context("give the message's uid")? as u32;
+                let limit = number("limit").unwrap_or(10).clamp(1, 50);
+                let i = self.on_map(account.as_deref(), &folder, uid)?;
+                let near: Vec<(crate::map::Dot, f32)> = {
+                    let s = &self.mapped()?.snapshot;
+                    s.model
+                        .nearest(i, limit)
+                        .into_iter()
+                        .map(|(j, d)| (s.dots[j].clone(), d))
+                        .collect()
+                };
+                let mut nearest = Vec::new();
+                for (d, degrees) in near {
+                    let place = d.places.first().cloned();
+                    nearest.push(json!({
+                        "account": self.name_of(&d.key.account),
+                        "folder": place.as_ref().map(|p| p.folder.clone()),
+                        "uid": place.map(|p| p.uid),
+                        "from": mail::clean(&d.from),
+                        "subject": mail::clean(&d.subject),
+                        "date": d.date,
+                        "labels": d.labels,
+                        "degrees": (degrees * 10.0).round() / 10.0,
+                    }));
+                }
+                Ok(json!({ "nearest": nearest }))
+            }
+            "suggest_label" => {
+                let uid = number("uid").context("give the message's uid")? as u32;
+                let i = self.on_map(account.as_deref(), &folder, uid)?;
+                let s = &self.mapped()?.snapshot;
+                let go = s.suggestion(i).map(str::to_string);
+                let mut labels: Vec<(String, f32)> = s
+                    .model
+                    .label_vectors
+                    .values()
+                    .map(|(name, v)| (name.clone(), crate::model::degrees(&s.model.vectors[i], v)))
+                    .collect();
+                labels.sort_by(|a, b| {
+                    let first = |n: &str| Some(n) != go.as_deref();
+                    first(&a.0).cmp(&first(&b.0)).then(a.1.total_cmp(&b.1))
+                });
+                labels.truncate(5);
+                Ok(json!({
+                    "would_go_to": go,
+                    "labels": labels
+                        .into_iter()
+                        .map(|(name, d)| json!({ "name": name, "degrees": (d * 10.0).round() / 10.0 }))
+                        .collect::<Vec<_>>(),
+                }))
+            }
+            "would_throw_away" => {
+                let uid = number("uid").context("give the message's uid")? as u32;
+                let i = self.on_map(account.as_deref(), &folder, uid)?;
+                let m = self.mapped()?;
+                let key = &m.snapshot.dots[i].key;
+                let r = m.index.records.get(key).context("not in the index")?;
+                let f = &m.index.filter;
+                let tokens = crate::filter::Filter::tokens(r, &m.index.known());
+                let odds = f.odds(&tokens);
+                Ok(json!({
+                    "odds": odds,
+                    "ready": f.ready(),
+                    "would_throw_away": f.ready() && odds >= crate::filter::SURE,
+                    "sure_at": crate::filter::SURE,
+                    "why": f.why(&tokens),
+                    "taught": { "thrown": f.thrown, "kept": f.kept },
                 }))
             }
             "search_messages" => {
@@ -382,6 +527,40 @@ fn tools() -> Value {
                 "uid": { "type": "integer" },
                 "from_char": { "type": "integer", "minimum": 0, "default": 0 },
                 "max_chars": { "type": "integer", "minimum": 1, "maximum": 200000, "default": 20000 }
+            } },
+            "annotations": read_only
+        },
+        {
+            "name": "nearest_messages",
+            "title": "Messages near one",
+            "description": "The messages nearest one, as letterbox's map reads them: by what they are about and who they are from, nearest first, each with its account, folder, uid, labels and how far it is, in degrees. The map's index is read, as letterbox last kept it.",
+            "inputSchema": { "type": "object", "required": ["uid"], "properties": {
+                "account": account,
+                "folder": folder,
+                "uid": { "type": "integer" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
+            } },
+            "annotations": read_only
+        },
+        {
+            "name": "suggest_label",
+            "title": "Where a message would be filed",
+            "description": "The label a message not yet filed would go under, as letterbox's map suggests it, and the labels nearest it by what it is about, each with how far it is, in degrees.",
+            "inputSchema": { "type": "object", "required": ["uid"], "properties": {
+                "account": account,
+                "folder": folder,
+                "uid": { "type": "integer" }
+            } },
+            "annotations": read_only
+        },
+        {
+            "name": "would_throw_away",
+            "title": "Whether a message would be thrown away",
+            "description": "How likely the user is to throw a message away, as letterbox has learnt from what they threw away and kept; whether it has learnt enough to say, whether it is sure enough, and the few things that weigh most.",
+            "inputSchema": { "type": "object", "required": ["uid"], "properties": {
+                "account": account,
+                "folder": folder,
+                "uid": { "type": "integer" }
             } },
             "annotations": read_only
         },

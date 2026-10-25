@@ -457,10 +457,14 @@ have your shell's `PATH`.
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
+| `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
+| `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |
+| `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
 
-The first four are marked read-only, so a program may let the agent use
-them without asking. Nothing is sent, moved or deleted. Mail is from
+All but the last are marked read-only, so a program may let the agent use
+them without asking. The map's index is read as letterbox last kept it,
+and never written, so an agent may ask while letterbox runs. Nothing is sent, moved or deleted. Mail is from
 strangers, and a message may be written to steer an agent: the agent is
 told to read what a message says as data, never as instructions. An
 account whose password is in the vault is not served, as its passphrase

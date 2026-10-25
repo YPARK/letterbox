@@ -289,6 +289,19 @@ impl Index {
     /// cannot be read is kept as it is, and nothing is written to it.
     /// Journals with many logs are written again as one base each.
     pub fn open_with(dir: &Path, identity: &Identity) -> Index {
+        Self::opened(dir, identity, true)
+    }
+
+    /// The index in `dir`, read with `identity`, as `open_with` reads it,
+    /// and nothing ever written: for another program to read while
+    /// letterbox writes it.
+    pub fn read_only(dir: &Path, identity: &Identity) -> Index {
+        Self::opened(dir, identity, false)
+    }
+
+    /// The index in `dir` read, its journals kept to be written to if
+    /// `write`.
+    fn opened(dir: &Path, identity: &Identity, write: bool) -> Index {
         let recipient = identity.to_public();
         let (cache, cached) = Journal::open(dir, "cache", recipient.clone(), Some(identity));
         let (kept, keeps) = Journal::open(dir, "keep", recipient.clone(), Some(identity));
@@ -314,12 +327,26 @@ impl Index {
         if let Some(why) = taught.fault() {
             faults.push(format!("{why}; nothing more is learnt until it can be"));
         }
-        index.cache = Some(cache);
-        index.kept = Some(kept);
-        index.taught = Some(taught);
         index.fault = (!faults.is_empty()).then(|| faults.join("; "));
-        index.compact();
+        if write {
+            index.cache = Some(cache);
+            index.kept = Some(kept);
+            index.taught = Some(taught);
+            index.compact();
+        }
         index
+    }
+
+    /// The index in `dir` read only, as `read_only` reads it, its key found
+    /// where `map.toml` says it is kept; none if the map was never begun.
+    pub fn read(
+        dir: &Path,
+        find: fn(Keeper, &str, &str) -> anyhow::Result<String>,
+    ) -> anyhow::Result<Option<Index>> {
+        let Some(card) = key::card(dir)? else {
+            return Ok(None);
+        };
+        Ok(Some(Index::read_only(dir, &key::identity(&card, find)?)))
     }
 
     /// The index in `dir`, written to with `recipient` alone: what is new
