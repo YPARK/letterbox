@@ -139,6 +139,7 @@ letterbox search grant report --account Work
 | `t` | in the map, all of it, this week's, or today's |
 | `C` | in the map, colour by what it is about, by how near the message picked, or by its state |
 | `r` | in the map, show or hide read mail; elsewhere, say which keys reply |
+| `S` | in the map, show or hide the mail you sent, drawn ▹ beside the mail it answers |
 | `!` | in the map, dim the areas with nothing new |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
 | `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
@@ -185,8 +186,10 @@ and says what else would go there. `M-l` goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 
-Each message is a cell: `●` unread, `•` read, `⚑` flagged, `▪` labelled
-by you, and a digit for several in one. Mail come since the map was last
+Each message is a cell: `●` unread, `•` read, `▹` sent by you, `⚑`
+flagged, `▪` labelled by you, and a digit for several in one. Mail you
+sent is placed by whom it went to, as mail come in is by whom it is
+from, so an answer lies beside the mail it answers. Mail come since the map was last
 looked at, and still in the Inbox, is drawn reversed. Its colour is what
 it is about, at one lightness for every hue; `C` turns it to how near
 the message picked, by angle, or to its state. Each label has an anchor,
@@ -202,7 +205,8 @@ the message read beside the map follows, with its labels, the cluster it
 is in, and the five messages nearest it. `[` and `]` narrow the map to
 one cluster after another. `w` lays it out by words and people, by words
 alone or by people alone; `t` shows all of it, this week's or today's;
-`r` hides read mail, and `!` dims the clusters with nothing new. The
+`r` hides read mail, `S` the mail you sent, and `!` dims the clusters
+with nothing new. The
 sidebar lists the clusters too, and the messages that fit nowhere; `M-l`
 lists the one picked.
 

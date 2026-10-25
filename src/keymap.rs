@@ -48,6 +48,8 @@ pub enum Act {
     /// `r`: in the map, read mail shown or hidden; elsewhere, as it replies
     /// in other mail programs, says which keys do.
     ShowRead,
+    /// In the map, mail sent from here shown or hidden.
+    ShowSent,
     /// The map, or the list, in the middle pane.
     MapView,
     ListView,
@@ -361,6 +363,13 @@ pub const KEYS: &[Binding] = &[
         hint: "r",
         foot: &[(Map, "read")],
         help: "in the map, show or hide read mail; elsewhere, say which keys reply",
+    },
+    Binding {
+        keys: &[("S", ShowSent)],
+        name: "S",
+        hint: "S",
+        foot: &[(Map, "sent")],
+        help: "in the map, show or hide the mail you sent, drawn ▹ beside the mail it answers",
     },
     Binding {
         keys: &[("v", Mark)],

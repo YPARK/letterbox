@@ -4391,7 +4391,7 @@ fn model_of(index: &Index, lens: Lens) -> crate::model::Model {
     let given: Vec<crate::model::Given> = index
         .records
         .values()
-        .map(|r| (r, index.labels(&r.key)))
+        .map(|r| (r, index.labels(&r.key), index.system(&r.key).sent))
         .collect();
     crate::model::Model::build(&given, &index.keep.not_it, lens)
 }
@@ -4449,6 +4449,46 @@ fn the_grant_mail_clusters_together() {
         again.clusters[again.of[at_subject(&index, &m, "Aims page, third pass")]].id,
         c.clusters[aims].id
     );
+}
+
+#[test]
+fn an_answer_lies_with_the_mail_it_answers_not_with_the_rest_sent() {
+    let index = demo_index();
+    let mira = "mira.okafor@uni.example";
+    let reply = "Re: Biosketch format changed again";
+    let people = model_of(&index, Lens::People);
+    let r = at_subject(&index, &people, reply);
+    assert!(index.system(&people.keys[r]).sent);
+    let near = people.nearest(r, 3);
+    let from = |i: usize| index.records[&people.keys[i]].address.as_str();
+    assert!(
+        near.iter().all(|&(i, _)| from(i) == mira),
+        "{:?}",
+        near.iter().map(|&(i, _)| from(i)).collect::<Vec<_>>()
+    );
+    // Read by both, it is among Mira's mail, near what it answers.
+    let both = model_of(&index, Lens::Both);
+    let r = at_subject(&index, &both, reply);
+    let answered = at_subject(&index, &both, "Biosketch format changed again");
+    let near = both.nearest(r, 2);
+    assert_eq!(index.records[&both.keys[near[0].0]].address, mira);
+    assert!(near.iter().any(|&(i, _)| i == answered));
+    // Mail sent to different people is not drawn together for being sent.
+    for m in [&people, &both] {
+        let sent: Vec<usize> = (0..m.len())
+            .filter(|&i| index.system(&m.keys[i]).sent)
+            .collect();
+        assert!(sent.len() >= 4);
+        for &i in &sent {
+            let (j, _) = m.nearest(i, 1)[0];
+            assert!(
+                !sent.contains(&j),
+                "{} by {}",
+                index.records[&m.keys[i]].subject,
+                index.records[&m.keys[j]].subject
+            );
+        }
+    }
 }
 
 #[test]
@@ -4603,7 +4643,9 @@ fn filing_one_grant_message_makes_the_others_suggestions() {
         .map(|&(i, _)| index.records[&m.keys[i]].subject.as_str())
         .collect();
     assert!(!said.contains(&GRANT_MAIL[0]), "filed, not suggested");
-    for s in [GRANT_MAIL[1], GRANT_MAIL[2]] {
+    // The budget, and your answer to Mira about the biosketch; not the
+    // aims page, which lies on the edge of what is near.
+    for s in [GRANT_MAIL[2], "Re: Biosketch format changed again"] {
         assert!(said.contains(&s), "{s} in {said:?}");
     }
     // Your answer to Mira about the biosketch is the grant's too.

@@ -1232,7 +1232,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Focused::All => {}
     }
     head.push(Span::styled(what, dim));
-    let key = "   ● unread  • read  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
+    let key = "   ● unread  • read  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
     let used: usize = head.iter().map(|h| h.content.width()).sum();
     if used + key.width() <= legend.width as usize {
         head.push(Span::styled(key, Style::new().fg(t.faint)));
@@ -1353,6 +1353,8 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             '⚑'
         } else if d.mine {
             '▪'
+        } else if d.system.sent {
+            '▹'
         } else if !d.flags.seen {
             '●'
         } else {
@@ -1532,15 +1534,18 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             Target::Anchor(g.id),
         ));
     }
-    // The message picked, named beside it: its sender and its subject.
+    // The message picked, named beside it: its sender, or whom it was
+    // sent to, and its subject.
     if let Some(p) = picked
         && let Some(&(x, y)) = app.map.cells.get(&p)
     {
         let d = &s.dots[p];
-        let from = if d.from.is_empty() {
-            &d.address
+        let from = if d.system.sent {
+            format!("to {}", d.to.join(", "))
+        } else if d.from.is_empty() {
+            d.address.clone()
         } else {
-            &d.from
+            d.from.clone()
         };
         let said = format!(" {from} — {} ", d.subject);
         let room_right = canvas.right().saturating_sub(x + 1) as usize;

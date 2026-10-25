@@ -89,8 +89,10 @@ pub fn bare_subject(subject: &str) -> &str {
     }
 }
 
-/// A message's tokens, and what each weighs, as `lens` reads it.
-pub fn tokens(r: &Record, lens: Lens) -> Vec<(String, f32)> {
+/// A message's tokens, and what each weighs, as `lens` reads it. The
+/// people of mail sent from here are those it went to, as the sender is
+/// of mail come in, so that an answer lies with the mail it answers.
+pub fn tokens(r: &Record, sent: bool, lens: Lens) -> Vec<(String, f32)> {
     let mut out: Vec<(String, f32)> = Vec::new();
     let mut add = |t: String, w: f32| {
         if !out.iter().any(|(x, _)| *x == t) {
@@ -101,13 +103,21 @@ pub fn tokens(r: &Record, lens: Lens) -> Vec<(String, f32)> {
         add(format!("list:{}", r.list), 3.0);
     }
     if lens != Lens::Words {
-        if !r.address.is_empty() {
-            add(format!("from:{}", r.address), 2.5);
-            if let Some((_, domain)) = r.address.rsplit_once('@') {
+        let (from, copied): (&[String], Vec<&String>) = if sent {
+            (&r.to, r.cc.iter().collect())
+        } else {
+            (
+                std::slice::from_ref(&r.address),
+                r.to.iter().chain(&r.cc).collect(),
+            )
+        };
+        for a in from.iter().filter(|a| !a.is_empty()) {
+            add(format!("from:{a}"), 2.5);
+            if let Some((_, domain)) = a.rsplit_once('@') {
                 add(format!("dom:{domain}"), 1.0);
             }
         }
-        for a in r.to.iter().chain(&r.cc) {
+        for a in copied {
             if *a != r.address {
                 add(format!("to:{a}"), 0.8);
             }
@@ -193,8 +203,9 @@ pub struct Model {
     pub label_vectors: BTreeMap<String, (String, Vector)>,
 }
 
-/// One message, as the model is given it: its record and its labels.
-pub type Given<'a> = (&'a Record, Vec<String>);
+/// One message, as the model is given it: its record, its labels, and
+/// whether it was sent from here.
+pub type Given<'a> = (&'a Record, Vec<String>, bool);
 
 impl Model {
     /// The model of `messages`, in the order given (the index's, by key),
@@ -203,8 +214,8 @@ impl Model {
     pub fn build(messages: &[Given], not_it: &BTreeSet<(Key, String)>, lens: Lens) -> Model {
         let tokens: Vec<Vec<(u64, String, f32)>> = messages
             .iter()
-            .map(|(r, _)| {
-                tokens(r, lens)
+            .map(|(r, _, sent)| {
+                tokens(r, *sent, lens)
                     .into_iter()
                     .map(|(t, w)| (bucket(&t), t, w))
                     .collect()
@@ -255,7 +266,7 @@ impl Model {
         // What each label is: the mean of its messages, and the tokens seen
         // in them, by how rare each is.
         let mut members: BTreeMap<String, (String, Vec<usize>)> = BTreeMap::new();
-        for (i, (_, labels)) in messages.iter().enumerate() {
+        for (i, (_, labels, _)) in messages.iter().enumerate() {
             for l in labels {
                 members
                     .entry(fold(l))
@@ -279,7 +290,7 @@ impl Model {
                     .collect(),
             );
         }
-        for (i, (record, labels)) in messages.iter().enumerate() {
+        for (i, (record, labels, _)) in messages.iter().enumerate() {
             let mut v = vectors[i];
             let mine: BTreeSet<String> = labels.iter().map(|l| fold(l)).collect();
             if mine.is_empty() {
@@ -311,11 +322,15 @@ impl Model {
         }
         Model {
             lens,
-            keys: messages.iter().map(|(r, _)| r.key.clone()).collect(),
+            keys: messages.iter().map(|(r, _, _)| r.key.clone()).collect(),
             vectors,
             words,
-            senders: messages.iter().map(|(r, _)| r.from.clone()).collect(),
-            labels: messages.iter().map(|(_, l)| l.clone()).collect(),
+            // Mail sent from here names no cluster by its sender.
+            senders: messages
+                .iter()
+                .map(|(r, _, sent)| if *sent { String::new() } else { r.from.clone() })
+                .collect(),
+            labels: messages.iter().map(|(_, l, _)| l.clone()).collect(),
             label_vectors,
         }
     }

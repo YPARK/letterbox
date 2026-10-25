@@ -2370,6 +2370,14 @@ impl App {
                     "read mail shown".to_string()
                 };
             }
+            Act::ShowSent => {
+                self.map.hide_sent = !self.map.hide_sent;
+                self.status = if self.map.hide_sent {
+                    "sent mail hidden: S shows it".to_string()
+                } else {
+                    "sent mail shown".to_string()
+                };
+            }
             Act::Mark => self.mark_cluster(),
             Act::Move
             | Act::NewLabel

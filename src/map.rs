@@ -111,6 +111,8 @@ pub struct Dot {
     pub key: Key,
     pub from: String,
     pub address: String,
+    /// The addresses it went to.
+    pub to: Vec<String>,
     pub subject: String,
     pub preview: String,
     pub message_id: String,
@@ -253,7 +255,7 @@ pub fn compute(input: Input) -> Snapshot {
     let given: Vec<model::Given> = input
         .records
         .iter()
-        .map(|(r, labels, _, _)| (r, labels.clone()))
+        .map(|(r, labels, _, system)| (r, labels.clone(), system.sent))
         .collect();
     let model = Model::build(&given, &input.not_it, input.lens);
     let clustering = model::cluster(&model, &input.before, SEED);
@@ -277,6 +279,7 @@ pub fn compute(input: Input) -> Snapshot {
                 key: r.key.clone(),
                 from: r.from.clone(),
                 address: r.address.clone(),
+                to: r.to.clone(),
                 subject: r.subject.clone(),
                 preview: r.preview.clone(),
                 message_id: r.message_id.clone(),
@@ -442,6 +445,7 @@ pub struct Map {
     pub since: Since,
     pub colour: Colour,
     pub hide_read: bool,
+    pub hide_sent: bool,
     /// Whether areas with nothing new are dimmed.
     pub new_only: bool,
     /// When the map was looked at before this look, in seconds since 1970.
@@ -497,8 +501,9 @@ impl Map {
         dot.flags.seen && dot.date.is_some_and(|d| now - d > OLD)
     }
 
-    /// The messages drawn: all, but the read ones if they are hidden, and
-    /// those older than how far back the map goes.
+    /// The messages drawn: all, but the read ones if they are hidden, the
+    /// sent ones if they are, and those older than how far back the map
+    /// goes.
     pub fn shown(&self, now: i64) -> Vec<usize> {
         let Some(s) = &self.snapshot else {
             return Vec::new();
@@ -507,7 +512,9 @@ impl Map {
         (0..s.dots.len())
             .filter(|&i| {
                 let d = &s.dots[i];
-                !(self.hide_read && d.flags.seen) && d.date.unwrap_or(d.arrived) >= from
+                !(self.hide_read && d.flags.seen)
+                    && !(self.hide_sent && d.system.sent)
+                    && d.date.unwrap_or(d.arrived) >= from
             })
             .collect()
     }
