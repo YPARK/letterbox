@@ -7,7 +7,7 @@
 
 use crate::secret::Keeper;
 use age::secrecy::ExposeSecret;
-use age::x25519::{Identity, Recipient};
+use age::x25519::Identity;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -27,14 +27,6 @@ pub struct Card {
     pub version: u32,
     pub recipient: String,
     pub keeper: Keeper,
-}
-
-impl Card {
-    pub fn recipient(&self) -> anyhow::Result<Recipient> {
-        self.recipient
-            .parse()
-            .map_err(|e| anyhow::anyhow!("map.toml holds no key letterbox can use: {e}"))
-    }
 }
 
 /// `$LETTERBOX_MAP`, else `map` beside the vault, in its folder.

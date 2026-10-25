@@ -1109,6 +1109,9 @@ impl App {
         if let Answer::Drawn(snapshot) = reply.answer {
             return self.drawn_map(*snapshot);
         }
+        if let Answer::Relaid { version, lens, at } = reply.answer {
+            return self.relaid(version, lens, at);
+        }
         if let Answer::Fetched(got) = reply.answer {
             match got {
                 Ok(path) => {
@@ -1190,6 +1193,7 @@ impl App {
             | Answer::Fetched(_)
             | Answer::Mapping(_)
             | Answer::Drawn(_)
+            | Answer::Relaid { .. }
             | Answer::Realm { .. } => {}
             Answer::Filed { key, label, filed } => self.filed(a, key, label, filed),
             Answer::LabelRenamed { old, result } => match result {
@@ -2367,7 +2371,12 @@ impl App {
                 };
             }
             Act::Mark => self.mark_cluster(),
-            Act::Move | Act::NewLabel | Act::FileFirst | Act::FileAll | Act::NotIt => {
+            Act::Move
+            | Act::NewLabel
+            | Act::FileFirst
+            | Act::FileAll
+            | Act::NotIt
+            | Act::Relayout => {
                 self.status = "M-g shows the map, where mail is filed".to_string();
             }
             Act::MapView => self.show_map(),
@@ -3381,6 +3390,24 @@ impl App {
     /// Do what a key does in the map, with the focus on it; whether it
     /// was the map's to do.
     fn map_act(&mut self, act: Act) -> bool {
+        if self.map.preview.is_some() {
+            match act {
+                Act::Open => {
+                    self.keep_relayout();
+                    return true;
+                }
+                Act::Back => {
+                    self.map.preview = None;
+                    self.status = "the map as it was".to_string();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if act == Act::Relayout {
+            self.relayout();
+            return true;
+        }
         if self.map.moving.is_some() {
             match act {
                 Act::Open => {
@@ -4221,6 +4248,78 @@ impl App {
         }
         self.reload(a);
         self.map_pass(a);
+    }
+
+    /// Lay the map out again, off this thread, from where each message is,
+    /// to be shown before it is kept.
+    fn relayout(&mut self) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        if s.at.is_none() || self.map.relaying {
+            return;
+        }
+        self.map.relaying = true;
+        self.pending += 1;
+        self.status = "laying the map out again…".to_string();
+        let replies = self.replies_to.clone();
+        std::thread::spawn(move || {
+            let at = map::relayout(&s);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Relaid {
+                    version: s.version,
+                    lens: s.lens,
+                    at,
+                },
+            });
+        });
+    }
+
+    /// Show the map laid out again, if the snapshot it was laid out from is
+    /// still the one drawn.
+    fn relaid(&mut self, version: u64, lens: crate::index::Lens, at: Vec<crate::model::Point>) {
+        self.map.relaying = false;
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        if s.version != version || s.lens != lens {
+            self.status = "the map changed while it was laid out again: M-r again".to_string();
+            return;
+        }
+        let moved = map::moved(&s, &at);
+        let faith = crate::model::faithfulness(&s.model, &at);
+        self.status = format!(
+            "laid out again, {moved} moved, {:.0}% faithful: ⏎ keeps it, esc drops it",
+            faith * 100.0
+        );
+        self.map.preview = Some(at);
+    }
+
+    /// Keep the map as it was laid out again.
+    fn keep_relayout(&mut self) {
+        let (Some(s), Some(at)) = (self.map.snapshot.clone(), self.map.preview.take()) else {
+            return;
+        };
+        let layout = s
+            .model
+            .keys
+            .iter()
+            .zip(&at)
+            .map(|(k, p)| (k.clone(), p[0], p[1]))
+            .collect();
+        let kept = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(vec![crate::index::Kept::Layout {
+                lens: s.lens,
+                at: layout,
+            }]);
+        self.status = match kept {
+            Ok(()) => "the map, laid out again, kept".to_string(),
+            Err(e) => format!("the map cannot keep its layout: {e:#}"),
+        };
     }
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.

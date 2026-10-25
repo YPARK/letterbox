@@ -4673,7 +4673,9 @@ fn the_map_lays_out_every_message_with_its_clusters() {
         screen.contains(" MAP") && screen.contains("Every cluster"),
         "{screen}"
     );
-    assert!(screen.contains("colour is what it is about"), "{screen}");
+    assert!(screen.contains("% faithful"), "{screen}");
+    let wide = app::screen(&mut app, 220, 45);
+    assert!(wide.contains("colour is what it is about"), "{wide}");
     // The newest new message is picked, named beside it, and read beside
     // the map once the cursor rests.
     assert_eq!(
@@ -5194,4 +5196,120 @@ fn r_renames_the_label_picked_on_its_server() {
     // Outside the map, R renames an account, as it did.
     press(&mut app, &["<m-l>", "R"]);
     assert!(matches!(app.dialog, app::Dialog::Rename(0, _)));
+}
+
+// ---- laying the map out again ----
+
+#[test]
+fn m_r_lays_the_map_out_again_to_keep_or_drop() {
+    let mut app = demo_map();
+    let kept = |app: &App| app.index.lock().unwrap().keep.layouts[&Lens::Both].clone();
+    let before = kept(&app);
+    press(&mut app, &["<m-r>"]);
+    assert!(app.map.preview.is_some(), "{}", app.status);
+    assert!(app.status.contains("esc drops it"), "{}", app.status);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("laid out again"), "{screen}");
+    // Dropped, it is as it was.
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.preview.is_none());
+    assert_eq!(kept(&app), before);
+    // Kept, it is the map from now on.
+    press(&mut app, &["<m-r>", "<enter>"]);
+    assert!(app.map.preview.is_none());
+    assert!(app.status.contains("kept"), "{}", app.status);
+    let after = kept(&app);
+    assert_eq!(after.len(), before.len());
+    assert_ne!(after, before);
+    let s = app.map.snapshot.clone().unwrap();
+    let at = s.at.as_ref().unwrap();
+    let k = &s.model.keys[0];
+    assert_eq!((at[0][0], at[0][1]), after[k]);
+}
+
+#[test]
+fn faithfulness_below_seventy_percent_suggests_m_r() {
+    let mut app = demo_map();
+    let faith = app.map.snapshot.as_ref().unwrap().faithfulness.unwrap();
+    let screen = app::screen(&mut app, 160, 45);
+    let said = format!("{:.0}% faithful", faith * 100.0);
+    assert!(screen.contains(&said), "{said} in {screen}");
+    assert_eq!(
+        screen.contains("M-r lays it out again"),
+        faith < 0.7,
+        "{screen}"
+    );
+}
+
+/// The layouts `index` keeps, as their bits, by lens.
+fn layout_bits(index: &Index) -> Vec<(Lens, Vec<u32>)> {
+    index
+        .keep
+        .layouts
+        .iter()
+        .map(|(lens, at)| {
+            let bits = at
+                .values()
+                .flat_map(|&(x, y)| [x.to_bits(), y.to_bits()])
+                .collect();
+            (*lens, bits)
+        })
+        .collect()
+}
+
+#[test]
+fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_knows() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let mut once = demo_index();
+    let said = crate::map::rebuild(&mut once).unwrap();
+    assert!(said.contains("laid out 61 messages"), "{said}");
+    assert_eq!(once.keep.layouts.len(), 3, "a layout each lens");
+    let mut twice = demo_index();
+    crate::map::rebuild(&mut twice).unwrap();
+    assert_eq!(layout_bits(&once), layout_bits(&twice));
+
+    // From the servers: what they said is let go and read again; a label
+    // letterbox keeps, and a "not it", stay.
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        let demo = Demo::new();
+        let mut twin = demo.twin().unwrap();
+        let shared = Mutex::new(index);
+        sync_once(twin.as_mut(), &shared);
+        index = shared.into_inner().unwrap();
+        let key = index.records.keys().next().unwrap().clone();
+        index
+            .keep(vec![
+                Kept::Label {
+                    key: key.clone(),
+                    label: "Lab".into(),
+                    on: true,
+                },
+                Kept::NotIt {
+                    key,
+                    label: "Grant".into(),
+                },
+            ])
+            .unwrap();
+        index.forget_cache().unwrap();
+        assert!(index.records.is_empty());
+        let shared = Mutex::new(index);
+        sync_once(twin.as_mut(), &shared);
+        let mut index = shared.into_inner().unwrap();
+        crate::map::rebuild(&mut index).unwrap();
+        assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+    }
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(index.keep.labels.len(), 1);
+    assert_eq!(index.keep.not_it.len(), 1);
+    assert_eq!(index.keep.layouts.len(), 3);
+    assert!(
+        index
+            .keep
+            .layouts
+            .values()
+            .all(|at| at.len() == INBOX + 20 + 4 + 4)
+    );
 }

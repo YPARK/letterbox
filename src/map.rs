@@ -362,6 +362,74 @@ pub fn compute(input: Input) -> Snapshot {
     }
 }
 
+/// The map of `s` laid out again, begun from where each message is, and
+/// laid back onto the old by Procrustes: by the labelled messages, the
+/// labels' anchors, where there are three or more, else by all.
+pub fn relayout(s: &Snapshot) -> Vec<Point> {
+    let Some(old) = &s.at else {
+        return model::layout(&s.model, None, SEED);
+    };
+    let start: Vec<Option<Point>> = old.iter().copied().map(Some).collect();
+    let new = model::layout(&s.model, Some(&start), SEED);
+    let labelled: Vec<usize> = (0..s.dots.len())
+        .filter(|&i| !s.dots[i].labels.is_empty())
+        .collect();
+    let held: Vec<usize> = if labelled.len() >= 3 {
+        labelled
+    } else {
+        (0..s.dots.len()).collect()
+    };
+    let a: Vec<Point> = held.iter().map(|&i| new[i]).collect();
+    let b: Vec<Point> = held.iter().map(|&i| old[i]).collect();
+    model::procrustes(&a, &b, &new)
+}
+
+/// How many messages of `s` would move noticeably, laid out at `at`: by
+/// more than a twentieth of the map's breadth.
+pub fn moved(s: &Snapshot, at: &[Point]) -> usize {
+    let Some(old) = &s.at else {
+        return at.len();
+    };
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for p in old {
+        for d in 0..2 {
+            lo[d] = lo[d].min(p[d]);
+            hi[d] = hi[d].max(p[d]);
+        }
+    }
+    let breadth = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2)).sqrt();
+    old.iter()
+        .zip(at)
+        .filter(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() > breadth / 20.0)
+        .count()
+}
+
+/// Lay the map of `index` out again by every lens, from nothing, as the
+/// seed has it, and keep the layouts; what to say of it.
+pub fn rebuild(index: &mut Index) -> anyhow::Result<String> {
+    let mut said = Vec::new();
+    for lens in Lens::ALL {
+        let mut input = input(index, lens, None, true);
+        input.layout = None;
+        let s = compute(input);
+        if let Some(fresh) = s.fresh {
+            index.keep(vec![crate::index::Kept::Layout { lens, at: fresh }])?;
+        }
+        said.push(format!(
+            "{}, {:.0}% faithful",
+            lens.name(),
+            s.faithfulness.unwrap_or(1.0) * 100.0
+        ));
+    }
+    index.flush()?;
+    Ok(format!(
+        "laid out {} messages by the model {}: {}",
+        index.records.len(),
+        model::VERSION,
+        said.join("; ")
+    ))
+}
+
 /// The map as it is looked at.
 #[derive(Default)]
 pub struct Map {
@@ -397,6 +465,11 @@ pub struct Map {
     pub moving: Option<Vec<Key>>,
     /// The label last filed under, whose suggestions are shown.
     pub suggesting: Option<String>,
+    /// The map laid out again, shown to be kept or dropped: where each of
+    /// the snapshot's messages would be.
+    pub preview: Option<Vec<Point>>,
+    /// Whether it is being laid out again.
+    pub relaying: bool,
 }
 
 /// What is marked on the map: the messages of a cluster, or those in a

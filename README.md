@@ -144,6 +144,7 @@ letterbox search grant report --account Work
 | `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
 | `y` / `Y` / `-` | once filed, the label's first suggestion filed too, or all of them; `-` says the first is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `a`, `u` and `s` then act on all of it, `a` taking it out of the Inbox |
+| `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it |
 | `?` | all the keys |
 | `q` | quit |
 

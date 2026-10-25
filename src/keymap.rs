@@ -71,6 +71,8 @@ pub enum Act {
     FileFirst,
     FileAll,
     NotIt,
+    /// The map laid out again, to keep or drop once seen.
+    Relayout,
 }
 
 /// Where the foot's hints are for.
@@ -324,6 +326,13 @@ pub const KEYS: &[Binding] = &[
         hint: "y/Y",
         foot: &[(Map, "file too")],
         help: "once filed, the label's first suggestion filed too, or all of them; - says the first is not one, and the map learns it",
+    },
+    Binding {
+        keys: &[("M-r", Relayout)],
+        name: "M-r",
+        hint: "M-r",
+        foot: &[(Map, "lay out again")],
+        help: "in the map, lay it out again from where it is, and show what moved: ⏎ keeps it, esc drops it. Said when the map keeps under 70% of each message's nearest near it",
     },
     Binding {
         keys: &[("w", Lens)],

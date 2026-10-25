@@ -381,6 +381,18 @@ impl Index {
         folders.chain(records).collect()
     }
 
+    /// Let go of what the servers said, to be read from them again: the
+    /// cache written again as a base of nothing, `keep` left as it is.
+    pub fn forget_cache(&mut self) -> anyhow::Result<()> {
+        self.records.clear();
+        self.folders.clear();
+        self.version += 1;
+        if let Some(cache) = &mut self.cache {
+            cache.compact(&[])?;
+        }
+        Ok(())
+    }
+
     /// Why nothing is written to `keep`, if it could not be read.
     pub fn keep_fault(&self) -> Option<&str> {
         self.kept.as_ref().and_then(|k| k.fault())

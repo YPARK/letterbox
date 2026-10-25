@@ -1239,10 +1239,18 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(head)), legend);
     let explained = match s.faithfulness {
+        Some(_) if app.map.preview.is_some() => {
+            " laid out again, a trail from where each was: ⏎ keeps it, esc drops it".to_string()
+        }
+        Some(faith) if faith < 0.7 => format!(
+            " {:.0}% faithful: M-r lays it out again · {}",
+            faith * 100.0,
+            app.map.colour.explain()
+        ),
         Some(faith) => format!(
-            " {} · {:.0}% faithful",
-            app.map.colour.explain(),
-            faith * 100.0
+            " {:.0}% faithful · {}",
+            faith * 100.0,
+            app.map.colour.explain()
         ),
         None => format!(" {}", app.map.colour.explain()),
     };
@@ -1255,9 +1263,13 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             foot,
         );
     }
-    let Some(at) = &s.at else {
+    let Some(old) = &s.at else {
         return say(f, "laying the map out…");
     };
+    // Laid out again and not yet kept, it is drawn where it would be, with
+    // a trail from where each message was.
+    let preview = app.map.preview.clone().filter(|p| p.len() == old.len());
+    let at = preview.as_ref().unwrap_or(old);
     if shown.is_empty() {
         return say(
             f,
@@ -1272,10 +1284,12 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     // canvas, a column clear at each side.
     let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
     for &i in &shown {
-        x0 = x0.min(at[i][0]);
-        x1 = x1.max(at[i][0]);
-        y0 = y0.min(at[i][1]);
-        y1 = y1.max(at[i][1]);
+        for p in std::iter::once(at[i]).chain(preview.as_ref().map(|_| old[i])) {
+            x0 = x0.min(p[0]);
+            x1 = x1.max(p[0]);
+            y0 = y0.min(p[1]);
+            y1 = y1.max(p[1]);
+        }
     }
     let (w, h) = (canvas.width.saturating_sub(2).max(1), canvas.height.max(1));
     let cell = |p: [f32; 2]| -> (u16, u16) {
@@ -1313,6 +1327,23 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .flat_map(|r| r.keys.iter().filter_map(|k| s.find(k)))
         .collect();
     let buf = f.buffer_mut();
+    if preview.is_some() {
+        let trail = Style::new().fg(t.rule).bg(t.page);
+        for &i in &shown {
+            let (from, to) = (cell(old[i]), cell(at[i]));
+            let steps = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
+            for k in 1..steps {
+                let along = f32::from(k) / f32::from(steps);
+                let between = |a: u16, b: u16| {
+                    (f32::from(a) + along * (f32::from(b) - f32::from(a))).round() as u16
+                };
+                let (x, y) = (between(from.0, to.0), between(from.1, to.1));
+                if !app.map.drawn.contains_key(&(x, y)) {
+                    buf[(x, y)].set_char('·').set_style(trail);
+                }
+            }
+        }
+    }
     for (&(x, y), members) in &app.map.drawn {
         let first = picked.filter(|p| members.contains(p)).unwrap_or(members[0]);
         let d = &s.dots[first];

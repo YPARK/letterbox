@@ -8,14 +8,11 @@ mod config;
 mod demo;
 mod edit;
 mod imap;
-#[allow(dead_code)]
 mod index;
 mod keymap;
 mod mail;
 mod map;
 mod mcp;
-// Laying the map out again, which uses the rest, follows.
-#[allow(dead_code)]
 mod model;
 mod net;
 mod oauth;
@@ -115,6 +112,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// The map of every account's mail: lay it out again, or say its key
+    Map {
+        #[command(subcommand)]
+        action: MapAction,
+    },
     /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
     /// program, as Cursor or Claude Code, runs `letterbox mcp`
     Mcp,
@@ -171,6 +173,24 @@ enum AccountAction {
     },
     /// Call an account something else; only letterbox's name for it changes
     Rename { name: String, new: String },
+}
+
+#[derive(Subcommand)]
+enum MapAction {
+    /// Lay the map out again by every lens, from nothing, as its seed has
+    /// it: the same mail, the same map
+    Rebuild {
+        /// Read every account's mail again first: what the servers said is
+        /// let go, and what only letterbox knows is kept
+        #[arg(long)]
+        from_servers: bool,
+    },
+    /// The map's key: where it is kept
+    Key {
+        /// Print its secret, as age and rage read a key file
+        #[arg(long)]
+        export: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
@@ -642,6 +662,64 @@ fn command(args: &Args) -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
+        Some(Command::Map {
+            action: MapAction::Rebuild { from_servers },
+        }) => {
+            let mut index = if args.demo {
+                index::Index::memory()
+            } else {
+                if config::load(&args.config)?.iter().any(in_vault) {
+                    open_vault(false)?;
+                }
+                index::Index::open(
+                    &index::key::dir(),
+                    secret::keepers,
+                    secret::find,
+                    secret::store,
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            };
+            if *from_servers {
+                index.forget_cache()?;
+            }
+            if *from_servers || index.records.is_empty() {
+                let shared = std::sync::Mutex::new(index);
+                let stop = std::sync::atomic::AtomicBool::new(false);
+                let now = jiff::Timestamp::now().as_second();
+                for (name, store) in stores(args)? {
+                    let mut say = |s: String| eprint!("\r{name}: {s}   ");
+                    let mut twin = store.twin().unwrap_or(store);
+                    index::sync::pass(twin.as_mut(), &shared, now, &stop, &mut say)?;
+                    eprintln!();
+                }
+                index = shared.into_inner().unwrap_or_else(|e| e.into_inner());
+            }
+            println!("{}", map::rebuild(&mut index)?);
+            Ok(())
+        }
+        Some(Command::Map {
+            action: MapAction::Key { export },
+        }) => {
+            let dir = index::key::dir();
+            let Some(card) = index::key::card(&dir)? else {
+                bail!("there is no map key yet: letterbox makes one as it starts");
+            };
+            if !*export {
+                println!(
+                    "{}\n  public key {}\n  its secret kept {}",
+                    dir.join("map.toml").display(),
+                    card.recipient,
+                    card.keeper.about()
+                );
+                return Ok(());
+            }
+            if card.keeper == secret::Keeper::Vault {
+                open_vault(false)?;
+            }
+            let identity = index::key::identity(&card, secret::find)?;
+            print!("{}", index::key::export(&identity));
+            Ok(())
+        }
         Some(Command::Screen {
             width,
             height,
