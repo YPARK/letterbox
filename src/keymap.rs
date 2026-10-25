@@ -286,9 +286,9 @@ pub const KEYS: &[Binding] = &[
     },
     // The map.
     Binding {
-        keys: &[("M-g", MapView)],
-        name: "M-g",
-        hint: "M-g",
+        keys: &[("C-S-g", MapView), ("M-g", MapView)],
+        name: "C-S-g M-g",
+        hint: "C-S-g",
         foot: &[(Side, "map"), (List, "map")],
         help: "the map: every account's mail laid out by what it is about and who it is from",
     },

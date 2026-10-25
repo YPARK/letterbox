@@ -132,7 +132,7 @@ letterbox search grant report --account Work
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
-| `M-g` | the map: every account's mail laid out by what it is about and who it is from |
+| `C-S-g`, `M-g` | the map: every account's mail laid out by what it is about and who it is from |
 | `M-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `w` | in the map, lay it out by words and people, words alone, or people alone |
@@ -148,10 +148,11 @@ letterbox search grant report --account Work
 | `?` | all the keys |
 | `q` | quit |
 
-`C-S-r` needs a terminal that tells it from `C-r`, as kitty, WezTerm and
-Ghostty do when asked; kitty keeps `ctrl+shift+r` and `ctrl+shift+n` for
-itself unless `kitty.conf` says `map ctrl+shift+r no_op`, and the same
-for `n`. `e` replies to all in any terminal.
+`C-S-r` and `C-S-g` need a terminal that tells them from `C-r` and `C-g`,
+as kitty, WezTerm and Ghostty do when asked; kitty keeps `ctrl+shift+r`,
+`ctrl+shift+n` and `ctrl+shift+g` for itself unless `kitty.conf` says
+`map ctrl+shift+r no_op`, and the same for `n` and `g`. `e` replies to all
+and `M-g` shows the map in any terminal.
 
 `c` opens a message to write, `C-r` a reply, in a pane edited as Emacs
 edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
@@ -176,7 +177,7 @@ trash = "Deleted Items"
 
 ## The map
 
-`M-g` shows a second way into your mail, in the list's place: every
+`C-S-g` (or `M-g`) shows a second way into your mail, in the list's place: every
 message of every account laid out as a map, near what it is about and
 who it is from, in clusters, coloured by how they are related. Filing a
 message is moving it onto a cluster; letterbox learns from what you file

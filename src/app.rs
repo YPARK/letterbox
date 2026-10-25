@@ -2377,7 +2377,7 @@ impl App {
             | Act::FileAll
             | Act::NotIt
             | Act::Relayout => {
-                self.status = "M-g shows the map, where mail is filed".to_string();
+                self.status = "C-S-g shows the map, where mail is filed".to_string();
             }
             Act::MapView => self.show_map(),
             Act::ListView => self.show_list(),
