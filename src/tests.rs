@@ -1231,15 +1231,16 @@ fn attachments_are_saved_under_a_name_of_their_own() {
 
     // One of them, from the list of its files and links.
     let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     press(&mut app, &["o"]);
     let files = app.dialog.files().expect("listed");
     assert_eq!(
         files.items.len(),
-        3,
-        "the message, two attachments, no links"
+        4,
+        "the message, in the browser and in ohp, two attachments, no links"
     );
-    assert_eq!(files.at, 1, "begun on the first file");
+    assert_eq!(files.at, 2, "begun on the first file");
     press(&mut app, &["j", "s"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
 
@@ -1250,7 +1251,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     };
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
     assert!(pdf.starts_with(cache.path()));
-    click_at(&mut app, app::Target::Item(1));
+    click_at(&mut app, app::Target::Item(2));
     let Some(app::Launch::Open(text)) = app.launch.take() else {
         panic!("not for the system: {:?}", app.launch);
     };
@@ -1268,6 +1269,49 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     press(&mut app, &["<esc>"]);
     assert!(app.dialog.files().is_none());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn the_message_read_is_presented_by_ohp_with_the_images_it_carries() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    // Nothing read: nothing to present.
+    press(&mut app, &["O"]);
+    assert!(app.launch.is_none());
+    press(&mut app, &["<enter>", "O"]);
+    let Some(app::Launch::Ohp(page)) = app.launch.take() else {
+        panic!("not for ohp: {:?}", app.launch);
+    };
+    assert!(page.starts_with(cache.path()));
+    assert!(app::ohp_reads(&page.to_string_lossy()));
+    let html = std::fs::read_to_string(&page).unwrap();
+    assert!(html.contains("script-src 'none'"), "{html}");
+    // From the list of its files too.
+    press(&mut app, &["o"]);
+    let at = app
+        .dialog
+        .files()
+        .unwrap()
+        .items
+        .iter()
+        .position(|i| *i == app::Item::Present)
+        .unwrap();
+    click_at(&mut app, app::Target::Item(at));
+    assert!(matches!(app.launch.take(), Some(app::Launch::Ohp(_))));
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    // An image the HTML shows by cid: is found by its Content-ID.
+    let raw = b"From: a@b.c\r\nSubject: logo\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"x\"\r\n\r\n\
+--x\r\nContent-Type: text/html\r\n\r\n<img src=\"cid:logo@b.c\">\r\n\
+--x\r\nContent-Type: image/png\r\nContent-ID: <logo@b.c>\r\n\
+Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--x--\r\n";
+    let images = crate::mail::inline_images(raw);
+    assert_eq!(images.len(), 1, "{images:?}");
+    assert_eq!(images[0].0, "logo@b.c");
+    assert_eq!(images[0].1, "image/png");
+    assert!(images[0].2.starts_with(b"\x89PNG"));
 }
 
 #[test]
@@ -1839,6 +1883,10 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
 }
 
 // ---- the vault ----
+
+/// Held by each test that points `$XDG_CACHE_HOME` somewhere, so that
+/// none writes where another looks.
+static CACHE_AT: Mutex<()> = Mutex::new(());
 
 /// Held by each test that points `$LETTERBOX_VAULT` somewhere, so that
 /// none reads another's, or the vault of whoever runs them.
@@ -3758,8 +3806,8 @@ fn the_wheel_moves_in_the_dialog_open_and_not_behind_it() {
     }
     assert_eq!(
         app.dialog.files().expect("listed").at,
-        2,
-        "the last of three"
+        3,
+        "the last of four"
     );
     press(&mut app, &["<esc>"]);
 

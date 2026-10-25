@@ -506,6 +506,8 @@ pub enum Button {
 pub enum Item {
     /// The message itself, as its HTML, in the browser.
     Page,
+    /// The message itself, presented by ohp.
+    Present,
     File {
         at: usize,
         name: String,
@@ -740,7 +742,7 @@ pub enum Launch {
 /// Markdown, which it typesets.
 pub fn ohp_reads(name: &str) -> bool {
     let name = name.to_lowercase();
-    [".pdf", ".md", ".markdown", ".rmd"]
+    [".pdf", ".md", ".markdown", ".rmd", ".html", ".htm"]
         .iter()
         .any(|e| name.ends_with(e))
 }
@@ -2652,6 +2654,7 @@ impl App {
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
+            Act::Present => self.present(),
             Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),
             Act::Remove => self.ask_to_remove(),
@@ -3109,28 +3112,24 @@ impl App {
             self.status = "nothing to open: ⏎ reads the message picked".to_string();
             return;
         };
-        let body = m.html.clone().unwrap_or_else(|| {
-            format!(
-                "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
-                escape(&m.text)
-            )
-        });
-        // Mail is from strangers: its scripts, plugins and forms are not run
-        // from a file that could reach this machine's other files.
-        let html = format!(
-            "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
-             object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
-        );
-        let dir = cache().join("html");
-        let path = dir.join(format!("{}.html", m.uid));
-        let done = private_dir(&dir)
-            .map_err(anyhow::Error::from)
-            .and_then(|_| vault::write_private(&path, html.as_bytes()))
-            .and_then(|_| open(&path));
+        let done = write_page(&m).and_then(|path| open(&path).map(|_| path));
         self.status = match done {
-            Ok(()) => format!("opened {}", path.display()),
+            Ok(path) => format!("opened {}", path.display()),
             Err(e) => format!("cannot open it: {e:#}"),
         };
+    }
+
+    /// Present the message read with ohp, as its HTML, its own images in
+    /// it, or its text: ohp takes the terminal until it quits.
+    fn present(&mut self) {
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to present: ⏎ reads the message picked".to_string();
+            return;
+        };
+        match write_page(&m) {
+            Ok(path) => self.launch = Some(Launch::Ohp(path)),
+            Err(e) => self.status = format!("cannot present it: {e:#}"),
+        }
     }
 
     /// Save the message's attachments to the downloads folder, each under
@@ -3141,7 +3140,7 @@ impl App {
             self.status = "nothing to list: ⏎ reads the message picked".to_string();
             return;
         };
-        let mut items: Vec<Item> = vec![Item::Page];
+        let mut items: Vec<Item> = vec![Item::Page, Item::Present];
         items.extend(m.attachments.iter().enumerate().map(|(at, a)| Item::File {
             at,
             name: a.name.clone(),
@@ -3150,7 +3149,7 @@ impl App {
         }));
         items.extend(m.links.iter().cloned().map(Item::Link));
         // On its first file, if it has one; else on the message itself.
-        let at = usize::from(items.len() > 1);
+        let at = if items.len() > 2 { 2 } else { 0 };
         self.dialog = Dialog::Files(Files {
             items,
             at,
@@ -3191,6 +3190,10 @@ impl App {
             Some(Item::Page) => {
                 self.dialog = Dialog::Closed;
                 self.open_in_browser();
+            }
+            Some(Item::Present) => {
+                self.dialog = Dialog::Closed;
+                self.present();
             }
             Some(Item::File { at, name, .. }) => {
                 let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
@@ -5775,6 +5778,38 @@ fn open(path: &std::path::Path) -> anyhow::Result<()> {
 
 /// Keep `bytes`, an attachment or a document downloaded, of the message
 /// `uid`, in a private folder of the cache, to be opened from there.
+/// The message as a page, written where only you may read it: its HTML,
+/// the images it shows from its own parts put in it, or its text; and the
+/// file it is in.
+fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
+    use base64::Engine;
+    let body = match &m.html {
+        Some(html) => {
+            let mut html = html.clone();
+            for (id, mime, bytes) in mail::inline_images(&m.raw) {
+                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                html = html.replace(&format!("cid:{id}"), &format!("data:{mime};base64,{data}"));
+            }
+            html
+        }
+        None => format!(
+            "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
+            escape(&m.text)
+        ),
+    };
+    // Mail is from strangers: its scripts, plugins and forms are not run
+    // from a file that could reach this machine's other files.
+    let html = format!(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
+         object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
+    );
+    let dir = cache().join("html");
+    let path = dir.join(format!("{}.html", m.uid));
+    private_dir(&dir)?;
+    vault::write_private(&path, html.as_bytes())?;
+    Ok(path)
+}
+
 fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
     let dir = cache().join("files");
     private_dir(&dir)?;

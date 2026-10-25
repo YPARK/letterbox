@@ -530,6 +530,7 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     for (i, item) in files.items.iter().enumerate() {
         let (icon, name, what) = match item {
             Item::Page => ("◳", "this message".to_string(), "browser".to_string()),
+            Item::Present => ("◳", "this message".to_string(), "ohp".to_string()),
             Item::File {
                 name,
                 mime,

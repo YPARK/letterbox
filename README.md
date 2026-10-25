@@ -144,6 +144,7 @@ letterbox search grant report --account Work
 | `f`, `C-f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
+| `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |

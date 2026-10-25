@@ -37,6 +37,8 @@ pub enum Act {
     ReplyAll,
     Forward,
     Files,
+    /// The message read, presented by ohp.
+    Present,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -282,6 +284,13 @@ pub const KEYS: &[Binding] = &[
         hint: "o",
         foot: &[(Reader, "open")],
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
+    },
+    Binding {
+        keys: &[("O", Present)],
+        name: "O",
+        hint: "O",
+        foot: &[(Reader, "ohp")],
+        help: "present the message read with ohp, typeset as a page, its images in it; quit ohp to come back",
     },
     Binding {
         keys: &[("e", Archive)],
