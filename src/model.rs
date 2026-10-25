@@ -863,7 +863,6 @@ impl Corpus {
         &self.base
     }
 
-
     /// How well labels would be suggested from directions `base`: each
     /// message filed under labels with others in them, its own labels
     /// hidden, its labels made again without it and it pulled as mail not
