@@ -203,6 +203,12 @@ enum VaultAction {
     Passphrase,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
 #[derive(Subcommand)]
 enum FilterAction {
     /// How it would have done: each decision said before it was learnt,
@@ -220,6 +226,18 @@ enum FilterAction {
     /// Forget what was learnt from the Trash and your labels: only your
     /// own decisions are kept; then check
     Forget,
+    /// Throw new mail away on its own, when 95% sure, or not: told of as
+    /// letterbox opens, and by B, never learnt from
+    Auto {
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+    /// What was thrown away on its own, and why, and what was learnt since
+    Debrief {
+        /// As far back as this many days
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -509,12 +527,53 @@ fn trash_seeds(
                     tokens: filter::Filter::tokens(&r, known),
                     message_id: r.message_id.clone(),
                     seeded: true,
+                    ..Default::default()
                 },
             ));
         }
     }
     seeds.truncate(limit);
     Ok(seeds)
+}
+
+/// Turn throwing new mail away on its own on, for mail come from `now`, or
+/// off, as the file at `path` keeps it.
+fn set_auto(path: &std::path::Path, on: bool, now: i64) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let mut a = filter::Auto::read(&std::fs::read_to_string(path).unwrap_or_default(), now);
+    if on && !a.on {
+        a.since = now;
+    }
+    a.on = on;
+    std::fs::write(path, a.to_string()).with_context(|| format!("writing {}", path.display()))
+}
+
+/// What was thrown away on its own after `since`, and why, and what was
+/// learnt since, as `letterbox filter debrief` says it.
+fn debrief_text(index: &index::Index, since: i64) -> String {
+    use std::fmt::Write;
+    let d = index.debrief(since);
+    let mut out = String::new();
+    let _ = writeln!(out, "thrown away on its own: {}", d.thrown.len());
+    let now = jiff::Zoned::now();
+    for t in &d.thrown {
+        let back = if t.back { "  · put back" } else { "" };
+        let _ = writeln!(
+            out,
+            "  {:>8}  {:>3.0}%  {}  {}{back}",
+            ui::short_date(t.at, &now),
+            t.odds * 100.0,
+            mail::clean(&t.from),
+            mail::clean(&t.subject)
+        );
+        let _ = writeln!(out, "                   {}", t.why.join(" · "));
+    }
+    let _ = writeln!(
+        out,
+        "\n{} of your decisions learnt since: {} kept, {} thrown away",
+        d.decided, d.kept, d.thrown_by_you
+    );
+    out
 }
 
 /// How what was learnt would have done, as `letterbox filter check` says it.
@@ -765,6 +824,16 @@ fn command(args: &Args) -> anyhow::Result<()> {
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
+                // Thrown away on its own, unless turned off: told of first.
+                let path = args.config.with_file_name("filter");
+                let now = jiff::Timestamp::now().as_second();
+                app.auto =
+                    filter::Auto::read(&std::fs::read_to_string(&path).unwrap_or_default(), now);
+                app.filter_file = Some(path);
+                // Written at once, so that the first time it is for mail
+                // come from now on.
+                app.remember_auto();
+                app.debrief_on_start();
             }
             app::run(&mut app)
         }
@@ -909,6 +978,33 @@ fn command(args: &Args) -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
+        Some(Command::Filter {
+            action: FilterAction::Auto { state },
+        }) => {
+            let on = matches!(state, OnOff::On);
+            set_auto(
+                &args.config.with_file_name("filter"),
+                on,
+                jiff::Timestamp::now().as_second(),
+            )?;
+            println!(
+                "{}",
+                if on {
+                    "new mail it is 95% sure of is thrown away on its own: told of as letterbox opens, and by B"
+                } else {
+                    "nothing is thrown away on its own"
+                }
+            );
+            Ok(())
+        }
+        Some(Command::Filter {
+            action: FilterAction::Debrief { days },
+        }) => {
+            let index = open_index(args)?;
+            let since = jiff::Timestamp::now().as_second() - days * 24 * 60 * 60;
+            print!("{}", debrief_text(&index, since));
+            Ok(())
+        }
         Some(Command::Filter { action }) => {
             let mut index = open_index(args)?;
             if let FilterAction::Forget = action {

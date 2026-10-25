@@ -39,6 +39,8 @@ pub enum Act {
     Files,
     /// The message read, presented by ohp.
     Present,
+    /// What was thrown away on its own, and why.
+    Debrief,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -284,6 +286,13 @@ pub const KEYS: &[Binding] = &[
         hint: "o",
         foot: &[(Reader, "open")],
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
+    },
+    Binding {
+        keys: &[("B", Debrief)],
+        name: "B",
+        hint: "B",
+        foot: &[],
+        help: "what was thrown away on its own in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. Told of as letterbox opens too",
     },
     Binding {
         keys: &[("O", Present)],

@@ -145,6 +145,7 @@ letterbox search grant report --account Work
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
+| `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
 | `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
@@ -324,7 +325,20 @@ journal `taught`, and learnt again as letterbox starts.
 letterbox filter check    # how it would have done on what you decided
 letterbox filter learn    # learn from the Trash and your labels too, then check
 letterbox filter forget   # forget what was learnt from them, then check
+letterbox filter debrief  # what was thrown away on its own, and why
+letterbox filter auto off # throw nothing away on its own; `on` again
 ```
+
+New mail it is 95% sure of is thrown away on its own, to the Trash, from
+the first time this letterbox opens; mail you have decided on never is.
+What it throws away is written down, with why, but never learnt from, so
+a wrong guess does not teach it to guess so again. As letterbox opens, it
+tells of what it threw away since it last told: how sure it was, who sent
+each, what about, and the few things that weighed most, as *sent to many
+· takes no answer · list news.example*; then what it learnt since, and
+how it does now. `⏎` puts the one picked back, `u` all of them, each
+learnt as kept. `B` tells of the last seven days again, and
+`letterbox filter debrief` says the same on the command line.
 
 `filter check` goes through every decision in turn and says, of each,
 what it would have said from those before it alone, before learning it,

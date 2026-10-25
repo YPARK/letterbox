@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 /// A decision, as written down: the message, whether it was thrown away,
 /// and what was read of it then, as it may be gone by the next start.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Taught {
     pub key: Key,
     pub thrown: bool,
@@ -27,6 +27,20 @@ pub struct Taught {
     /// label, not decided as you went.
     #[serde(default)]
     pub seeded: bool,
+    /// Whether letterbox threw it away on its own, sure enough: written
+    /// down, to be told of and put back, never learnt from.
+    #[serde(default)]
+    pub auto: bool,
+    /// When it was decided, in seconds since 1970.
+    #[serde(default)]
+    pub at: i64,
+    /// Thrown away on its own: who sent it, what about, and how sure it was.
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub odds: f32,
 }
 
 /// What is known beside a message, that tells mail you want: whom you
@@ -56,6 +70,9 @@ pub const READY: u32 = 20;
 /// at 80%, graded on real mail, it would have thrown away one kept message
 /// in 27; at 90%, one in 160, catching two in three of those thrown away.
 pub const SURE: f32 = 0.9;
+/// How sure it is to be, at least, to throw new mail away on its own: at
+/// 95%, graded on real mail, it would have thrown away none of 161 kept.
+pub const AUTO: f32 = 0.95;
 /// How far each step goes, and how many a decision takes.
 const RATE: f32 = 0.5;
 const STEPS: usize = 3;
@@ -70,6 +87,74 @@ pub struct Filter {
     pub kept: u32,
     /// Every decision, in turn, to write again as one base.
     pub taught: Vec<Taught>,
+}
+
+/// What happened since it was last told of: what was thrown away on its
+/// own, and how many of your own decisions were learnt; as it is shown,
+/// the one picked, and how it does now.
+#[derive(Clone, Debug, Default)]
+pub struct Debrief {
+    pub thrown: Vec<Thrown>,
+    pub decided: usize,
+    pub kept: usize,
+    pub thrown_by_you: usize,
+    pub title: String,
+    pub at: usize,
+    pub grade: Option<Grade>,
+}
+
+/// Whether letterbox throws new mail away on its own, for mail come since
+/// when, and when it last told of what it did; kept as a few lines beside
+/// the accounts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Auto {
+    pub on: bool,
+    pub since: i64,
+    pub debriefed: i64,
+}
+
+impl Auto {
+    /// As `text` says, at `now`: on, for mail come from now, where it says
+    /// nothing.
+    pub fn read(text: &str, now: i64) -> Auto {
+        let mut a = Auto {
+            on: true,
+            since: now,
+            debriefed: now,
+        };
+        for line in text.lines() {
+            match line.split_whitespace().collect::<Vec<_>>()[..] {
+                ["auto", on] => a.on = on != "off",
+                ["since", at] => a.since = at.parse().unwrap_or(now),
+                ["debriefed", at] => a.debriefed = at.parse().unwrap_or(now),
+                _ => {}
+            }
+        }
+        a
+    }
+}
+
+impl std::fmt::Display for Auto {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let on = if self.on { "on" } else { "off" };
+        writeln!(f, "auto {on}")?;
+        writeln!(f, "since {}", self.since)?;
+        writeln!(f, "debriefed {}", self.debriefed)
+    }
+}
+
+/// A message thrown away on its own, as it is told of.
+#[derive(Clone, Debug)]
+pub struct Thrown {
+    pub key: Key,
+    pub from: String,
+    pub subject: String,
+    pub odds: f32,
+    pub why: Vec<String>,
+    pub message_id: String,
+    pub at: i64,
+    /// Whether it was put back since.
+    pub back: bool,
 }
 
 /// What it would have said of a decision, before learning it.
@@ -169,6 +254,12 @@ impl Filter {
     /// Learn from a decision. The rarer kind weighs more, so that many of
     /// one do not drown the other.
     pub fn learn(&mut self, t: Taught) {
+        // What it threw away on its own is its own guess: kept to be told
+        // of, but learnt from, it would teach itself.
+        if t.auto {
+            self.taught.push(t);
+            return;
+        }
         let x = features(&t.tokens);
         let y = if t.thrown { 1.0 } else { 0.0 };
         let (thrown, kept) = (self.thrown as f32 + 1.0, self.kept as f32 + 1.0);
@@ -204,7 +295,7 @@ impl Filter {
     pub fn check(taught: &[Taught]) -> Vec<Said> {
         let mut f = Filter::default();
         let mut said = Vec::new();
-        for t in taught {
+        for t in taught.iter().filter(|t| !t.auto) {
             if f.ready() {
                 said.push(Said {
                     odds: f.odds(&t.tokens),
@@ -216,6 +307,54 @@ impl Filter {
             }
             f.learn(t.clone());
         }
+        said
+    }
+
+    /// Why mail read as `tokens` would be thrown away, in words: what
+    /// weighs most toward it, at most three things, its words together.
+    pub fn why(&self, tokens: &[(String, f32)]) -> Vec<String> {
+        let mut weighed: Vec<(&str, f32)> = tokens
+            .iter()
+            .zip(features(tokens))
+            .map(|((t, _), (b, v))| (t.as_str(), self.weights.get(&b).copied().unwrap_or(0.0) * v))
+            .filter(|(_, c)| *c > 0.0)
+            .collect();
+        weighed.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+        let mut said: Vec<String> = Vec::new();
+        let mut words: Vec<&str> = Vec::new();
+        let mut words_at = None;
+        for (t, _) in weighed {
+            if let Some(w) = t.strip_prefix("w:") {
+                if words.len() < 3 {
+                    words_at.get_or_insert(said.len());
+                    words.push(w);
+                }
+                continue;
+            }
+            if said.len() + usize::from(words_at.is_some()) >= 3 {
+                continue;
+            }
+            let reason = if let Some(a) = t.strip_prefix("from:") {
+                format!("from {a}")
+            } else if let Some(d) = t.strip_prefix("dom:") {
+                format!("from {d}")
+            } else if let Some(l) = t.strip_prefix("list:") {
+                format!("list {l}")
+            } else if let Some(a) = t.strip_prefix("to:") {
+                format!("sent with {a}")
+            } else {
+                match t {
+                    "bulk" => "sent to many".to_string(),
+                    "noreply" => "takes no answer".to_string(),
+                    _ => continue,
+                }
+            };
+            said.push(reason);
+        }
+        if let Some(at) = words_at {
+            said.insert(at.min(said.len()), format!("words: {}", words.join(", ")));
+        }
+        said.truncate(3);
         said
     }
 

@@ -152,6 +152,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
         Dialog::View => Some(view_dialog(f, &t, &app.map)),
+        Dialog::Debrief(d) => Some(debrief_dialog(f, &t, d)),
         Dialog::StartMap => Some((
             question(
                 f,
@@ -595,6 +596,84 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     );
     let targets = (0..files.items.len())
         .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
+        .collect();
+    (area, targets)
+}
+
+/// What was thrown away on its own, two lines each: how sure, who, what
+/// about, and why; then what was learnt since, and how it does now. A
+/// message clicked is put back.
+fn debrief_dialog(f: &mut Frame, t: &Theme, d: &crate::filter::Debrief) -> (Rect, Targets) {
+    let width = f.area().width.min(96);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![
+        Line::raw(""),
+        Line::styled(
+            format!(" Thrown away on its own: {}", d.thrown.len()),
+            Style::new().fg(t.title).bold(),
+        ),
+        Line::raw(""),
+    ];
+    let first = lines.len();
+    for (i, th) in d.thrown.iter().enumerate() {
+        let here = i == d.at;
+        let ground = if here { t.focus } else { t.page };
+        let who = clip(&th.from, 24);
+        let head = format!(" {:>3.0}%  {who:<24}  ", th.odds * 100.0);
+        let said = room.saturating_sub(head.width() + 10);
+        let mut first_line = vec![
+            Span::styled(head, Style::new().fg(t.soft)),
+            Span::styled(clip(&th.subject, said), Style::new().fg(t.text)),
+        ];
+        if th.back {
+            first_line.push(Span::styled("  put back", Style::new().fg(t.accent).bold()));
+        }
+        lines.push(Line::from(first_line).style(Style::new().bg(ground)));
+        lines.push(
+            Line::styled(
+                clip(&format!("        {}", th.why.join(" · ")), room),
+                Style::new().fg(t.dim),
+            )
+            .style(Style::new().bg(ground)),
+        );
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!(
+            " Learnt since: {} of your decisions ({} kept, {} thrown away)",
+            d.decided, d.kept, d.thrown_by_you
+        ),
+        Style::new().fg(t.soft),
+    ));
+    if let Some(g) = d.grade {
+        let pct = |a: usize, b: usize| {
+            if b == 0 {
+                0.0
+            } else {
+                100.0 * a as f32 / b as f32
+            }
+        };
+        lines.push(Line::styled(
+            format!(
+                " At 95% sure, it catches {:.0}% of what you throw away, and would throw away {:.1}% of what you keep",
+                pct(g.caught, g.caught + g.missed),
+                pct(g.wrong, g.wrong + g.right)
+            ),
+            Style::new().fg(t.soft),
+        ));
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, &d.title, "⏎ put back · u put all back · esc ok")),
+        area,
+    );
+    let targets = (0..d.thrown.len())
+        .map(|i| {
+            let mut r = spot(area, first + 2 * i, 0, room as u16);
+            r.height = 2;
+            (r, Target::Item(i))
+        })
         .collect();
     (area, targets)
 }

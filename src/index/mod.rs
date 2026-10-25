@@ -419,11 +419,15 @@ impl Index {
             tokens: crate::filter::Filter::tokens(r, &self.known()),
             message_id: r.message_id.clone(),
             seeded: false,
+            ..Default::default()
         };
         self.learn(t)
     }
 
-    fn learn(&mut self, t: crate::filter::Taught) -> anyhow::Result<()> {
+    fn learn(&mut self, mut t: crate::filter::Taught) -> anyhow::Result<()> {
+        if t.at == 0 {
+            t.at = jiff::Timestamp::now().as_second();
+        }
         self.filter.learn(t.clone());
         self.version += 1;
         if let Some(taught) = &mut self.taught {
@@ -466,9 +470,71 @@ impl Index {
         self.learn(crate::filter::Taught {
             thrown: false,
             seeded: false,
+            auto: false,
+            at: 0,
             ..thrown
         })?;
         Ok(true)
+    }
+
+    /// Throw away the message `key` on its own, sure enough: written down,
+    /// with who sent it, what about, and how sure it was, never learnt.
+    pub fn throw_on_its_own(&mut self, key: &Key) -> anyhow::Result<()> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read");
+        }
+        let Some(r) = self.records.get(key) else {
+            return Ok(());
+        };
+        let tokens = crate::filter::Filter::tokens(r, &self.known());
+        let t = crate::filter::Taught {
+            key: key.clone(),
+            thrown: true,
+            odds: self.filter.odds(&tokens),
+            tokens,
+            message_id: r.message_id.clone(),
+            auto: true,
+            from: r.from.clone(),
+            subject: r.subject.clone(),
+            ..Default::default()
+        };
+        self.learn(t)
+    }
+
+    /// What happened after `since`: what was thrown away on its own, each
+    /// put back since or not, and how many of your own decisions were
+    /// learnt.
+    pub fn debrief(&self, since: i64) -> crate::filter::Debrief {
+        let mut d = crate::filter::Debrief::default();
+        let taught = &self.filter.taught;
+        for (i, t) in taught.iter().enumerate().filter(|(_, t)| t.at > since) {
+            if t.auto {
+                let back = taught[i + 1..].iter().any(|u| {
+                    !u.auto
+                        && !u.thrown
+                        && u.key.account == t.key.account
+                        && u.message_id == t.message_id
+                });
+                d.thrown.push(crate::filter::Thrown {
+                    key: t.key.clone(),
+                    from: t.from.clone(),
+                    subject: t.subject.clone(),
+                    odds: t.odds,
+                    why: self.filter.why(&t.tokens),
+                    message_id: t.message_id.clone(),
+                    at: t.at,
+                    back,
+                });
+            } else if !t.seeded {
+                d.decided += 1;
+                if t.thrown {
+                    d.thrown_by_you += 1;
+                } else {
+                    d.kept += 1;
+                }
+            }
+        }
+        d
     }
 
     /// Learn from `seeds`, read from where mail already is, each not yet
@@ -529,6 +595,7 @@ impl Index {
                         tokens: crate::filter::Filter::tokens(r, &known),
                         message_id: r.message_id.clone(),
                         seeded: true,
+                        ..Default::default()
                     },
                 )
             })
