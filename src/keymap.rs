@@ -288,9 +288,9 @@ pub const KEYS: &[Binding] = &[
     },
     // The map.
     Binding {
-        keys: &[("C-S-g", MapView), ("M-g", MapView)],
-        name: "C-S-g M-g",
-        hint: "C-S-g",
+        keys: &[("M-g", MapView), ("s-g", MapView)],
+        name: "M-g s-g",
+        hint: "M-g",
         foot: &[(Side, "map"), (List, "map")],
         help: "the map: every account's mail laid out by what it is about and who it is from",
     },
@@ -514,12 +514,12 @@ pub fn help() -> impl Iterator<Item = (&'static str, &'static str)> {
 
 pub type Chord = (KeyCode, KeyModifiers);
 
-/// A key as the table compares it. A letter with Ctrl or Alt is in lower
-/// case, Shift kept apart, as some terminals say Shift's letter in upper
-/// case and some not; a letter alone is as typed, Shift in its case; any
-/// other key is itself, whatever is held with it.
+/// A key as the table compares it. A letter with Ctrl, Alt or Super is in
+/// lower case, Shift kept apart, as some terminals say Shift's letter in
+/// upper case and some not; a letter alone is as typed, Shift in its case;
+/// any other key is itself, whatever is held with it.
 pub fn chord(key: KeyEvent) -> Chord {
-    let held = key.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let held = key.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     match key.code {
         KeyCode::Char(c) if !held.is_empty() => {
             let shift = key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase();
@@ -536,8 +536,9 @@ pub fn chord(key: KeyEvent) -> Chord {
 
 /// The key a name stands for, as the table, the foot and the help name
 /// them: `⏎` or `enter`, `␣` or `space`, `esc`, `tab`, `S-tab`, an arrow or
-/// a page key, a character, or one after `C-`, `C-S-` or `M-`; none for a
-/// name that stands for two, as `j/k`.
+/// a page key, a character, or one after `C-`, `C-S-`, `M-` or `s-`, Super
+/// (⌘ on a Mac, the Windows key elsewhere); none for a name that stands
+/// for two, as `j/k`.
 pub fn key_named(name: &str) -> Option<KeyEvent> {
     let none = KeyModifiers::NONE;
     let named = match name {
@@ -568,6 +569,8 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
         (k, KeyModifiers::CONTROL, false)
     } else if let Some(k) = name.strip_prefix("M-") {
         (k, KeyModifiers::ALT, false)
+    } else if let Some(k) = name.strip_prefix("s-") {
+        (k, KeyModifiers::SUPER, false)
     } else {
         (name, none, false)
     };

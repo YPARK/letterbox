@@ -727,7 +727,7 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
     let [brand, field, right] = Layout::horizontal([
         Constraint::Length(brand_w),
         Constraint::Min(10),
-        Constraint::Length(if area.width >= MEDIUM { 34 } else { 0 }),
+        Constraint::Length(if area.width >= MEDIUM { 42 } else { 0 }),
     ])
     .areas(area);
     f.render_widget(
@@ -783,9 +783,36 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => String::new(),
     };
+    // The two views, the one shown lit, each to be clicked as its key is
+    // pressed.
+    let mut x = right.x;
+    for (name, key, on) in [
+        (" List ", "M-l", app.map.mode == crate::map::Mode::List),
+        (" Map ", "M-g", app.map.mode == crate::map::Mode::Map),
+    ] {
+        let width = (name.width() as u16).min(right.right().saturating_sub(x));
+        let tab = Rect { x, width, ..right };
+        let style = if on {
+            Style::new().fg(t.title).bg(t.focus).bold()
+        } else {
+            Style::new().fg(t.dim)
+        };
+        f.render_widget(Paragraph::new(Span::styled(name, style)), tab);
+        if width > 0
+            && let Some(k) = keymap::key_named(key)
+        {
+            app.targets.push((tab, Target::Key(k)));
+        }
+        x += width;
+    }
+    let rest = Rect {
+        x,
+        width: right.right().saturating_sub(x),
+        ..right
+    };
     f.render_widget(
         Paragraph::new(Span::styled(count, Style::new().fg(t.dim))).alignment(Alignment::Right),
-        right,
+        rest,
     );
 }
 

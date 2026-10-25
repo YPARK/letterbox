@@ -4733,6 +4733,33 @@ fn demo_map() -> App {
     app
 }
 
+#[test]
+fn the_map_and_the_list_are_clicked_at_the_top_or_super_g() {
+    let mut app = demo();
+    let map = crate::keymap::key_named("M-g").unwrap();
+    let list = crate::keymap::key_named("M-l").unwrap();
+    click_at(&mut app, app::Target::Key(map));
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(
+        screen.lines().next().unwrap().contains(" List  Map "),
+        "{screen}"
+    );
+    click_at(&mut app, app::Target::Key(list));
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    // ⌘G or Super+G, as a terminal that says Super says it.
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SUPER));
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    // Ctrl+Shift+G is no longer the map's.
+    press(&mut app, &["<m-l>"]);
+    app.key(KeyEvent::new(
+        KeyCode::Char('G'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+}
+
 /// The subject of the message picked on the map.
 fn picked_subject(app: &App) -> String {
     let s = app.map.snapshot.as_ref().unwrap();

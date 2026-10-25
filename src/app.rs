@@ -2388,7 +2388,7 @@ impl App {
             | Act::FileAll
             | Act::NotIt
             | Act::Relayout => {
-                self.status = "C-S-g shows the map, where mail is filed".to_string();
+                self.status = "M-g shows the map, where mail is filed".to_string();
             }
             Act::MapView => self.show_map(),
             Act::ListView => self.show_list(),
@@ -4632,16 +4632,19 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
 
 /// A key as `letterbox screen` is given it: `<enter>`, `<esc>`, `<tab>`,
 /// `<space>`, `<up>`, `<down>`, `<left>`, `<right>`, `<backspace>`, and
-/// with control, as `<c-u>`; anything else, each character typed.
+/// with control, as `<c-u>`, Alt, as `<m-g>`, or Super, as `<s-g>`;
+/// anything else, each character typed.
 pub fn keys(spec: &str) -> Vec<KeyEvent> {
-    // `<c-s-r>` is `C-S-r`, `<enter>` is `enter`, as the foot names them.
+    // `<c-s-r>` is `C-S-r`, `<s-tab>` is `S-tab`, `<enter>` is `enter`, as
+    // the foot names them.
     if let Some(name) = spec.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
-        && let Some(key) = keymap::key_named(
-            &name
+        && let Some(key) = keymap::key_named(&match name {
+            "s-tab" => "S-tab".to_string(),
+            _ => name
+                .replace("c-s-", "C-S-")
                 .replace("c-", "C-")
-                .replace("s-", "S-")
                 .replace("m-", "M-"),
-        )
+        })
     {
         return vec![key];
     }
