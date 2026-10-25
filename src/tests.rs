@@ -4684,9 +4684,10 @@ fn the_map_lays_out_every_message_with_its_clusters() {
         screen.contains("Ada Lovelace — Notes on the engine"),
         "{screen}"
     );
-    let foot = screen.lines().last().unwrap();
+    let foot: Vec<&str> = screen.lines().rev().take(2).collect();
+    let foot = foot.join(" ");
     assert!(
-        foot.contains("M-l list") && foot.contains("w lens"),
+        foot.contains("M-l list") && foot.contains("m move to"),
         "{foot}"
     );
 }
@@ -5032,4 +5033,165 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
     let (&(x, y), _) = app.map.drawn.iter().next().unwrap();
     map_click(&mut app, x, y);
     assert!(app.map.region.is_none());
+}
+
+// ---- filing, from the map ----
+
+/// Pick the message of the map with `subject`.
+fn pick_subject(app: &mut App, subject: &str) {
+    let s = app.map.snapshot.clone().unwrap();
+    let i = s
+        .dots
+        .iter()
+        .position(|d| d.subject == subject)
+        .unwrap_or_else(|| panic!("no {subject}"));
+    app.map.cursor = Some(s.dots[i].key.clone());
+}
+
+/// The labels of the map's message with `subject`, and whether it is in
+/// the Inbox.
+fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {
+    let s = app.map.snapshot.as_ref().unwrap();
+    let d = s.dots.iter().find(|d| d.subject == subject).unwrap();
+    (d.labels.clone(), d.system.inbox)
+}
+
+#[test]
+fn m_moves_a_message_onto_a_cluster_and_files_it_under_its_label() {
+    let mut app = demo_map();
+    pick_subject(&mut app, "Aims page, third pass");
+    press(&mut app, &["m"]);
+    assert!(app.map.moving.is_some());
+    assert!(app.status.contains("moving it"), "{}", app.status);
+    // Onto the Grant's cluster, by a message of it, and ⏎.
+    pick_subject(&mut app, "Letter of support, signed");
+    press(&mut app, &["<enter>"]);
+    assert!(app.map.moving.is_none());
+    assert!(app.status.contains("under Grant"), "{}", app.status);
+    let (labels, inbox) = dot_labels(&app, "Aims page, third pass");
+    assert!(labels.contains(&"Grant".to_string()), "{labels:?}");
+    assert!(!inbox, "out of the Inbox");
+    // The server has it, the next pass says, and it is pending no more.
+    assert!(app.index.lock().unwrap().keep.pending.is_empty());
+    let s = app.map.snapshot.clone().unwrap();
+    let aims = s
+        .dots
+        .iter()
+        .find(|d| d.subject == "Aims page, third pass")
+        .unwrap();
+    assert!(aims.places.iter().any(|p| p.folder == "Archive"));
+    // Its like are suggested, beside it.
+    press(&mut app, &["<enter>"]);
+    let screen = app::screen(&mut app, 150, 60);
+    assert!(screen.contains("Would go to Grant too"), "{screen}");
+}
+
+#[test]
+fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    let builds: Vec<crate::index::Key> = s
+        .dots
+        .iter()
+        .filter(|d| d.address == "ci@runner.example")
+        .map(|d| d.key.clone())
+        .collect();
+    app.map.region = Some(crate::map::Region {
+        keys: builds,
+        boxed: None,
+    });
+    press(&mut app, &["m", "N"]);
+    let app::Dialog::Label(typed) = &app.dialog else {
+        panic!("not asked: {}", app.status);
+    };
+    assert_eq!(typed, "Build");
+    press(&mut app, &["s", "<enter>"]);
+    assert!(
+        app.status.contains("3 filed under Builds"),
+        "{}",
+        app.status
+    );
+    for subject in [
+        "Build failed: letterbox main (clippy)",
+        "Build passed: letterbox main",
+        "Build failed: faba (test timeout)",
+    ] {
+        assert_eq!(dot_labels(&app, subject).0, ["Builds"]);
+    }
+    // A cluster that is a label now, its anchor said so.
+    let s = app.map.snapshot.clone().unwrap();
+    assert!(
+        s.groups
+            .iter()
+            .any(|g| g.label.as_deref() == Some("Builds"))
+    );
+}
+
+#[test]
+fn filing_suggests_its_like_and_y_and_minus_take_them_or_not() {
+    let mut app = demo_map();
+    pick_subject(&mut app, "R01 resubmission: internal deadline 3 November");
+    press(&mut app, &["m"]);
+    // Onto the Grant's anchor, by a click.
+    let _ = app::screen(&mut app, 150, 45);
+    let s = app.map.snapshot.clone().unwrap();
+    let grant = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some("Grant"))
+        .unwrap()
+        .id;
+    click_at(&mut app, app::Target::Anchor(grant));
+    assert!(app.status.contains("under Grant"), "{}", app.status);
+    let suggested: Vec<String> = {
+        let s = app.map.snapshot.clone().unwrap();
+        app.suggestions()
+            .iter()
+            .map(|&(i, _)| s.dots[i].subject.clone())
+            .collect()
+    };
+    assert!(
+        suggested.contains(&"Budget justification: the sequencing line".to_string()),
+        "{suggested:?}"
+    );
+    let first = suggested[0].clone();
+    press(&mut app, &["y"]);
+    assert!(dot_labels(&app, &first).0.contains(&"Grant".to_string()));
+    let next = {
+        let s = app.map.snapshot.clone().unwrap();
+        s.dots[app.suggestions()[0].0].subject.clone()
+    };
+    press(&mut app, &["-"]);
+    assert!(app.status.contains("suggested no more"), "{}", app.status);
+    let s = app.map.snapshot.clone().unwrap();
+    assert!(
+        app.suggestions()
+            .iter()
+            .all(|&(i, _)| s.dots[i].subject != next)
+    );
+    assert_eq!(app.index.lock().unwrap().keep.not_it.len(), 1);
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.suggesting.is_none());
+}
+
+#[test]
+fn r_renames_the_label_picked_on_its_server() {
+    let mut app = demo_map();
+    pick_subject(&mut app, "Letter of support, signed");
+    press(&mut app, &["R"]);
+    let app::Dialog::RenameLabel(old, typed) = &app.dialog else {
+        panic!("not asked: {}", app.status);
+    };
+    assert_eq!((old.as_str(), typed.as_str()), ("Grant", "Grant"));
+    press(&mut app, &["<c-u>", "Funding", "<enter>"]);
+    assert!(
+        app.status.contains("renamed Grant to Funding"),
+        "{}",
+        app.status
+    );
+    let (labels, _) = dot_labels(&app, "Letter of support, signed");
+    assert_eq!(labels, ["Projects", "Funding"]);
+    // Outside the map, R renames an account, as it did.
+    press(&mut app, &["<m-l>", "R"]);
+    assert!(matches!(app.dialog, app::Dialog::Rename(0, _)));
 }

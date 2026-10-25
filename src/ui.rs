@@ -131,6 +131,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
+        Dialog::Label(typed) => Some(asking(
+            f,
+            &t,
+            "New label",
+            "⏎ files it · esc stops",
+            "What is the new label to be called? What is moving is given it, and taken out of the Inbox.",
+            typed,
+        )),
+        Dialog::RenameLabel(old, typed) => Some(asking(
+            f,
+            &t,
+            "Rename label",
+            "⏎ renames · esc keeps it",
+            &format!(
+                "What is {old} to be called? On every account, and on its server; called as another label is, the two are one."
+            ),
+            typed,
+        )),
     };
     if let Some((area, targets)) = popup {
         app.targets.push((area, Target::Popup));
@@ -521,6 +539,24 @@ fn question(
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(dialog(t, title, foot)), area);
     (area, last_at)
+}
+
+/// A question answered by a name typed: what is asked, and the field.
+fn asking(
+    f: &mut Frame,
+    t: &Theme,
+    title: &str,
+    foot: &str,
+    asked: &str,
+    typed: &str,
+) -> (Rect, Targets) {
+    let field = Style::new().fg(t.text).bg(t.field);
+    let (area, _) = question(f, t, title, foot, asked, |room| {
+        let value = tail(typed, room.saturating_sub(1));
+        let pad = " ".repeat(room.saturating_sub(value.width() + 1));
+        Line::from(Span::styled(format!("{value}▏{pad}"), field))
+    });
+    (area, Vec::new())
 }
 
 fn renaming(f: &mut Frame, t: &Theme, name: &str, typed: &str) -> (Rect, Targets) {
@@ -1753,17 +1789,48 @@ fn mapped(app: &App, width: usize) -> Option<(Vec<Line<'static>>, Vec<Line<'stat
     let mut tail = vec![
         Line::raw(""),
         Line::styled("─".repeat(width), Style::new().fg(t.rule)),
-        Line::styled("Near it, by angle", Style::new().fg(t.title).bold()),
     ];
-    for (j, deg) in s.model.nearest(i, 5) {
+    // After filing, what would go to the label too; else what is near it.
+    let (near, home): (Vec<(usize, f32)>, Option<usize>) = match &app.map.suggesting {
+        Some(label) => {
+            let said = format!("Would go to {label} too · y files the first, Y all, - not it");
+            for l in wrap(&said, width) {
+                tail.push(Line::styled(l, Style::new().fg(t.title).bold()));
+            }
+            let folded = crate::index::fold(label);
+            let home = s
+                .groups
+                .iter()
+                .position(|g| g.label.as_deref().map(crate::index::fold) == Some(folded.clone()));
+            let mut near = app.suggestions();
+            near.truncate(8);
+            if near.is_empty() {
+                tail.push(Line::styled("nothing more, by angle", dim));
+            }
+            (near, home)
+        }
+        None => {
+            tail.push(Line::styled(
+                "Near it, by angle",
+                Style::new().fg(t.title).bold(),
+            ));
+            (s.model.nearest(i, 5), None)
+        }
+    };
+    for (j, deg) in near {
         let n = &s.dots[j];
+        let across = home.is_some_and(|h| s.clustering.of.get(j) != Some(&h));
         let date = n.date.map(|x| short_date(x, &now)).unwrap_or_default();
         let from = if n.from.is_empty() {
             &n.address
         } else {
             &n.from
         };
-        let what = format!("{from} — {} · {date}", n.subject);
+        let what = if across {
+            format!("{from} — {} · {date} · across the map", n.subject)
+        } else {
+            format!("{from} — {} · {date}", n.subject)
+        };
         for (k, l) in wrap(&what, width.saturating_sub(6)).into_iter().enumerate() {
             let degrees = if k == 0 {
                 format!("{deg:>3.0}°  ")

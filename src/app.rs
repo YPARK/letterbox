@@ -559,6 +559,10 @@ pub enum Dialog {
     Trash(TrashPick),
     Remove(usize),
     Rename(usize, String),
+    /// The name of a new label for what is moving, as typed so far.
+    Label(String),
+    /// What to call a label, as typed so far.
+    RenameLabel(String, String),
 }
 
 impl Dialog {
@@ -1187,6 +1191,11 @@ impl App {
             | Answer::Mapping(_)
             | Answer::Drawn(_)
             | Answer::Realm { .. } => {}
+            Answer::Filed { key, label, filed } => self.filed(a, key, label, filed),
+            Answer::LabelRenamed { old, result } => match result {
+                Ok(()) => self.map_pass(a),
+                Err(e) => self.status = format!("cannot rename {old}: {}", first_line(&e)),
+            },
             Answer::Archived(result) => match result {
                 Ok(()) => {
                     self.reload(a);
@@ -2358,6 +2367,9 @@ impl App {
                 };
             }
             Act::Mark => self.mark_cluster(),
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::FileAll | Act::NotIt => {
+                self.status = "M-g shows the map, where mail is filed".to_string();
+            }
             Act::MapView => self.show_map(),
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
@@ -2436,6 +2448,29 @@ impl App {
                     edit_line(typed, key);
                 }
             },
+            Dialog::Label(typed) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Closed,
+                KeyCode::Enter => {
+                    let typed = std::mem::take(typed);
+                    self.dialog = Dialog::Closed;
+                    let keys = self.map.moving.take().unwrap_or_default();
+                    self.file_keys(keys, typed.trim());
+                }
+                _ => {
+                    edit_line(typed, key);
+                }
+            },
+            Dialog::RenameLabel(old, typed) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Closed,
+                KeyCode::Enter => {
+                    let (old, typed) = (std::mem::take(old), std::mem::take(typed));
+                    self.dialog = Dialog::Closed;
+                    self.rename_label(&old, typed.trim());
+                }
+                _ => {
+                    edit_line(typed, key);
+                }
+            },
             &mut Dialog::Remove(a) => {
                 self.dialog = Dialog::Closed;
                 if key.code == KeyCode::Char('y') {
@@ -2456,7 +2491,10 @@ impl App {
             (Dialog::Closed, _) => {}
             // Away from help, or from renaming, closes it, the name left
             // as it is.
-            (Dialog::Help(_) | Dialog::Rename(..), _) => self.dialog = Dialog::Closed,
+            (
+                Dialog::Help(_) | Dialog::Rename(..) | Dialog::Label(_) | Dialog::RenameLabel(..),
+                _,
+            ) => self.dialog = Dialog::Closed,
             (Dialog::Trash(pick), Some(Target::Item(i))) => {
                 pick.at = i;
                 self.choose_trash();
@@ -3343,6 +3381,57 @@ impl App {
     /// Do what a key does in the map, with the focus on it; whether it
     /// was the map's to do.
     fn map_act(&mut self, act: Act) -> bool {
+        if self.map.moving.is_some() {
+            match act {
+                Act::Open => {
+                    let id = self
+                        .map
+                        .picked()
+                        .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
+                    if let Some(id) = id {
+                        self.move_onto(id);
+                    }
+                    return true;
+                }
+                Act::NewLabel => {
+                    self.ask_new_label();
+                    return true;
+                }
+                Act::Back => {
+                    self.map.moving = None;
+                    self.status = "not moved".to_string();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        match act {
+            Act::Move => {
+                self.start_moving();
+                return true;
+            }
+            Act::FileFirst => {
+                self.file_suggested(false);
+                return true;
+            }
+            Act::FileAll => {
+                self.file_suggested(true);
+                return true;
+            }
+            Act::NotIt => {
+                self.not_it();
+                return true;
+            }
+            Act::Rename => {
+                self.ask_rename_label();
+                return true;
+            }
+            Act::Back if self.map.suggesting.is_some() && self.map.region.is_none() => {
+                self.map.suggesting = None;
+                return true;
+            }
+            _ => {}
+        }
         if self.map.region.is_some() {
             match act {
                 Act::Seen => return self.region_flag(Flag::Seen),
@@ -3844,14 +3933,316 @@ impl App {
         self.mark(keys, Some(((x0, y0), (x1, y1))));
     }
 
+    /// Begin moving the message picked, or what is marked, onto a cluster
+    /// or a label.
+    fn start_moving(&mut self) {
+        let keys = match &self.map.region {
+            Some(r) => r.keys.clone(),
+            None => match self.dot() {
+                Some(d) => vec![d.key],
+                None => {
+                    self.status = "no message picked: the arrows or hjkl pick one".to_string();
+                    return;
+                }
+            },
+        };
+        self.status = format!(
+            "moving {}: ⏎ on a cluster, or a click on its anchor; N a new label; esc stops",
+            if keys.len() == 1 {
+                "it".to_string()
+            } else {
+                keys.len().to_string()
+            }
+        );
+        self.map.moving = Some(keys);
+    }
+
+    /// Move what is moving onto the cluster `id`: under its label, or, if it
+    /// is none yet, under one asked for, its first word given.
+    fn move_onto(&mut self, id: u32) {
+        let Some(g) = self
+            .map
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.group(id))
+            .cloned()
+        else {
+            return;
+        };
+        match g.label {
+            Some(label) => {
+                let keys = self.map.moving.take().unwrap_or_default();
+                self.file_keys(keys, &label);
+            }
+            None => {
+                let word = g.words.first().cloned().unwrap_or_default();
+                self.dialog = Dialog::Label(capitalised(&word));
+            }
+        }
+    }
+
+    /// Ask the name of a new label for what is moving, its commonest word
+    /// given.
+    fn ask_new_label(&mut self) {
+        let dots: Vec<map::Dot> = {
+            let (Some(s), Some(keys)) = (&self.map.snapshot, &self.map.moving) else {
+                return;
+            };
+            keys.iter()
+                .filter_map(|k| s.find(k).map(|i| s.dots[i].clone()))
+                .collect()
+        };
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        for d in &dots {
+            for w in crate::model::words(crate::model::bare_subject(&d.subject)) {
+                *counts.entry(w).or_default() += 1;
+            }
+        }
+        let word = counts
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+            .map(|(w, _)| w)
+            .unwrap_or_default();
+        self.dialog = Dialog::Label(capitalised(&word));
+    }
+
+    /// File the messages `keys` under `label`: shown at once as given, and
+    /// each asked of its server; the label's suggestions shown after.
+    fn file_keys(&mut self, keys: Vec<crate::index::Key>, label: &str) {
+        let label = label.trim().to_string();
+        self.map.moving = None;
+        if label.is_empty() || keys.is_empty() {
+            self.status = "not filed".to_string();
+            return;
+        }
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let at = jiff::Timestamp::now().as_second();
+        let mut filed = 0;
+        let mut pending = Vec::new();
+        let mut asks = Vec::new();
+        for key in &keys {
+            let Some(i) = s.find(key) else { continue };
+            let dot = &s.dots[i];
+            let Some((a, folder, uid)) = self.place_of(dot) else {
+                continue;
+            };
+            pending.push(crate::index::Kept::Pending {
+                key: key.clone(),
+                label: label.clone(),
+                on: true,
+                at,
+            });
+            asks.push((
+                a,
+                Ask::File {
+                    folder,
+                    uid,
+                    label: label.clone(),
+                    message_id: dot.message_id.clone(),
+                    key: key.clone(),
+                },
+            ));
+            filed += 1;
+        }
+        let kept = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(pending);
+        if let Err(e) = kept {
+            self.status = format!("cannot file it: {e:#}");
+            return;
+        }
+        for (a, ask) in asks {
+            self.ask(a, ask);
+        }
+        self.map.region = None;
+        self.map.suggesting = Some(label.clone());
+        self.status = format!(
+            "{} under {label}, out of the Inbox · y files the next it would go with too",
+            if filed == 1 {
+                "filed".to_string()
+            } else {
+                format!("{filed} filed")
+            }
+        );
+    }
+
+    /// The suggestions for the label last filed under, nearest first.
+    pub fn suggestions(&self) -> Vec<(usize, f32)> {
+        let (Some(s), Some(label)) = (&self.map.snapshot, &self.map.suggesting) else {
+            return Vec::new();
+        };
+        s.model.suggestions(label, &s.not_it)
+    }
+
+    /// File the first of the suggestions too, or all of them.
+    fn file_suggested(&mut self, all: bool) {
+        let (Some(s), Some(label)) = (self.map.snapshot.clone(), self.map.suggesting.clone())
+        else {
+            self.status =
+                "nothing suggested: m files a message, and its like are suggested".to_string();
+            return;
+        };
+        let keys: Vec<crate::index::Key> = self
+            .suggestions()
+            .into_iter()
+            .take(if all { usize::MAX } else { 1 })
+            .map(|(i, _)| s.dots[i].key.clone())
+            .collect();
+        if keys.is_empty() {
+            self.status = format!("nothing more would go to {label}");
+            return;
+        }
+        self.file_keys(keys, &label);
+        if all {
+            self.map.suggesting = None;
+        }
+    }
+
+    /// Say the first suggestion is not one for its label: it is suggested
+    /// no more, and pushed away from it.
+    fn not_it(&mut self) {
+        let (Some(s), Some(label)) = (self.map.snapshot.clone(), self.map.suggesting.clone())
+        else {
+            return;
+        };
+        let Some(&(i, _)) = self.suggestions().first() else {
+            return;
+        };
+        let kept = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(vec![crate::index::Kept::NotIt {
+                key: s.dots[i].key.clone(),
+                label: label.clone(),
+            }]);
+        self.status = match kept {
+            Ok(()) => format!("not {label}: {} is suggested no more", s.dots[i].subject),
+            Err(e) => format!("cannot keep that: {e:#}"),
+        };
+    }
+
+    /// Ask what to call the label of the message picked: its cluster's, or
+    /// the last it was given.
+    fn ask_rename_label(&mut self) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let label = self.map.picked().and_then(|i| {
+            s.group_of(i)
+                .and_then(|g| g.label.clone())
+                .or_else(|| s.dots[i].labels.last().cloned())
+        });
+        match label {
+            Some(l) => self.dialog = Dialog::RenameLabel(l.clone(), l),
+            None => self.status = "the message picked has no label to rename".to_string(),
+        }
+    }
+
+    /// Call the label `old` `new`, on every account that has it, and where
+    /// letterbox alone keeps it; onto a label there is, the two are one.
+    fn rename_label(&mut self, old: &str, new: &str) {
+        if new.is_empty() || crate::index::fold(old) == crate::index::fold(new) && old == new {
+            self.status = format!("kept {old}");
+            return;
+        }
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let folded = crate::index::fold(old);
+        let accounts: std::collections::BTreeSet<usize> = s
+            .dots
+            .iter()
+            .filter(|d| d.labels.iter().any(|l| crate::index::fold(l) == folded))
+            .filter_map(|d| self.place_of(d).map(|p| p.0))
+            .collect();
+        for a in accounts {
+            self.ask(
+                a,
+                Ask::RenameLabel {
+                    old: old.to_string(),
+                    new: new.to_string(),
+                },
+            );
+        }
+        let kept = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(vec![crate::index::Kept::Renamed {
+                from: old.to_string(),
+                to: new.to_string(),
+            }]);
+        if let Err(e) = kept {
+            self.status = format!("cannot rename {old}: {e:#}");
+            return;
+        }
+        if self.map.suggesting.as_deref().map(crate::index::fold) == Some(folded) {
+            self.map.suggesting = Some(new.to_string());
+        }
+        self.status = format!("renamed {old} to {new}");
+    }
+
+    /// Take what a server said of filing a message: a label it does not
+    /// keep, letterbox keeps; one it would not take is no longer pending.
+    fn filed(
+        &mut self,
+        a: usize,
+        key: crate::index::Key,
+        label: String,
+        filed: Result<crate::store::Filed, String>,
+    ) {
+        let mut kept = Vec::new();
+        match filed {
+            Ok(f) if f.on_server => {}
+            Ok(_) => {
+                kept.push(crate::index::Kept::Label {
+                    key: key.clone(),
+                    label: label.clone(),
+                    on: true,
+                });
+                kept.push(crate::index::Kept::Settled { key, label });
+            }
+            Err(e) => {
+                self.status = format!("cannot file it under {label}: {}", first_line(&e));
+                kept.push(crate::index::Kept::Settled { key, label });
+            }
+        }
+        if !kept.is_empty() {
+            let _ = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .keep(kept);
+        }
+        self.reload(a);
+        self.map_pass(a);
+    }
+
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
     fn anchor_click(&mut self, id: u32) {
         self.focus = Focus::List;
+        if self.map.moving.is_some() {
+            return self.move_onto(id);
+        }
         self.map.focused = if self.map.focused == Focused::Cluster(id) {
             Focused::All
         } else {
             Focused::Cluster(id)
         };
+    }
+}
+
+/// `word` with a capital, as a label is given one.
+fn capitalised(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 

@@ -130,7 +130,7 @@ letterbox search grant report --account Work
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`); in the map, take it, or what is marked, out of the Inbox |
 | `C-n`, `C-S-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
-| `R` | rename the account picked in the sidebar, or the one listed |
+| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M-g` | the map: every account's mail laid out by what it is about and who it is from |
 | `M-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
@@ -140,6 +140,9 @@ letterbox search grant report --account Work
 | `C` | in the map, colour by what it is about, by how near the message picked, or by its state |
 | `r` | in the map, show or hide read mail; elsewhere, say which keys reply |
 | `!` | in the map, dim the areas with nothing new |
+| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
+| `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
+| `y` / `Y` / `-` | once filed, the label's first suggestion filed too, or all of them; `-` says the first is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `a`, `u` and `s` then act on all of it, `a` taking it out of the Inbox |
 | `?` | all the keys |
 | `q` | quit |

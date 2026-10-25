@@ -167,6 +167,8 @@ pub struct Snapshot {
     pub faithfulness: Option<f32>,
     /// A layout made for it, to keep.
     pub fresh: Option<Vec<(Key, f32, f32)>>,
+    /// Each message and label, folded, it was said not to be.
+    pub not_it: std::collections::BTreeSet<(Key, String)>,
 }
 
 impl Snapshot {
@@ -356,6 +358,7 @@ pub fn compute(input: Input) -> Snapshot {
         at,
         faithfulness,
         fresh,
+        not_it: input.not_it,
     }
 }
 
@@ -390,6 +393,10 @@ pub struct Map {
     /// A box being drawn with the mouse: where it was begun, and where the
     /// mouse is now.
     pub drag: Option<((u16, u16), (u16, u16))>,
+    /// What is being moved onto a cluster or label, while it is.
+    pub moving: Option<Vec<Key>>,
+    /// The label last filed under, whose suggestions are shown.
+    pub suggesting: Option<String>,
 }
 
 /// What is marked on the map: the messages of a cluster, or those in a

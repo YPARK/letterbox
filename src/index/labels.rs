@@ -233,18 +233,6 @@ impl Index {
         s
     }
 
-    /// Every label, by its name as first given, and how many messages it
-    /// is on.
-    pub fn all_labels(&self) -> Vec<(String, usize)> {
-        let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-        for key in self.records.keys() {
-            for l in self.labels(key) {
-                counts.entry(fold(&l)).or_insert_with(|| (l.clone(), 0)).1 += 1;
-            }
-        }
-        counts.into_values().collect()
-    }
-
     /// What waits on the servers of `account` and they now have, or has
     /// waited too long: no longer pending.
     pub fn settled(&self, account: &str, now: i64) -> Vec<Kept> {

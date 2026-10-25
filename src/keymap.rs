@@ -62,6 +62,15 @@ pub enum Act {
     NewOnly,
     /// The cluster of the message picked marked, or let go.
     Mark,
+    /// The message picked, or what is marked, moved onto a cluster; and, as
+    /// it is, onto a new label.
+    Move,
+    NewLabel,
+    /// The first of the label's suggestions filed, or all of them; or the
+    /// first said not to be one.
+    FileFirst,
+    FileAll,
+    NotIt,
 }
 
 /// Where the foot's hints are for.
@@ -257,7 +266,7 @@ pub const KEYS: &[Binding] = &[
         name: "R",
         hint: "R",
         foot: &[(Side, "rename")],
-        help: "rename an account: the one picked in the sidebar, else the one listed",
+        help: "rename an account: the one picked in the sidebar, else the one listed; in the map, the label picked, onto another merging them",
     },
     Binding {
         keys: &[("D", Remove)],
@@ -294,6 +303,27 @@ pub const KEYS: &[Binding] = &[
         hint: "[/]",
         foot: &[(Map, "cluster")],
         help: "in the map, narrow to the cluster before, or after",
+    },
+    Binding {
+        keys: &[("m", Move)],
+        name: "m",
+        hint: "m",
+        foot: &[(Map, "move to")],
+        help: "in the map, move the message picked, or what is marked, onto a cluster or a label: then ⏎ on one, or a click on its anchor. It is given the label and taken out of the Inbox",
+    },
+    Binding {
+        keys: &[("N", NewLabel)],
+        name: "N",
+        hint: "",
+        foot: &[],
+        help: "while moving, a new label for it alone: its name is asked, its commonest word given",
+    },
+    Binding {
+        keys: &[("y", FileFirst), ("Y", FileAll), ("-", NotIt)],
+        name: "y Y -",
+        hint: "y/Y",
+        foot: &[(Map, "file too")],
+        help: "once filed, the label's first suggestion filed too, or all of them; - says the first is not one, and the map learns it",
     },
     Binding {
         keys: &[("w", Lens)],

@@ -47,6 +47,20 @@ pub enum Ask {
         folder: String,
         uid: u32,
     },
+    /// File a message under a label: given it, and out of the Inbox. `key` is
+    /// what the index knows it by.
+    File {
+        folder: String,
+        uid: u32,
+        label: String,
+        message_id: String,
+        key: crate::index::Key,
+    },
+    /// Call a label something else, on the server.
+    RenameLabel {
+        old: String,
+        new: String,
+    },
     /// Take a message out of the Inbox, given no label.
     Archive {
         folder: String,
@@ -132,6 +146,15 @@ pub enum Answer {
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
     Archived(Result<(), String>),
+    Filed {
+        key: crate::index::Key,
+        label: String,
+        filed: Result<crate::store::Filed, String>,
+    },
+    LabelRenamed {
+        old: String,
+        result: Result<(), String>,
+    },
     /// The map made again from the index; not a store's answer.
     Drawn(Box<crate::map::Snapshot>),
 }
@@ -216,6 +239,21 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
                 trashed,
             }
         }
+        Ask::File {
+            folder,
+            uid,
+            label,
+            message_id,
+            key,
+        } => Answer::Filed {
+            filed: store.file(&folder, uid, &label, &message_id).map_err(text),
+            key,
+            label,
+        },
+        Ask::RenameLabel { old, new } => Answer::LabelRenamed {
+            result: store.rename_label(&old, &new).map_err(text),
+            old,
+        },
         Ask::Archive {
             folder,
             uid,

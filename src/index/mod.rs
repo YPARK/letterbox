@@ -14,7 +14,7 @@ pub mod sync;
 
 use crate::mail::Flags;
 use crate::secret::Keeper;
-use age::x25519::{Identity, Recipient};
+use age::x25519::Identity;
 use journal::Journal;
 pub use record::{FolderState, Key, Place, Record};
 use serde::{Deserialize, Serialize};
@@ -311,7 +311,8 @@ impl Index {
 
     /// The index in `dir`, written to with `recipient` alone: what is new
     /// is written down, and nothing is read.
-    pub fn writer(dir: &Path, recipient: Recipient) -> Index {
+    #[cfg(test)]
+    pub fn writer(dir: &Path, recipient: age::x25519::Recipient) -> Index {
         let (cache, _) = Journal::open(dir, "cache", recipient.clone(), None);
         let (kept, _) = Journal::open(dir, "keep", recipient, None);
         Index {

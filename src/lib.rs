@@ -7,8 +7,6 @@ mod compose;
 mod config;
 mod demo;
 mod edit;
-// Labels are written by the map, which follows.
-#[allow(dead_code)]
 mod imap;
 #[allow(dead_code)]
 mod index;
@@ -16,7 +14,7 @@ mod keymap;
 mod mail;
 mod map;
 mod mcp;
-// Filing and laying out again, which use the rest, follow.
+// Laying the map out again, which uses the rest, follows.
 #[allow(dead_code)]
 mod model;
 mod net;
@@ -24,7 +22,6 @@ mod oauth;
 mod secret;
 mod setup;
 mod smtp;
-#[allow(dead_code)]
 mod store;
 mod theme;
 mod trash;
