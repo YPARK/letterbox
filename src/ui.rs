@@ -221,7 +221,8 @@ fn hint_spots(label: &str, x: u16, y: u16, width: u16) -> Targets {
 }
 
 /// `items`, each a key and what it does, as spans from column `x` of row
-/// `y`, each one clickable as its key.
+/// `y`, each one clickable as its key: the key a block of its own colour,
+/// to stand out from the text about it.
 fn keyed(
     t: &Theme,
     items: &[(&str, &str)],
@@ -232,14 +233,15 @@ fn keyed(
     let mut spans = Vec::new();
     let mut at = x;
     for (key, what) in items {
-        let what = format!(" {what}   ");
-        let width = (key.width() + what.width()) as u16;
-        spots.extend(hint_spots(key, at, y, width));
+        let block = format!(" {key} ");
+        let what = format!("{what}   ");
+        let width = (block.width() + what.width()) as u16;
+        spots.extend(hint_spots(key, at + 1, y, width - 1));
         spans.push(Span::styled(
-            key.to_string(),
-            Style::new().fg(t.soft).bold(),
+            block,
+            Style::new().fg(t.title).bg(t.focus).bold(),
         ));
-        spans.push(Span::styled(what, Style::new().fg(t.dim)));
+        spans.push(Span::styled(what, Style::new().fg(t.soft)));
         at += width;
     }
     spans
@@ -920,6 +922,35 @@ fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     f.render_widget(Clear, area);
     f.render_widget(block, area);
     app.targets.push((area, Target::Popup));
+    // What ends it, as buttons on its top edge, each in a colour of its
+    // own, at the right: clicked, or pressed by its keys.
+    let buttons = [
+        ("Send", "C-c C-c", t.accent, t.on_accent),
+        ("Attach", "C-c C-a", t.focus, t.title),
+        ("Discard", "C-c C-k", t.error, t.on_accent),
+    ];
+    let said: Vec<String> = buttons
+        .iter()
+        .map(|(what, key, ..)| format!(" {what}  {key} "))
+        .collect();
+    let width: u16 = said.iter().map(|s| s.width() as u16 + 1).sum();
+    let title_end = area.x + 2 + format!(" From {from} ").width() as u16;
+    if area.right() >= title_end + width + 3 {
+        let mut x = area.right() - 2 - width;
+        let buf = f.buffer_mut();
+        for ((_, key, bg, fg), said) in buttons.iter().zip(&said) {
+            let w = said.width() as u16;
+            buf.set_stringn(
+                x,
+                area.y,
+                said,
+                usize::from(w),
+                Style::new().fg(*fg).bg(*bg).bold(),
+            );
+            app.targets.extend(hint_spots(key, x, area.y, w));
+            x += w + 1;
+        }
+    }
     compose_pane(f, app, inner);
 }
 
@@ -986,7 +1017,7 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
             spots.push((Rect::new(x, guide.y + 1, 14, 1), Target::Key(f1)));
         }
         let lines = vec![Line::from(first), Line::styled(second, say)];
-        f.render_widget(Paragraph::new(lines).style(Style::new().bg(t.page)), guide);
+        f.render_widget(Paragraph::new(lines).style(Style::new().bg(t.side)), guide);
     }
     let rows = (body.height as usize).max(1);
     if compose.buffer.row() < compose.scroll {
@@ -3013,8 +3044,9 @@ fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
                 spots.push((y, rect.x, rect.width, target));
             }
             x += w;
-            spans.push(Span::styled(k, Style::new().fg(t.soft).bold()));
-            spans.push(Span::styled(what, Style::new().fg(t.dim)));
+            // The key a block of its own colour, to stand out.
+            spans.push(Span::styled(k, Style::new().fg(t.title).bg(t.focus).bold()));
+            spans.push(Span::styled(what, Style::new().fg(t.soft)));
         }
         lines.push(Line::from(spans));
     }

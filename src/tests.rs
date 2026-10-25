@@ -6811,3 +6811,35 @@ fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
         assert!(labels.contains(&label), "{}: {labels:?}", s.dots[i].subject);
     }
 }
+
+#[test]
+fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
+    let mut app = demo();
+    press(&mut app, &["<enter>", "r"]);
+    assert!(app.compose.is_some());
+    let screen = app::screen(&mut app, 160, 40);
+    let top = screen
+        .lines()
+        .find(|l| l.contains("From "))
+        .unwrap()
+        .to_string();
+    for b in ["Send  C-c C-c", "Attach  C-c C-a", "Discard  C-c C-k"] {
+        assert!(top.contains(b), "{top}");
+    }
+    let discard = (
+        crate::keymap::key_named("C-c").unwrap(),
+        crate::keymap::key_named("C-k").unwrap(),
+    );
+    let (rect, _) = *app
+        .targets
+        .iter()
+        .filter(|(_, t)| *t == app::Target::Chord(discard.0, discard.1))
+        .min_by_key(|(r, _)| r.y)
+        .unwrap();
+    app.mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 1,
+        rect.y,
+    ));
+    assert!(app.compose.is_none(), "{}", app.status);
+}
