@@ -192,8 +192,8 @@ pub const KEYS: &[Binding] = &[
         help: "reply to the sender",
     },
     Binding {
-        keys: &[("e", ReplyAll), ("C-S-r", ReplyAll)],
-        name: "e C-S-r",
+        keys: &[("e", ReplyAll)],
+        name: "e",
         hint: "e",
         foot: &[(List, "reply all"), (Reader, "reply all")],
         help: "reply to all: the sender, and the others it went to, copied",
@@ -280,7 +280,7 @@ pub const KEYS: &[Binding] = &[
         help: "remove an account: the one picked in the sidebar, else the one listed",
     },
     Binding {
-        keys: &[("C-n", NewMail), ("C-S-n", NewMail)],
+        keys: &[("C-n", NewMail)],
         name: "C-n",
         hint: "C-n",
         foot: &[(Side, "new mail"), (List, "new mail")],

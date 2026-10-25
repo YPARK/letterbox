@@ -123,12 +123,12 @@ letterbox search grant report --account Work
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
 | `c` | write a message |
 | `C-r` | reply to the sender |
-| `e`, `C-S-r` | reply to all: the sender, the others it went to copied |
+| `e` | reply to all: the sender, the others it went to copied |
 | `C-f` | forward it, its files with it |
 | `o` | open the message in the browser, as its HTML |
 | `f` | its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser |
 | `a` | save its attachments to `~/Downloads` (`$LETTERBOX_DOWNLOADS`); in the map, take it, or what is marked, out of the Inbox |
-| `C-n`, `C-S-n` | look for new mail now; it is looked for every two minutes |
+| `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
@@ -149,14 +149,12 @@ letterbox search grant report --account Work
 | `?` | all the keys |
 | `q` | quit |
 
-`C-S-r` needs a terminal that tells it from `C-r`, as kitty, WezTerm and
-Ghostty do when asked; kitty keeps `ctrl+shift+r` and `ctrl+shift+n` for
-itself unless `kitty.conf` says `map ctrl+shift+r no_op`, and the same
-for `n`. `e` replies to all in any terminal. ⌘G and Super+G reach
-letterbox only in a terminal that speaks kitty's keyboard protocol, as
-kitty, WezTerm and Ghostty do, and keeps no shortcut of its own on them;
-Terminal and iTerm2 keep ⌘G to find. `M-g`, or a click on Map at the top
-right, shows the map in any terminal, and List goes back.
+No key holds Ctrl and Shift together, as kitty keeps those for itself.
+⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
+keyboard protocol, as kitty, WezTerm and Ghostty do, and keeps no
+shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`,
+or a click on Map at the top right, shows the map in any terminal, and
+List goes back.
 
 `c` opens a message to write, `C-r` a reply, in a pane edited as Emacs
 edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`

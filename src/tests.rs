@@ -3069,8 +3069,6 @@ fn reply_forward_and_new_mail_have_their_keys() {
     assert!(text.contains("Subject: Re: "), "{text}");
     press(&mut app, &["<c-g>", "e"]);
     assert!(app.compose.is_some(), "e replies to all");
-    press(&mut app, &["<c-g>", "<c-s-r>"]);
-    assert!(app.compose.is_some(), "so does C-S-r");
     press(&mut app, &["<c-g>", "<c-f>"]);
     let text = app.compose.as_ref().unwrap().buffer.text();
     assert!(text.contains("Subject: Fwd: "), "{text}");
@@ -3079,7 +3077,7 @@ fn reply_forward_and_new_mail_have_their_keys() {
         press(&mut app, &["?"]);
         app::screen(&mut app, 100, 60)
     };
-    for key in ["C-r", "C-S-r", "C-f", "C-n", "R"] {
+    for key in ["C-r", "e", "C-f", "C-n", "R"] {
         assert!(help.contains(key), "{key} in {help}");
     }
 }
@@ -3396,17 +3394,15 @@ fn every_key_in_the_table_is_read_and_bound_once() {
             "{name} is bound twice"
         );
     }
-    // Shift's letter, as terminals say it or not.
+    // Ctrl and Shift, as terminals say it or not, is no key of ours, as
+    // kitty keeps ctrl+shift for itself: not C-r's.
     let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
     for key in [
         KeyEvent::new(KeyCode::Char('r'), ctrl_shift),
         KeyEvent::new(KeyCode::Char('R'), ctrl_shift),
         KeyEvent::new(KeyCode::Char('R'), KeyModifiers::CONTROL),
     ] {
-        assert_eq!(
-            crate::keymap::act(key),
-            crate::keymap::act(key_named("e").unwrap()),
-        );
+        assert_eq!(crate::keymap::act(key), None);
     }
     assert_eq!(
         crate::keymap::act(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)),
