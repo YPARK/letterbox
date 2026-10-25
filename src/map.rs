@@ -275,14 +275,6 @@ struct Last {
 /// What a snapshot of `index` by `lens` is made from: begun from `last`,
 /// its clusters and where its messages were, and from what `corpus` has
 /// read; laid out if `layout` and it never was.
-/// Whether `r` is no mail but what Microsoft's servers give in place of an
-/// item they cannot send over IMAP, as a calendar's: "Retrieval using the
-/// IMAP4 protocol failed for the following message: 839".
-pub fn is_placeholder(r: &Record) -> bool {
-    r.subject
-        .starts_with("Retrieval using the IMAP4 protocol failed for the following message")
-}
-
 pub fn input(
     index: &Index,
     lens: Lens,
@@ -293,7 +285,6 @@ pub fn input(
     let records = index
         .records
         .values()
-        .filter(|r| !is_placeholder(r))
         .map(|r| {
             let mine = index.keep.labels.contains_key(&r.key)
                 || index

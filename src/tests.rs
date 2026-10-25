@@ -6716,7 +6716,7 @@ fn mail_that_differs_by_its_number_alone_is_one_thread() {
 }
 
 #[test]
-fn the_folders_that_hold_no_mail_and_microsofts_stand_ins_are_not_mapped() {
+fn the_folders_that_hold_no_mail_are_not_mapped() {
     use crate::mail::Folder;
     let folders = vec![
         Folder::new("INBOX", Some("/"), None, true),
@@ -6732,13 +6732,6 @@ fn the_folders_that_hold_no_mail_and_microsofts_stand_ins_are_not_mapped() {
         .map(|f| f.path.as_str())
         .collect();
     assert_eq!(mapped, ["INBOX", "Projects/Calendar talk"]);
-    let mut r = crate::index::record::Record {
-        subject: "Retrieval using the IMAP4 protocol failed for the following message: 839".into(),
-        ..Default::default()
-    };
-    assert!(crate::map::is_placeholder(&r));
-    r.subject = "Re: Retrieval of the samples".into();
-    assert!(!crate::map::is_placeholder(&r));
 }
 
 #[test]
