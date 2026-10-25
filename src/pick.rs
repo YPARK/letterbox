@@ -98,9 +98,13 @@ impl Picker {
                     if meta.is_dir() {
                         dirs.push(name);
                     } else {
+                        // As new as another: the first by name, whatever
+                        // order the folder is read in.
                         if !name.starts_with('.')
                             && let Ok(at) = meta.modified()
-                            && newest.as_ref().is_none_or(|(t, _)| at > *t)
+                            && newest
+                                .as_ref()
+                                .is_none_or(|(t, n)| at > *t || (at == *t && name < *n))
                         {
                             newest = Some((at, name.clone()));
                         }

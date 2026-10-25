@@ -275,6 +275,7 @@ impl Filter {
     }
 
     /// The weight of `token`, as it has faded till now.
+    #[cfg(test)]
     pub fn weight(&self, token: &str) -> f32 {
         self.weight_of(fnv(token.as_bytes()))
     }

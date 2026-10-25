@@ -6054,6 +6054,25 @@ fn capital(key: KeyEvent) -> KeyEvent {
 /// their paths, each quoted or its spaces escaped, or their `file://`
 /// addresses; none unless each is a file named from the root or home.
 fn dropped(text: &str) -> Vec<PathBuf> {
+    let windows = cfg!(windows);
+    let paths: Vec<PathBuf> = dropped_words(text, windows)
+        .iter()
+        .map(|w| match w.strip_prefix("file://") {
+            Some(rest) => PathBuf::from(file_address(rest, windows)),
+            None => compose::path_of(w),
+        })
+        .collect();
+    if paths.iter().all(|p| p.is_absolute() && p.is_file()) {
+        paths
+    } else {
+        Vec::new()
+    }
+}
+
+/// The words of `text` as a terminal pastes paths: each quoted, or its
+/// spaces escaped by a backslash; on `windows`, where a backslash parts
+/// folders, quoted only.
+pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote: Option<char> = None;
@@ -6062,7 +6081,7 @@ fn dropped(text: &str) -> Vec<PathBuf> {
         match quote {
             Some(q) if c == q => quote = None,
             Some(_) => word.push(c),
-            None if c == '\\' => word.extend(chars.next()),
+            None if c == '\\' && !windows => word.extend(chars.next()),
             None if c == '\'' || c == '"' => quote = Some(c),
             None if c.is_whitespace() => {
                 if !word.is_empty() {
@@ -6075,17 +6094,21 @@ fn dropped(text: &str) -> Vec<PathBuf> {
     if !word.is_empty() {
         words.push(word);
     }
-    let paths: Vec<PathBuf> = words
-        .iter()
-        .map(|w| match w.strip_prefix("file://") {
-            Some(rest) => PathBuf::from(unescaped(rest)),
-            None => compose::path_of(w),
-        })
-        .collect();
-    if paths.iter().all(|p| p.is_absolute() && p.is_file()) {
-        paths
+    words
+}
+
+/// The path of a `file://` address, after its `file://`: its escapes
+/// read; on `windows`, the drive's, without the root's slash before it.
+pub(crate) fn file_address(rest: &str, windows: bool) -> String {
+    let path = unescaped(rest);
+    let drive = |p: &str| {
+        let b = p.as_bytes();
+        b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':'
+    };
+    if windows && drive(&path) {
+        path[1..].to_string()
     } else {
-        Vec::new()
+        path
     }
 }
 

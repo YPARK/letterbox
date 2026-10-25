@@ -2318,10 +2318,7 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
         (said, newest, unread, hits)
     };
     rows.sort_by(|a, b| a.path.cmp(&b.path));
-    let said: Vec<_> = rows
-        .iter()
-        .map(|r| root.at(&r.path).map(&said_of))
-        .collect();
+    let said: Vec<_> = rows.iter().map(|r| root.at(&r.path).map(said_of)).collect();
     // Each level as wide as what its open branch says, to a point, and a
     // line's room after it.
     let levels = root.levels();

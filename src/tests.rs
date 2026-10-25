@@ -3354,8 +3354,11 @@ fn files_are_picked_a_folder_at_a_time_and_sent_with_the_message() {
     assert!(matches!(app.dialog, app::Dialog::Closed), "{}", app.status);
     assert_eq!(app.status, "attached 2 files");
     let text = app.compose.as_ref().unwrap().buffer.text();
-    assert!(text.contains("/papers/figure.png\n"), "{text}");
-    assert!(text.contains("/papers/notes.pdf\n"), "{text}");
+    let papers = dir.path().join("papers");
+    for name in ["figure.png", "notes.pdf"] {
+        let line = format!("{}\n", papers.join(name).display());
+        assert!(text.contains(&line), "{line} in {text}");
+    }
     let screen = app::screen(&mut app, 150, 40);
     assert!(screen.contains("14 B"), "the size, beside it: {screen}");
     // Again, from the folder last attached from; a file there once.
@@ -3416,6 +3419,30 @@ fn a_forward_s_files_are_attach_lines_that_can_be_let_go() {
 }
 
 #[test]
+fn a_dropped_path_is_read_as_the_terminal_of_each_system_writes_it() {
+    // Elsewhere a backslash escapes what follows it, as a space.
+    assert_eq!(
+        crate::app::dropped_words("/tmp/a\\ draft.txt '/tmp/plain.txt'", false),
+        ["/tmp/a draft.txt", "/tmp/plain.txt"]
+    );
+    // On Windows it is what folders are parted by: kept, and a path with a
+    // space is quoted.
+    assert_eq!(
+        crate::app::dropped_words(r#"C:\Users\a\plain.txt "C:\Users\a\a draft.txt""#, true),
+        [r"C:\Users\a\plain.txt", r"C:\Users\a\a draft.txt"]
+    );
+    // An address: its path, the drive's after the root's slash.
+    assert_eq!(
+        crate::app::file_address("/Users/a/a%20draft.txt", false),
+        "/Users/a/a draft.txt"
+    );
+    assert_eq!(
+        crate::app::file_address("/C:/Users/a/a%20draft.txt", true),
+        "C:/Users/a/a draft.txt"
+    );
+}
+
+#[test]
 fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
     let dir = tempfile::tempdir().unwrap();
     let spaced = dir.path().join("a draft.txt");
@@ -3424,15 +3451,25 @@ fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
     std::fs::write(&plain, b"plain").unwrap();
     let mut app = demo();
     press(&mut app, &["c"]);
-    // As terminals paste dropped files: escaped, quoted, or as addresses.
-    let escaped = spaced.display().to_string().replace(' ', "\\ ");
-    app.paste(&format!("{escaped} '{}'", plain.display()));
+    // As terminals paste dropped files: escaped, quoted, or as addresses;
+    // on Windows, a path with a space quoted.
+    let spaced_said = if cfg!(windows) {
+        format!("\"{}\"", spaced.display())
+    } else {
+        spaced.display().to_string().replace(' ', "\\ ")
+    };
+    app.paste(&format!("{spaced_said} '{}'", plain.display()));
     let text = app.compose.as_ref().unwrap().buffer.text();
     assert!(text.contains("a draft.txt\n"), "{text}");
     assert!(text.contains("plain.txt\n"), "{text}");
     let address = format!(
-        "file://{}",
-        spaced.display().to_string().replace(' ', "%20")
+        "file://{}{}",
+        if cfg!(windows) { "/" } else { "" },
+        spaced
+            .display()
+            .to_string()
+            .replace(' ', "%20")
+            .replace('\\', "/")
     );
     app.paste(&address);
     assert_eq!(app.status, "attached already");
@@ -5572,10 +5609,43 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
 }
 
 #[test]
+fn the_newest_file_of_several_as_new_is_the_first_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = std::time::SystemTime::now() - Duration::from_secs(60);
+    for name in ["b.txt", "a.txt", "c.txt"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+    let p = crate::pick::Picker::open(dir.path().to_path_buf());
+    assert_eq!(
+        p.current().map(|e| e.name().to_string()).as_deref(),
+        Some("a.txt")
+    );
+}
+
+#[test]
 fn space_marks_in_the_picker_after_typing_too() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["one draft.txt", "two draft.txt", "notes.txt"] {
-        std::fs::write(dir.path().join(name), b"x").unwrap();
+    // Each newer than the last, as a clock that tells them apart has it.
+    let at = std::time::SystemTime::now() - Duration::from_secs(60);
+    for (i, name) in ["one draft.txt", "two draft.txt", "notes.txt"]
+        .iter()
+        .enumerate()
+    {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at + Duration::from_secs(i as u64))
+            .unwrap();
     }
     let mut p = crate::pick::Picker::open(dir.path().to_path_buf());
     for c in "draft".chars() {
