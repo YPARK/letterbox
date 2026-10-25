@@ -4532,13 +4532,19 @@ fn the_same_seed_lays_out_the_same_map() {
 #[test]
 fn the_map_is_the_same_on_any_number_of_threads() {
     let index = demo_index();
-    let m = model_of(&index, Lens::Both);
     let on = |threads: usize| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap()
-            .install(|| crate::model::layout(&m, None, 1))
+            .install(|| {
+                let m = model_of(&index, Lens::Both);
+                let c = crate::model::cluster(&m, &[], 1);
+                assert!(m.vectors.iter().all(|v| v.iter().all(|x| x.is_finite())));
+                let mut at = crate::model::layout(&m, None, 1);
+                at.push([m.vectors[0][0], c.of.iter().sum::<usize>() as f32]);
+                at
+            })
     };
     let bits = |p: &[crate::model::Point]| -> Vec<u32> {
         p.iter()
@@ -4549,37 +4555,22 @@ fn the_map_is_the_same_on_any_number_of_threads() {
 }
 
 #[test]
-fn past_every_pair_the_neighbours_found_are_mostly_the_nearest() {
-    // Twenty groups of a hundred directions, each its centre a little shaken.
-    let mut state = 1u64;
-    let mut next = || {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (state >> 33) as f32 / (1u64 << 31) as f32 - 0.5
-    };
-    let unit = |mut v: crate::model::Vector| {
-        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        v.iter_mut().for_each(|x| *x /= n);
-        v
-    };
-    let centres: Vec<crate::model::Vector> = (0..20)
-        .map(|_| unit(std::array::from_fn(|_| next())))
-        .collect();
-    let vectors: Vec<crate::model::Vector> = (0..2000)
-        .map(|i| {
-            let c = centres[i % 20];
-            unit(std::array::from_fn(|d| c[d] + 0.15 * next()))
-        })
-        .collect();
-    let every = crate::model::neighbours(&vectors, 15, usize::MAX);
-    let grouped = crate::model::neighbours(&vectors, 15, 0);
-    let shared: usize = every
-        .iter()
-        .zip(&grouped)
-        .map(|(a, b)| a.iter().filter(|x| b.iter().any(|y| y.0 == x.0)).count())
-        .sum();
-    let recall = shared as f32 / (15 * vectors.len()) as f32;
+fn the_nearest_found_by_tokens_are_mostly_the_nearest_of_all() {
+    // Mail enough that common tokens are looked through a window only.
+    let (records, _) = made_mail(4_000, 3);
+    let given: Vec<crate::model::Given> = records.iter().map(|r| (r, Vec::new(), false)).collect();
+    let m = crate::model::Model::build(&given, &Default::default(), Lens::Both);
+    let every = crate::model::nearest_by_every_pair(&given, Lens::Both, 15, (0..4_000).step_by(20));
+    let mut shared = 0;
+    let mut all = 0;
+    for (i, best) in every {
+        shared += best
+            .iter()
+            .filter(|x| m.near[i].iter().any(|y| y.0 == x.0))
+            .count();
+        all += best.len();
+    }
+    let recall = shared as f32 / all as f32;
     assert!(recall > 0.9, "{recall} of the nearest found");
 }
 
@@ -4604,17 +4595,17 @@ fn a_new_message_lands_among_its_kind() {
     let key = r.key.clone();
     index.cache(vec![Cached::Upsert(Box::new(r))]).unwrap();
     let m2 = model_of(&index, Lens::Both);
-    let known: Vec<(usize, crate::model::Point)> = m
+    let known: Vec<Option<crate::model::Point>> = m2
         .keys
         .iter()
-        .zip(&laid)
-        .map(|(k, &p)| (m2.keys.iter().position(|x| x == k).unwrap(), p))
+        .map(|k| m.keys.iter().position(|x| x == k).map(|i| laid[i]))
         .collect();
     let new = m2.keys.iter().position(|k| *k == key).unwrap();
     let at = crate::model::place(&m2, new, &known);
     let mut by_place: Vec<(f32, usize)> = known
         .iter()
-        .map(|&(i, p)| ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2), i))
+        .enumerate()
+        .filter_map(|(i, p)| p.map(|p| ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2), i)))
         .collect();
     by_place.sort_by(|a, b| a.0.total_cmp(&b.0));
     let nearest = &index.records[&m2.keys[by_place[0].1]];
@@ -5408,4 +5399,209 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
             .values()
             .all(|at| at.len() == INBOX + 20 + 4 + 4)
     );
+}
+
+// ---- the map's model on mail made up of known topics ----
+
+/// Numbers that look random, for mail made up.
+struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn unit(&mut self) -> f64 {
+        (self.next() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        ((self.unit() * n as f64) as usize).min(n - 1)
+    }
+
+    /// One of `cumulative`'s places, as likely as its share of the last.
+    fn pick(&mut self, cumulative: &[f64]) -> usize {
+        let at = self.unit() * cumulative[cumulative.len() - 1];
+        cumulative
+            .partition_point(|&c| c < at)
+            .min(cumulative.len() - 1)
+    }
+}
+
+/// A made-up word, the `i`th, of letters but `s`.
+fn made_word(mut i: usize) -> String {
+    const LETTERS: &[u8] = b"abcdefghijklmnopqrtuvwxyz";
+    let mut w = String::from("q");
+    loop {
+        w.push(LETTERS[i % LETTERS.len()] as char);
+        i /= LETTERS.len();
+        if i == 0 {
+            return w;
+        }
+    }
+}
+
+fn zipf(n: usize, shift: f64) -> Vec<f64> {
+    let mut total = 0.0;
+    (0..n)
+        .map(|r| {
+            total += 1.0 / (r as f64 + shift);
+            total
+        })
+        .collect()
+}
+
+/// `n` messages made up of topics, as records, and each one's topic. A
+/// topic has its people, some shared with others, a list now and then,
+/// and words of its own; each message mixes a topic's words with words
+/// any message might have, the commonest most often; a tenth are sent.
+fn made_mail(n: usize, seed: u64) -> (Vec<index::Record>, Vec<usize>) {
+    let mut dice = Dice(seed);
+    let words = 30_000;
+    let any = zipf(words, 10.0);
+    let topics = (n / 100).max(20);
+    let people = topics * 2;
+    let address = |p: usize| format!("p{p}@d{}.example", p % (people / 3 + 1));
+    struct Topic {
+        people: Vec<usize>,
+        list: Option<String>,
+        words: Vec<usize>,
+    }
+    let all: Vec<Topic> = (0..topics)
+        .map(|t| {
+            let list = (dice.unit() < 0.25).then(|| format!("list{t}.example"));
+            let many = if list.is_some() { 1 } else { 1 + dice.below(5) };
+            Topic {
+                people: (0..many).map(|_| dice.below(people)).collect(),
+                list,
+                words: (0..30).map(|_| 200 + dice.below(words - 200)).collect(),
+            }
+        })
+        .collect();
+    let sizes = zipf(topics, 3.0);
+    let mut records = Vec::with_capacity(n);
+    let mut truth = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = dice.pick(&sizes);
+        let topic = &all[t];
+        let word = |share: f64, dice: &mut Dice| {
+            if dice.unit() < share {
+                made_word(topic.words[dice.below(topic.words.len())])
+            } else {
+                made_word(dice.pick(&any))
+            }
+        };
+        let subject: Vec<String> = (0..4).map(|_| word(0.6, &mut dice)).collect();
+        let preview: Vec<String> = (0..20).map(|_| word(0.3, &mut dice)).collect();
+        let person = address(topic.people[dice.below(topic.people.len())]);
+        let sent = topic.list.is_none() && dice.unit() < 0.1;
+        let mut to = vec!["you@home.example".to_string()];
+        if dice.unit() < 0.3 {
+            to.push(address(topic.people[dice.below(topic.people.len())]));
+        }
+        let (address, to) = if sent {
+            ("you@home.example".to_string(), vec![person])
+        } else {
+            (person, to)
+        };
+        records.push(index::Record {
+            key: index::Key {
+                account: "made".into(),
+                id: format!("id:{i}"),
+            },
+            from: address.clone(),
+            address,
+            to,
+            list: topic.list.clone().unwrap_or_default(),
+            subject: subject.join(" "),
+            preview: preview.join(" "),
+            date: Some(i as i64),
+            ..Default::default()
+        });
+        truth.push(t);
+    }
+    (records, truth)
+}
+
+/// How the model does on made-up mail of `n` messages: how long each
+/// step takes, and how many of each message's ten nearest share its topic.
+fn measure(n: usize) {
+    use crate::model;
+    use std::collections::BTreeMap;
+    use std::time::Instant;
+    let (records, truth) = made_mail(n, 7);
+    let given: Vec<model::Given> = records
+        .iter()
+        .map(|r| (r, Vec::new(), r.address == "you@home.example"))
+        .collect();
+    let t = Instant::now();
+    let m = model::Model::build(&given, &Default::default(), Lens::Both);
+    let build = t.elapsed();
+    let t = Instant::now();
+    let c = model::cluster(&m, &[], 1);
+    let clustering = t.elapsed();
+    let t = Instant::now();
+    let at = model::layout(&m, None, 1);
+    let layout = t.elapsed();
+    let f = model::faithfulness(&m, &at);
+    let sample: Vec<usize> = (0..n).step_by((n / 500).max(1)).collect();
+    let share = |near: &dyn Fn(usize) -> Vec<usize>| {
+        let mut same = 0;
+        let mut all = 0;
+        for &i in &sample {
+            for j in near(i) {
+                same += usize::from(truth[j] == truth[i]);
+                all += 1;
+            }
+        }
+        same as f32 / all.max(1) as f32
+    };
+    // Of each message's ten nearest, how many share its topic: by tokens,
+    // every pair compared; as found; by the vectors; on the map.
+    let every: BTreeMap<usize, Vec<usize>> =
+        model::nearest_by_every_pair(&given, Lens::Both, 10, sample.iter().copied())
+            .into_iter()
+            .map(|(i, near)| (i, near.into_iter().map(|x| x.0).collect()))
+            .collect();
+    let ceiling = share(&|i| every[&i].clone());
+    let found = share(&|i| m.near[i].iter().take(10).map(|x| x.0).collect());
+    let vectors = share(&|i| m.nearest(i, 10).into_iter().map(|x| x.0).collect());
+    let on_map = share(&|i| {
+        let mut all: Vec<(usize, f32)> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| {
+                (
+                    j,
+                    (at[i][0] - at[j][0]).powi(2) + (at[i][1] - at[j][1]).powi(2),
+                )
+            })
+            .collect();
+        all.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        all.into_iter().take(10).map(|x| x.0).collect()
+    });
+    // Clusters: how many messages are in the cluster most of their topic is.
+    let mut by_topic: BTreeMap<usize, BTreeMap<usize, usize>> = BTreeMap::new();
+    for (t, &of) in truth.iter().zip(&c.of) {
+        *by_topic.entry(*t).or_default().entry(of).or_default() += 1;
+    }
+    let pure: usize = by_topic.values().map(|m| m.values().max().unwrap()).sum();
+    eprintln!(
+        "n {n:>6}: build {build:>6.0?} cluster {clustering:>6.0?} layout {layout:>6.0?} | \
+         topic@10 every pair {ceiling:.2} found {found:.2} vectors {vectors:.2} map {on_map:.2} | \
+         kept together {:.2} | faithful {:.0}%",
+        pure as f32 / n as f32,
+        100.0 * f
+    );
+}
+
+#[test]
+#[ignore = "measures; run with --release --ignored --nocapture"]
+fn how_the_model_does_on_mail_of_known_topics() {
+    for n in [2_000, 10_000, 50_000] {
+        measure(n);
+    }
 }

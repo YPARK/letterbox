@@ -1,16 +1,19 @@
 //! The map's model, as arithmetic alone: no file, no server, no clock. A
 //! message is read as tokens, its sender, the sender's domain, its list,
 //! whom else it went to, and the words of its subject and of its start,
-//! and becomes a direction in 64 dimensions: each token hashed by FNV-1a
-//! to a bucket, each bucket a vector of signs made from its hash and a
-//! fixed seed, weighted by how rare the bucket is, summed and made of
-//! unit length. Labels teach it: a label is the mean of its messages, a
-//! message not yet labelled is pulled toward a label by the share of its
-//! tokens seen in that label's mail, and pushed away from one it was said
-//! not to be. Clusters are found by angle, a cluster holding two labels'
-//! mail is split between them, and the map is laid out by UMAP over each
-//! message's nearest by angle. Every step is seeded, so the same mail gives
-//! the same map, bit for bit, however many threads it is made on.
+//! each hashed by FNV-1a to a bucket and weighted by how rare it is. Its
+//! nearest are the messages whose tokens are most alike, by cosine, found
+//! through which messages have each token. It becomes a direction in 64
+//! dimensions, each bucket a vector of signs made from its hash and a
+//! fixed seed, summed; and, since 64 dimensions blur, the direction is
+//! taken half from its nearest. Labels teach it: a label is the mean of
+//! its messages, a message not yet labelled is pulled toward a label by
+//! the share of its tokens seen in that label's mail, and pushed away from
+//! one it was said not to be. Clusters are found by angle, a cluster
+//! holding two labels' mail is split between them, and the map is laid
+//! out by UMAP over each message's nearest. Every step is seeded, so the
+//! same mail gives the same map, bit for bit, however many threads it is
+//! made on.
 
 use crate::index::record::{Record, fnv};
 use crate::index::{Key, Lens, fold};
@@ -35,15 +38,16 @@ const LONER: f32 = 0.2;
 /// How many neighbours each message has in the graph the map is laid out
 /// from: UMAP's `n_neighbors`, less the message itself.
 const NEIGHBOURS: usize = 15;
-/// Up to how many messages their neighbours are found by comparing every
-/// pair; past it, each is compared only with those of its nearest groups.
-pub const EXACT: usize = 6000;
-/// How many of its nearest groups a message is compared within, past
-/// `EXACT`.
-const PROBES: usize = 4;
 /// How many others each end of an edge is pushed from, each time the edge
 /// is drawn.
 const NEGATIVE: usize = 5;
+/// Of the messages that share a token with one, how many it is compared
+/// with by that token, at most; and how many of the likeliest of them are
+/// compared with it token by token.
+const WINDOW: usize = 512;
+const SHORTLIST: usize = 48;
+/// How much nearer two messages are laid out for sharing a label.
+const SHARED: f32 = 0.5;
 /// How near a label, in degrees, a message is to be suggested for it.
 pub const NEAR: f32 = 30.0;
 
@@ -186,12 +190,272 @@ pub fn degrees(a: &Vector, b: &Vector) -> f32 {
     dot(a, b).clamp(-1.0, 1.0).acos().to_degrees()
 }
 
+/// A message's tokens, each by its bucket and what it weighs before how
+/// rare it is, in order of bucket.
+pub type Bag = Vec<(u64, f32)>;
+
+/// `tokens` as a bag: by bucket, two tokens of one bucket as one.
+fn bag_of(tokens: &[(u64, String, f32)]) -> Bag {
+    let mut bag: Bag = tokens.iter().map(|(b, _, w)| (*b, *w)).collect();
+    bag.sort_by_key(|t| t.0);
+    bag.dedup_by(|later, kept| {
+        let same = later.0 == kept.0;
+        if same {
+            kept.1 += later.1;
+        }
+        same
+    });
+    bag
+}
+
+/// How many of the messages have each bucket, and of how many.
+#[derive(Clone, Debug, Default)]
+pub struct Rarity {
+    seen: HashMap<u64, u32>,
+    n: usize,
+}
+
+impl Rarity {
+    fn of(bags: &[Bag]) -> Rarity {
+        let mut r = Rarity::default();
+        for bag in bags {
+            r.add(bag);
+        }
+        r
+    }
+
+    fn add(&mut self, bag: &Bag) {
+        self.n += 1;
+        for &(b, _) in bag {
+            *self.seen.entry(b).or_default() += 1;
+        }
+    }
+
+    /// How rare a bucket is: the more messages have it, the less.
+    fn idf(&self, b: u64) -> f32 {
+        let n = self.n as f32;
+        ((n + 1.0) / (self.seen.get(&b).copied().unwrap_or(0) as f32 + 1.0)).ln() + 1.0
+    }
+
+    /// What a token of the bucket `b` weighs, for each of its own weight:
+    /// by how rare it is. A token of one message alone tells it from none,
+    /// and one of most tells none apart: either is only noise, and weighs
+    /// nothing.
+    fn factor(&self, b: u64) -> f32 {
+        let n = self.n as f32;
+        let seen = self.seen.get(&b).copied().unwrap_or(0) as f32;
+        let telling = n < 20.0 || (seen > 1.0 && seen <= n / 2.0);
+        if telling { self.idf(b) } else { 0.0 }
+    }
+
+    /// The length of `bag`, each token weighed.
+    fn norm(&self, bag: &Bag) -> f32 {
+        bag.iter()
+            .map(|&(b, w)| (w * self.factor(b)).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    /// The cosine of two bags, each token weighed, of the lengths given.
+    fn cosine(&self, a: &Bag, b: &Bag, na: f32, nb: f32) -> f32 {
+        if na <= 0.0 || nb <= 0.0 {
+            return 0.0;
+        }
+        let (mut i, mut j, mut sum) = (0, 0, 0f32);
+        while i < a.len() && j < b.len() {
+            match a[i].0.cmp(&b[j].0) {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => {
+                    sum += a[i].1 * b[j].1 * self.factor(a[i].0).powi(2);
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        sum / (na * nb)
+    }
+
+    /// `bag` as a direction in `DIM` dimensions: each bucket a vector of
+    /// signs made from its hash, weighed, summed and made of unit length.
+    fn project(&self, bag: &Bag) -> Vector {
+        let mut v = [0f32; DIM];
+        for &(b, w) in bag {
+            let mut state = b ^ SEED;
+            let signs = splitmix(&mut state);
+            let weight = w * self.factor(b);
+            for (d, x) in v.iter_mut().enumerate() {
+                *x += if signs >> d & 1 == 1 { weight } else { -weight };
+            }
+        }
+        normalised(v)
+    }
+}
+
+/// Which messages have each bucket, in their order, and what it weighs in
+/// each before how rare it is.
+pub type Postings = HashMap<u64, Vec<(u32, f32)>>;
+
+fn postings(bags: &[Bag]) -> Postings {
+    let mut out: Postings = HashMap::new();
+    for (i, bag) in bags.iter().enumerate() {
+        for &(b, w) in bag {
+            out.entry(b).or_default().push((i as u32, w));
+        }
+    }
+    out
+}
+
+/// The `k` messages nearest the message `i` by its tokens themselves, as
+/// (which, `1 − cos`), nearest first. Those that share a token with it are
+/// found by `postings`; of a token many messages have, only the `WINDOW`
+/// nearest it in their order. The likeliest `SHORTLIST` are then compared
+/// token by token. `acc` is a number for every message, all nought, and
+/// left so.
+fn kin(
+    i: usize,
+    k: usize,
+    bags: &[Bag],
+    norms: &[f32],
+    rarity: &Rarity,
+    postings: &Postings,
+    acc: &mut [f32],
+) -> Vec<(usize, f32)> {
+    if norms[i] <= 0.0 {
+        return Vec::new();
+    }
+    let mut touched: Vec<usize> = Vec::new();
+    for &(b, w) in &bags[i] {
+        let f = rarity.factor(b);
+        let Some(post) = postings.get(&b).filter(|_| f > 0.0) else {
+            continue;
+        };
+        let from = if post.len() <= WINDOW {
+            0
+        } else {
+            let at = post.partition_point(|p| (p.0 as usize) < i);
+            at.saturating_sub(WINDOW / 2).min(post.len() - WINDOW)
+        };
+        for &(j, wj) in &post[from..(from + WINDOW).min(post.len())] {
+            let j = j as usize;
+            let add = w * wj * f * f;
+            if j == i || add <= 0.0 {
+                continue;
+            }
+            if acc[j] == 0.0 {
+                touched.push(j);
+            }
+            acc[j] += add;
+        }
+    }
+    let by = |a: &(usize, f32), b: &(usize, f32)| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0));
+    let mut short: Vec<(usize, f32)> = touched
+        .iter()
+        .map(|&j| (j, acc[j] / norms[j].max(1e-9)))
+        .collect();
+    for &j in &touched {
+        acc[j] = 0.0;
+    }
+    if short.len() > SHORTLIST {
+        short.select_nth_unstable_by(SHORTLIST, by);
+        short.truncate(SHORTLIST);
+    }
+    let mut near: Vec<(usize, f32)> = short
+        .into_iter()
+        .map(|(j, _)| {
+            let cos = rarity.cosine(&bags[i], &bags[j], norms[i], norms[j]);
+            (j, (1.0 - cos).max(0.0))
+        })
+        .collect();
+    near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    near.truncate(k);
+    near
+}
+
+/// Each message's `k` nearest by its tokens, found in parallel; the same
+/// on any number of threads.
+fn kin_all(
+    bags: &[Bag],
+    norms: &[f32],
+    rarity: &Rarity,
+    postings: &Postings,
+    k: usize,
+) -> Vec<Vec<(usize, f32)>> {
+    let n = bags.len();
+    (0..n)
+        .into_par_iter()
+        .map_init(
+            || vec![0f32; n],
+            |acc, i| kin(i, k, bags, norms, rarity, postings, acc),
+        )
+        .collect()
+}
+
+/// Each of the messages `which`, with its `k` nearest by tokens, every
+/// pair compared: what `kin` is checked against.
+#[cfg(test)]
+pub fn nearest_by_every_pair(
+    messages: &[Given],
+    lens: Lens,
+    k: usize,
+    which: impl Iterator<Item = usize>,
+) -> Vec<(usize, Vec<(usize, f32)>)> {
+    let bags: Vec<Bag> = messages
+        .iter()
+        .map(|(r, _, sent)| {
+            let t: Vec<(u64, String, f32)> = tokens(r, *sent, lens)
+                .into_iter()
+                .map(|(t, w)| (bucket(&t), t, w))
+                .collect();
+            bag_of(&t)
+        })
+        .collect();
+    let rarity = Rarity::of(&bags);
+    let norms: Vec<f32> = bags.iter().map(|b| rarity.norm(b)).collect();
+    which
+        .map(|i| {
+            let mut all: Vec<(usize, f32)> = (0..bags.len())
+                .filter(|&j| j != i && norms[i] > 0.0)
+                .map(|j| {
+                    (
+                        j,
+                        1.0 - rarity.cosine(&bags[i], &bags[j], norms[i], norms[j]),
+                    )
+                })
+                .filter(|&(_, d)| d < 1.0)
+                .collect();
+            all.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            all.truncate(k);
+            (i, all)
+        })
+        .collect()
+}
+
+/// The direction of the message `i`, made less noisy: its own, and the
+/// mean of its nearest by tokens, each by how near, in equal parts.
+fn smoothed(projected: &[Vector], i: usize, near: &[(usize, f32)]) -> Vector {
+    let mut v = projected[i];
+    let total: f32 = near.iter().map(|&(_, d)| 1.0 - d).sum();
+    if total > 0.0 {
+        for &(j, d) in near {
+            let w = (1.0 - d) / total;
+            v.iter_mut()
+                .zip(&projected[j])
+                .for_each(|(x, y)| *x += w * y);
+        }
+    }
+    normalised(v)
+}
+
 /// The messages, as the model has them, for one lens.
 pub struct Model {
     pub lens: Lens,
     pub keys: Vec<Key>,
     /// Each message's direction, labels' teaching taken in.
     pub vectors: Vec<Vector>,
+    /// Each message's nearest by its tokens themselves, as (which,
+    /// `1 − cos`), nearest first: what the map is laid out from.
+    pub near: Vec<Vec<(usize, f32)>>,
     /// Each message's words, by what they weigh in it: to name clusters by.
     pub words: Vec<Vec<(String, f32)>>,
     /// Each message's sender, as named.
@@ -213,7 +477,7 @@ impl Model {
     /// message and label, folded, it was said not to be.
     pub fn build(messages: &[Given], not_it: &BTreeSet<(Key, String)>, lens: Lens) -> Model {
         let tokens: Vec<Vec<(u64, String, f32)>> = messages
-            .iter()
+            .par_iter()
             .map(|(r, _, sent)| {
                 tokens(r, *sent, lens)
                     .into_iter()
@@ -221,45 +485,23 @@ impl Model {
                     .collect()
             })
             .collect();
-        let mut df: HashMap<u64, u32> = HashMap::new();
-        for t in &tokens {
-            let mut seen = BTreeSet::new();
-            for (b, _, _) in t {
-                if seen.insert(*b) {
-                    *df.entry(*b).or_default() += 1;
-                }
-            }
-        }
-        let n = messages.len() as f32;
-        let idf = |b: u64| ((n + 1.0) / (df.get(&b).copied().unwrap_or(0) as f32 + 1.0)).ln() + 1.0;
-        // What a token weighs: by how rare it is. A token of one message
-        // alone tells it from none, and one of most tells none apart:
-        // either is only noise, and weighs nothing.
-        let weigh = |b: u64, w: f32| {
-            let seen = df.get(&b).copied().unwrap_or(0) as f32;
-            let telling = n < 20.0 || (seen > 1.0 && seen <= n / 2.0);
-            if telling { w * idf(b) } else { 0.0 }
-        };
-        let mut vectors: Vec<Vector> = tokens
-            .iter()
-            .map(|t| {
-                let mut v = [0f32; DIM];
-                for &(b, _, w) in t {
-                    let mut state = b ^ SEED;
-                    let signs = splitmix(&mut state);
-                    let weight = weigh(b, w);
-                    for (d, x) in v.iter_mut().enumerate() {
-                        *x += if signs >> d & 1 == 1 { weight } else { -weight };
-                    }
-                }
-                normalised(v)
-            })
+        let bags: Vec<Bag> = tokens.par_iter().map(|t| bag_of(t)).collect();
+        let rarity = Rarity::of(&bags);
+        let norms: Vec<f32> = bags.par_iter().map(|b| rarity.norm(b)).collect();
+        let near = kin_all(&bags, &norms, &rarity, &postings(&bags), NEIGHBOURS);
+        let projected: Vec<Vector> = bags.par_iter().map(|b| rarity.project(b)).collect();
+        let mut vectors: Vec<Vector> = (0..bags.len())
+            .into_par_iter()
+            .map(|i| smoothed(&projected, i, &near[i]))
             .collect();
+        let weigh = |b: u64, w: f32| w * rarity.factor(b);
         let words: Vec<Vec<(String, f32)>> = tokens
             .iter()
             .map(|t| {
                 t.iter()
-                    .filter_map(|(b, s, w)| Some((s.strip_prefix("w:")?.to_string(), w * idf(*b))))
+                    .filter_map(|(b, s, w)| {
+                        Some((s.strip_prefix("w:")?.to_string(), w * rarity.idf(*b)))
+                    })
                     .collect()
             })
             .collect();
@@ -286,20 +528,21 @@ impl Model {
             label_tokens.insert(
                 folded,
                 of.iter()
-                    .flat_map(|&i| tokens[i].iter().map(|t| t.0))
+                    .flat_map(|&i| bags[i].iter().map(|t| t.0))
                     .collect(),
             );
         }
-        for (i, (record, labels, _)) in messages.iter().enumerate() {
-            let mut v = vectors[i];
+        vectors.par_iter_mut().enumerate().for_each(|(i, vector)| {
+            let (record, labels, _) = &messages[i];
+            let mut v = *vector;
             let mine: BTreeSet<String> = labels.iter().map(|l| fold(l)).collect();
             if mine.is_empty() {
-                let total: f32 = tokens[i].iter().map(|t| weigh(t.0, t.2)).sum();
+                let total: f32 = bags[i].iter().map(|t| weigh(t.0, t.1)).sum();
                 for (folded, seen) in &label_tokens {
-                    let shared: f32 = tokens[i]
+                    let shared: f32 = bags[i]
                         .iter()
                         .filter(|t| seen.contains(&t.0))
-                        .map(|t| weigh(t.0, t.2))
+                        .map(|t| weigh(t.0, t.1))
                         .sum();
                     let share = if total > 0.0 { shared / total } else { 0.0 };
                     let l = &label_vectors[*folded].1;
@@ -318,12 +561,13 @@ impl Model {
                     v.iter_mut().zip(l).for_each(|(x, y)| *x -= PUSH * y);
                 }
             }
-            vectors[i] = normalised(v);
-        }
+            *vector = normalised(v);
+        });
         Model {
             lens,
             keys: messages.iter().map(|(r, _, _)| r.key.clone()).collect(),
             vectors,
+            near,
             words,
             // Mail sent from here names no cluster by its sender.
             senders: messages
@@ -337,6 +581,28 @@ impl Model {
 
     pub fn len(&self) -> usize {
         self.keys.len()
+    }
+
+    /// Each message's nearest as the map is laid out from them: by their
+    /// tokens, and nearer by half where they share a label.
+    fn ties(&self) -> Vec<Vec<(usize, f32)>> {
+        let folded: Vec<Vec<String>> = self
+            .labels
+            .iter()
+            .map(|ls| ls.iter().map(|l| fold(l)).collect())
+            .collect();
+        self.near
+            .par_iter()
+            .enumerate()
+            .map(|(i, list)| {
+                list.iter()
+                    .map(|&(j, d)| {
+                        let shared = folded[i].iter().any(|l| folded[j].contains(l));
+                        (j, if shared { d * SHARED } else { d })
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// The `n` messages nearest `i` by angle, nearest first, and how far
@@ -398,7 +664,9 @@ pub fn how_many(n: usize) -> usize {
 }
 
 /// Spherical k-means: `k` centres of `vectors` by cosine, begun from
-/// `start` where given, else by k-means++ with a fixed seed.
+/// `start` where given, else by k-means++ with a fixed seed. Each round is
+/// taken in parallel, and its sums in blocks added in turn, so the same
+/// vectors give the same clusters on any number of threads.
 fn kmeans(vectors: &[Vector], k: usize, start: Vec<Vector>, rng: &mut Rng) -> Vec<usize> {
     let n = vectors.len();
     if n == 0 || k == 0 {
@@ -409,13 +677,19 @@ fn kmeans(vectors: &[Vector], k: usize, start: Vec<Vector>, rng: &mut Rng) -> Ve
     if centres.is_empty() {
         centres.push(vectors[rng.below(n)]);
     }
+    let mut near: Vec<f32> = vec![f32::MIN; n];
+    let mut counted = 0;
     while centres.len() < k {
-        let far: Vec<f64> = vectors
+        let new = &centres[counted..];
+        near.par_iter_mut().zip(vectors).for_each(|(m, v)| {
+            for c in new {
+                *m = m.max(dot(v, c));
+            }
+        });
+        counted = centres.len();
+        let far: Vec<f64> = near
             .iter()
-            .map(|v| {
-                let near = centres.iter().map(|c| dot(v, c)).fold(f32::MIN, f32::max);
-                f64::from((1.0 - near).max(0.0)).powi(2)
-            })
+            .map(|&m| f64::from((1.0 - m).max(0.0)).powi(2))
             .collect();
         let total: f64 = far.iter().sum();
         let pick = if total <= 0.0 {
@@ -433,28 +707,42 @@ fn kmeans(vectors: &[Vector], k: usize, start: Vec<Vector>, rng: &mut Rng) -> Ve
     }
     let mut of = vec![usize::MAX; n];
     for _ in 0..60 {
-        let mut moved = false;
-        for (i, v) in vectors.iter().enumerate() {
-            let best = (0..k)
-                .max_by(|&a, &b| {
-                    dot(v, &centres[a])
-                        .total_cmp(&dot(v, &centres[b]))
-                        .then(b.cmp(&a))
-                })
-                .unwrap_or(0);
-            if of[i] != best {
-                of[i] = best;
-                moved = true;
-            }
-        }
-        if !moved {
+        let best: Vec<usize> = vectors
+            .par_iter()
+            .map(|v| {
+                (0..k)
+                    .max_by(|&a, &b| {
+                        dot(v, &centres[a])
+                            .total_cmp(&dot(v, &centres[b]))
+                            .then(b.cmp(&a))
+                    })
+                    .unwrap_or(0)
+            })
+            .collect();
+        if best == of {
             break;
         }
+        of = best;
+        let blocks: Vec<(Vec<Vector>, Vec<usize>)> = vectors
+            .par_chunks(1024)
+            .zip(of.par_chunks(1024))
+            .map(|(vs, os)| {
+                let mut sums = vec![[0f32; DIM]; k];
+                let mut counts = vec![0usize; k];
+                for (v, &c) in vs.iter().zip(os) {
+                    sums[c].iter_mut().zip(v).for_each(|(s, x)| *s += x);
+                    counts[c] += 1;
+                }
+                (sums, counts)
+            })
+            .collect();
         let mut sums = vec![[0f32; DIM]; k];
         let mut counts = vec![0usize; k];
-        for (i, v) in vectors.iter().enumerate() {
-            sums[of[i]].iter_mut().zip(v).for_each(|(s, x)| *s += x);
-            counts[of[i]] += 1;
+        for (bs, bc) in &blocks {
+            for c in 0..k {
+                sums[c].iter_mut().zip(&bs[c]).for_each(|(s, x)| *s += x);
+                counts[c] += bc[c];
+            }
         }
         for c in 0..k {
             if counts[c] == 0 {
@@ -623,95 +911,6 @@ fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
         .take(3)
         .map(|(w, _)| w.to_string())
         .collect()
-}
-
-/// Each of `vectors`' `k` nearest others by angle, as (which, distance),
-/// the distance `1 − cos`, nearest first. Up to `exact` vectors, every
-/// pair is compared; past that, each vector only with the members of its
-/// `PROBES` nearest of √n groups, found by a few rounds of spherical
-/// k-means begun evenly through them. Ties go to the lower index, so the
-/// same vectors give the same neighbours on any number of threads.
-pub fn neighbours(vectors: &[Vector], k: usize, exact: usize) -> Vec<Vec<(usize, f32)>> {
-    let n = vectors.len();
-    let k = k.min(n.saturating_sub(1));
-    if k == 0 {
-        return vec![Vec::new(); n];
-    }
-    if n <= exact {
-        return (0..n)
-            .into_par_iter()
-            .map(|i| nearest_among(vectors, i, 0..n, k))
-            .collect();
-    }
-    let m = ((n as f64).sqrt().ceil() as usize).max(PROBES);
-    let mut centres: Vec<Vector> = (0..m).map(|c| vectors[c * n / m]).collect();
-    let nearest_centre = |v: &Vector, centres: &[Vector]| {
-        (0..centres.len())
-            .max_by(|&a, &b| {
-                dot(v, &centres[a])
-                    .total_cmp(&dot(v, &centres[b]))
-                    .then(b.cmp(&a))
-            })
-            .unwrap_or(0)
-    };
-    let mut of = vec![0usize; n];
-    for _ in 0..4 {
-        of = vectors
-            .par_iter()
-            .map(|v| nearest_centre(v, &centres))
-            .collect();
-        let mut sums = vec![[0f32; DIM]; m];
-        let mut counts = vec![0usize; m];
-        for (v, &c) in vectors.iter().zip(&of) {
-            sums[c].iter_mut().zip(v).for_each(|(s, x)| *s += x);
-            counts[c] += 1;
-        }
-        for c in 0..m {
-            if counts[c] > 0 {
-                centres[c] = normalised(sums[c]);
-            }
-        }
-    }
-    let mut members: Vec<Vec<usize>> = vec![Vec::new(); m];
-    for (i, &c) in of.iter().enumerate() {
-        members[c].push(i);
-    }
-    (0..n)
-        .into_par_iter()
-        .map(|i| {
-            let mut by: Vec<(usize, f32)> = centres
-                .iter()
-                .enumerate()
-                .map(|(c, centre)| (c, dot(&vectors[i], centre)))
-                .collect();
-            by.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-            let among = by
-                .iter()
-                .take(PROBES)
-                .flat_map(|&(c, _)| members[c].iter().copied());
-            nearest_among(vectors, i, among, k)
-        })
-        .collect()
-}
-
-/// The `k` nearest to `vectors[i]` of those `among`, by angle.
-fn nearest_among(
-    vectors: &[Vector],
-    i: usize,
-    among: impl Iterator<Item = usize>,
-    k: usize,
-) -> Vec<(usize, f32)> {
-    let by = |a: &(usize, f32), b: &(usize, f32)| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0));
-    let mut all: Vec<(usize, f32)> = among
-        .filter(|&j| j != i)
-        .map(|j| (j, (1.0 - dot(&vectors[i], &vectors[j])).max(0.0)))
-        .collect();
-    if all.len() > k {
-        all.select_nth_unstable_by(k, by);
-        all.truncate(k);
-    }
-    all.sort_by(by);
-    all
 }
 
 /// The width σ that makes a message's memberships in its neighbours,
@@ -921,18 +1120,15 @@ pub fn layout(model: &Model, start: Option<&[Option<Point>]>, seed: u64) -> Vec<
         return vec![[0.0, 0.0]; n];
     }
     let seed = seed ^ model.lens as u64;
-    let edges = graph(&neighbours(&model.vectors, NEIGHBOURS, EXACT));
+    let edges = graph(&model.ties());
     let (begun, rounds, rate) = match start {
         Some(s) => {
-            let known: Vec<(usize, Point)> = (0..n)
-                .filter_map(|i| Some((i, s.get(i).copied().flatten()?)))
-                .collect();
             let begun = (0..n)
                 .map(|i| {
                     s.get(i)
                         .copied()
                         .flatten()
-                        .unwrap_or_else(|| place(model, i, &known))
+                        .unwrap_or_else(|| place(model, i, s))
                 })
                 .collect();
             (begun, 120, 0.25)
@@ -954,16 +1150,22 @@ pub fn layout(model: &Model, start: Option<&[Option<Point>]>, seed: u64) -> Vec<
     umap(&edges, spread(begun), rounds, rate, seed)
 }
 
-/// Where the message `i` goes among those `known`: the mean of the places
-/// of its five nearest by angle, each by how near it is.
-pub fn place(model: &Model, i: usize, known: &[(usize, Point)]) -> Point {
-    let mut near: Vec<(f32, Point)> = known
+/// Where the message `i` goes among those placed, `at`, by message: the
+/// mean of the places of its nearest by tokens, each by how near; or, if
+/// none of them is placed, of its five nearest placed by angle.
+pub fn place(model: &Model, i: usize, at: &[Option<Point>]) -> Point {
+    let mut near: Vec<(f32, Point)> = model.near[i]
         .iter()
-        .filter(|(j, _)| *j != i)
-        .map(|&(j, p)| (dot(&model.vectors[i], &model.vectors[j]), p))
+        .filter_map(|&(j, d)| Some((1.0 - d, at.get(j).copied().flatten()?)))
         .collect();
-    near.sort_by(|a, b| b.0.total_cmp(&a.0));
-    near.truncate(5);
+    if near.is_empty() {
+        near = (0..at.len().min(model.len()))
+            .filter(|&j| j != i)
+            .filter_map(|j| Some((dot(&model.vectors[i], &model.vectors[j]), at[j]?)))
+            .collect();
+        near.sort_by(|a, b| b.0.total_cmp(&a.0));
+        near.truncate(5);
+    }
     let total: f32 = near.iter().map(|(c, _)| c.max(0.0) + 1e-3).sum();
     if near.is_empty() || total <= 0.0 {
         return [0.0, 0.0];
@@ -1128,8 +1330,8 @@ fn principal(vectors: &[Vector]) -> Vec<[f64; 2]> {
         .collect()
 }
 
-/// How faithful the map is to the angles: of each of up to 200 messages
-/// taken evenly, the share of its ten nearest by angle also among its ten
+/// How faithful the map is to the mail: of each of up to 200 messages
+/// taken evenly, the share of its ten nearest by tokens also among its ten
 /// nearest on the map; their mean.
 pub fn faithfulness(model: &Model, at: &[Point]) -> f32 {
     let n = model.len().min(at.len());
@@ -1141,7 +1343,10 @@ pub fn faithfulness(model: &Model, at: &[Point]) -> f32 {
     let mut total = 0.0;
     let mut count = 0;
     for i in (0..n).step_by(stride) {
-        let by_angle: BTreeSet<usize> = model.nearest(i, k).into_iter().map(|(j, _)| j).collect();
+        let by_tokens: BTreeSet<usize> = model.near[i].iter().take(k).map(|&(j, _)| j).collect();
+        if by_tokens.is_empty() {
+            continue;
+        }
         let mut by_place: Vec<(f32, usize)> = (0..n)
             .filter(|&j| j != i)
             .map(|j| {
@@ -1153,10 +1358,14 @@ pub fn faithfulness(model: &Model, at: &[Point]) -> f32 {
         let shared = by_place
             .iter()
             .take(k)
-            .filter(|(_, j)| by_angle.contains(j))
+            .filter(|(_, j)| by_tokens.contains(j))
             .count();
-        total += shared as f32 / k as f32;
+        total += shared as f32 / by_tokens.len() as f32;
         count += 1;
     }
-    total / count as f32
+    if count == 0 {
+        1.0
+    } else {
+        total / count as f32
+    }
 }

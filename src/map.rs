@@ -322,18 +322,13 @@ pub fn compute(input: Input) -> Snapshot {
         .collect();
     let (at, fresh) = match &input.layout {
         Some(kept) => {
-            let known: Vec<(usize, Point)> = model
+            let known: Vec<Option<Point>> = model
                 .keys
                 .iter()
-                .enumerate()
-                .filter_map(|(i, k)| kept.get(k).map(|&(x, y)| (i, [x, y])))
+                .map(|k| kept.get(k).map(|&(x, y)| [x, y]))
                 .collect();
-            let mut at: Vec<Option<Point>> = vec![None; model.len()];
-            for &(i, p) in &known {
-                at[i] = Some(p);
-            }
             let at: Vec<Point> = (0..model.len())
-                .map(|i| at[i].unwrap_or_else(|| model::place(&model, i, &known)))
+                .map(|i| known[i].unwrap_or_else(|| model::place(&model, i, &known)))
                 .collect();
             (Some(at), None)
         }
