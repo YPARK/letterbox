@@ -5550,7 +5550,7 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
         app.targets
             .iter()
             .find(|(_, t)| *t == app::Target::Divider)
-            .map(|(r, _)| r.x)
+            .map(|(r, _)| r.x + 1)
             .expect("a line to drag")
     };
     let x = divider(&mut app);
@@ -5572,6 +5572,24 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
         narrowest >= 24 + 24,
         "past the sidebar, the list 24 wide: {narrowest}"
     );
+    // A column beside the line takes it too; < and > move it by four.
+    app.mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        narrowest + 1,
+        10,
+    ));
+    assert!(app.resizing);
+    app.mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        narrowest + 1,
+        10,
+    ));
+    // Each as wide as the screen it was pressed on: this one, 150 wide.
+    let char_key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    app.key(char_key('>'));
+    assert_eq!(divider(&mut app), narrowest + 4);
+    app.key(char_key('<'));
+    assert_eq!(divider(&mut app), narrowest);
 }
 
 /// The labels of the map's message with `subject`, and whether it is in

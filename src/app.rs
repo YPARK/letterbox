@@ -825,6 +825,8 @@ pub struct App {
     pub resizing: bool,
     /// Where the panes end on the right, as last drawn.
     pub panes_right: u16,
+    /// How wide the message read was last drawn.
+    pub read_width: u16,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -1025,6 +1027,7 @@ impl App {
             reader_width: None,
             resizing: false,
             panes_right: 0,
+            read_width: 0,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -2529,6 +2532,11 @@ impl App {
             | Act::Relayout => {
                 self.status = "M-g shows the map, where mail is filed".to_string();
             }
+            Act::Wider | Act::Narrower if self.read_width > 0 => {
+                let by: i16 = if act == Act::Wider { 4 } else { -4 };
+                self.reader_width = Some(self.read_width.saturating_add_signed(by));
+            }
+            Act::Wider | Act::Narrower => {}
             Act::MapView => self.show_map(),
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),

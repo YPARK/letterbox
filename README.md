@@ -114,6 +114,7 @@ letterbox search grant report --account Work
 | `h` / `l`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
 | `space` / `b` | a page down, or up, in the message |
+| `<` / `>` | make the message read wider, or narrower; or drag the line before it |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G` | go to the top, or the end |
 | `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
@@ -210,8 +211,9 @@ and says what else would go there. `M-l` goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 
-Each message is a cell: `●` unread, `•` read, `▹` sent by you, `⚑`
-flagged, `▪` labelled by you, and a digit for several in one. Mail you
+Each message is a dot, as big as how many share its cell: `•` one, `●` a
+few, `⬤` five or more; unread mail is bright, read mail softer. One alone
+is `▹` if you sent it, `⚑` if flagged, `▪` if labelled by you. Mail you
 sent is placed by whom it went to, as mail come in is by whom it is
 from, so an answer lies beside the mail it answers. Mail come since the map was last
 looked at, and still in the Inbox, is drawn reversed. Its colour is what
@@ -300,8 +302,8 @@ Moving through the list, the message picked is shown beside it, and marked
 read, once you pause on it, as a mail app does. Another folder listed,
 the message beside it goes, as it is not in that list. The mouse picks
 and scrolls, and presses the keys shown at the foot and the forms' fields
-and buttons; drag the line before the message read to make it wider or
-narrower. Each account is asked from a thread of its own, so the screen
+and buttons; drag the line before the message read, or press `<` and
+`>`, to make it wider or narrower. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
 ## For AI agents: MCP

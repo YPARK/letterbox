@@ -51,6 +51,9 @@ pub enum Act {
     ShowRead,
     /// In the map, mail sent from here shown or hidden.
     ShowSent,
+    /// The message read made wider, or narrower.
+    Wider,
+    Narrower,
     /// The map, or the list, in the middle pane.
     MapView,
     ListView,
@@ -300,6 +303,13 @@ pub const KEYS: &[Binding] = &[
         hint: "C-n",
         foot: &[(Side, "new mail"), (List, "new mail")],
         help: "look for new mail now; it is looked for every two minutes",
+    },
+    Binding {
+        keys: &[("<", Wider), (">", Narrower)],
+        name: "< >",
+        hint: "</>",
+        foot: &[(Reader, "width")],
+        help: "make the message read wider, or narrower; or drag the line before it with the mouse",
     },
     // The map.
     Binding {

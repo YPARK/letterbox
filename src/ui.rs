@@ -121,10 +121,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if read_w > 0 {
         reader(f, app, read);
     }
+    // The line before the message, to drag: it and a column either side,
+    // as one alone is hard to hit.
     if list_w > 0 && read_w > 0 {
-        app.targets
-            .push((Rect { width: 1, ..read }, Target::Divider));
+        let grip = Rect {
+            x: read.x.saturating_sub(1),
+            width: 3,
+            ..read
+        };
+        app.targets.push((grip, Target::Divider));
     }
+    app.read_width = read_w;
     keys(f, app, foot_area, foot_lines, spots);
     if app.compose.is_some() {
         compose_popup(f, app, main);
@@ -1670,7 +1677,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Focused::All => {}
     }
     head.push(Span::styled(what, dim));
-    let key = "   ● unread  • read  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
+    let key = "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
     let used: usize = head.iter().map(|h| h.content.width()).sum();
     if used + key.width() <= legend.width as usize {
         head.push(Span::styled(key, Style::new().fg(t.faint)));
@@ -1789,19 +1796,17 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     for (&(x, y), members) in &app.map.drawn {
         let first = picked.filter(|p| members.contains(p)).unwrap_or(members[0]);
         let d = &s.dots[first];
-        let glyph = if members.len() > 1 {
-            char::from_digit(members.len().min(9) as u32, 10).unwrap_or('9')
-        } else if d.flags.flagged {
-            '⚑'
-        } else if d.mine {
-            '▪'
-        } else if d.system.sent {
-            '▹'
-        } else if !d.flags.seen {
-            '●'
-        } else {
-            '•'
+        // A dot as big as how many it holds; one alone flagged, labelled by
+        // you or sent, by its own mark.
+        let glyph = match members.len() {
+            1 if d.flags.flagged => '⚑',
+            1 if d.mine => '▪',
+            1 if d.system.sent => '▹',
+            1 => '•',
+            2..=4 => '●',
+            _ => '⬤',
         };
+        let unread = members.iter().any(|&i| !s.dots[i].flags.seen);
         let mut colour = match app.map.colour {
             Colour::Angle => t.hue(s.hues[first]),
             Colour::Cursor => match picked {
@@ -1829,6 +1834,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             .all(|&i| crate::map::Map::is_old(&s.dots[i], now))
         {
             colour = t.faint;
+        } else if !unread && app.map.colour != Colour::State {
+            // Read, softer: unread is what stands out.
+            colour = crate::theme::mix(colour, t.page, 0.4);
         }
         let new_here = in_focus && members.iter().any(|&i| app.map.is_new(&s.dots[i], now));
         let mut style = if new_here {
@@ -1839,7 +1847,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         if !new_here && members.iter().any(|i| marked.contains(i)) {
             style = style.bg(t.row);
         }
-        if hit == Some(true) {
+        if hit == Some(true) || unread {
             style = style.bold();
         }
         if picked.is_some_and(|p| members.contains(&p)) {
@@ -2092,7 +2100,9 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let block = Block::new()
         .borders(Borders::LEFT)
-        .border_style(Style::new().fg(if app.focus == Focus::Reader {
+        .border_style(Style::new().fg(if app.resizing {
+            t.accent
+        } else if app.focus == Focus::Reader {
             t.dim
         } else {
             t.rule
