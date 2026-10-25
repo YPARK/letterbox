@@ -2795,7 +2795,16 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let now = Zoned::now();
     let mut y = area.y + 3;
+    let menu_for = app
+        .review
+        .as_ref()
+        .and_then(|r| r.menu.as_ref())
+        .and_then(|m| s.find(&m.key));
+    let mut menu_at = None;
     for (row, &i) in rows.iter().enumerate().skip(top).take(room) {
+        if Some(i) == menu_for {
+            menu_at = Some(y + 1);
+        }
         let d = &s.dots[i];
         let is_picked = Some(i) == picked;
         let ground = if is_picked && focused {
@@ -2893,6 +2902,78 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         }
         y += 2;
     }
+    if let Some(under) = menu_at {
+        label_menu(f, app, area, under);
+    }
+}
+
+/// The labels a message looked through may be moved to, dropped down under
+/// the line of what may be done with it, or over it where there is no room
+/// below: what is typed, then each label with how far it is by angle, the
+/// one picked lit.
+fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
+    use crate::app::Pick;
+    let t = app.theme;
+    let items = app.menu_items();
+    let Some(menu) = app.review.as_ref().and_then(|r| r.menu.clone()) else {
+        return;
+    };
+    let width = area.width.saturating_sub(4).min(40);
+    let height = (items.len() as u16 + 3).min(area.height);
+    let below = under + 1 + height <= area.bottom();
+    let y = if below {
+        under + 1
+    } else {
+        under.saturating_sub(height).max(area.y)
+    };
+    let x = area.x + 3;
+    let rect = Rect::new(x, y, width, height);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.accent))
+        .title(Span::styled(" Move to ", Style::new().fg(t.title).bold()))
+        .title_bottom(Span::styled(" ⏎ moves · esc ", Style::new().fg(t.dim)))
+        .style(Style::new().bg(t.page));
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    let room = usize::from(inner.width);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(" ⌕ ", Style::new().fg(t.dim).bg(t.field)),
+        Span::styled(
+            format!(
+                "{:<w$}",
+                format!("{}▏", menu.typed),
+                w = room.saturating_sub(3)
+            ),
+            Style::new().fg(t.text).bg(t.field),
+        ),
+    ])];
+    for (k, item) in items.iter().enumerate() {
+        let (said, far) = match item {
+            Pick::Label(name, deg) => (format!(" {name}"), format!("{deg:>3.0}° ")),
+            Pick::New(name) => (format!(" + new label “{name}”"), String::new()),
+            Pick::OnMap => (" ◇ pick on the map…".to_string(), String::new()),
+        };
+        let said = clip(&said, room.saturating_sub(far.width()));
+        let gap = room.saturating_sub(said.width() + far.width());
+        let text = format!("{said}{}{far}", " ".repeat(gap));
+        let style = if k == menu.at {
+            Style::new().fg(t.title).bg(t.focus).bold()
+        } else if matches!(item, Pick::Label(..)) {
+            Style::new().fg(t.text).bg(t.page)
+        } else {
+            Style::new().fg(t.soft).bg(t.page)
+        };
+        lines.push(Line::styled(text, style));
+        if 1 + (k as u16) < inner.height {
+            app.targets.push((
+                Rect::new(inner.x, inner.y + 1 + k as u16, inner.width, 1),
+                Target::MenuItem(k),
+            ));
+        }
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn reader(f: &mut Frame, app: &mut App, area: Rect) {

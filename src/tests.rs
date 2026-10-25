@@ -6938,15 +6938,15 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     app.focus = app::Focus::Reader;
     let key = s.dots[rows[nowhere]].key.clone();
     app.review.as_mut().unwrap().picked = Some(key.clone());
-    press(&mut app, &["m"]);
+    press(&mut app, &["m", "<up>", "<enter>"]);
     assert_eq!(app.focus, app::Focus::List);
     assert!(app.map.moving.is_some());
     press(&mut app, &["<esc>"]);
     assert_eq!(app.focus, app::Focus::Reader);
     assert!(app.review.as_ref().unwrap().relabel.is_none());
-    // m again, and a click on a label: chosen, not done yet.
+    // Again, and a click on a label: chosen, not done yet.
     app.review.as_mut().unwrap().picked = Some(key.clone());
-    press(&mut app, &["m"]);
+    press(&mut app, &["m", "<up>", "<enter>"]);
     let grant = s
         .groups
         .iter()
@@ -7026,4 +7026,115 @@ fn a_message_looked_through_goes_under_a_new_label_named_for_it() {
         labels.contains(&"Engines".to_string()) && !inbox,
         "{labels:?}"
     );
+}
+
+#[test]
+fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    // One that would go to Grant: Grant first, the nearest few after it.
+    let going = rows
+        .iter()
+        .position(|&i| s.suggestion(i) == Some("Grant"))
+        .unwrap();
+    let i = rows[going];
+    app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
+    press(&mut app, &["m"]);
+    assert!(app.review.as_ref().unwrap().menu.is_some());
+    let items = app.menu_items();
+    assert!(
+        matches!(&items[0], app::Pick::Label(n, _) if n == "Grant"),
+        "{items:?}"
+    );
+    assert!(items.len() <= 5 + 1);
+    assert_eq!(items.last(), Some(&app::Pick::OnMap));
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(
+        screen.contains("Move to") && screen.contains("pick on the map"),
+        "{screen}"
+    );
+    // Typed, narrowed; a name no label has, a new one; ⏎ moves it there.
+    for c in "proj".chars() {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let items = app.menu_items();
+    assert!(
+        matches!(&items[0], app::Pick::Label(n, _) if n == "Projects"),
+        "{items:?}"
+    );
+    assert!(
+        !items
+            .iter()
+            .any(|p| matches!(p, app::Pick::Label(n, _) if n == "Grant"))
+    );
+    press(&mut app, &["<enter>"]);
+    assert_eq!(app.choice(i), app::Choice::Move("Projects".into()));
+    assert!(app.review.as_ref().unwrap().menu.is_none());
+    // A new one, by its name typed.
+    app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
+    press(&mut app, &["m"]);
+    for c in "Engines".chars() {
+        let shift = if c.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        app.key(KeyEvent::new(KeyCode::Char(c), shift));
+    }
+    let items = app.menu_items();
+    assert_eq!(items[0], app::Pick::New("Engines".into()), "{items:?}");
+    press(&mut app, &["<enter>"]);
+    assert_eq!(app.choice(i), app::Choice::Move("Engines".into()));
+    // esc puts it away, nothing chosen; a click picks one.
+    app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
+    press(&mut app, &["m", "<esc>"]);
+    assert!(app.review.as_ref().unwrap().menu.is_none());
+    assert_eq!(app.choice(i), app::Choice::Move("Engines".into()));
+    press(&mut app, &["m"]);
+    click_at(&mut app, app::Target::MenuItem(0));
+    assert_eq!(app.choice(i), app::Choice::Move("Grant".into()));
+    // Picking on the map, from it.
+    app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
+    app.focus = app::Focus::Reader;
+    press(&mut app, &["m", "<up>", "<enter>"]);
+    assert!(app.map.moving.is_some());
+    assert_eq!(app.focus, app::Focus::List);
+}
+
+#[test]
+fn the_keys_of_the_inbox_looked_through_lose_nothing_and_act_on_the_one_picked() {
+    let mut app = demo_map();
+    press(&mut app, &["i", "d"]);
+    let rows = app.review_rows();
+    assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    // esc goes back to the map, all of it kept; tab comes back.
+    press(&mut app, &["<esc>"]);
+    assert_eq!(app.focus, app::Focus::List);
+    assert!(app.review.is_some());
+    press(&mut app, &["<tab>"]);
+    assert_eq!(app.focus, app::Focus::Reader);
+    // i closes it, and opens it as it was.
+    press(&mut app, &["i"]);
+    assert!(app.review.is_none());
+    press(&mut app, &["i"]);
+    assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    // Read, d chooses, as beside the rest; nothing is moved yet.
+    press(&mut app, &["j", "<enter>"]);
+    assert!(app.review.as_ref().unwrap().reading);
+    press(&mut app, &["d"]);
+    assert!(!app.review.as_ref().unwrap().reading);
+    assert_eq!(app.choice(rows[1]), app::Choice::Discard);
+    let s = app.map.snapshot.clone().unwrap();
+    assert!(
+        dot_labels(&app, &s.dots[rows[1]].subject).1,
+        "still in the Inbox"
+    );
+    // u marks the one picked, not the one read before.
+    let picked = app.map.picked().unwrap();
+    let seen = s.dots[picked].flags.seen;
+    press(&mut app, &["u"]);
+    let s = app.map.snapshot.clone().unwrap();
+    assert_ne!(s.dots[picked].flags.seen, seen);
 }

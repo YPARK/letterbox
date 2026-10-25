@@ -397,7 +397,7 @@ pub const KEYS: &[Binding] = &[
         name: "i",
         hint: "i",
         foot: &[(Map, "review"), (Reviewing, "close")],
-        help: "the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; m moves it, or picks where, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
+        help: "the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
     },
     Binding {
         keys: &[("$", Apply)],

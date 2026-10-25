@@ -483,6 +483,8 @@ pub enum Target {
     /// may be done with it: moved, kept or discarded.
     ReviewRow(usize),
     Choose(usize, u8),
+    /// One of the labels dropped down, by its place.
+    MenuItem(usize),
     /// An attachment or link in the list of them, by its place.
     Item(usize),
 }
@@ -599,6 +601,33 @@ pub struct Review {
     pub asking: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
+    /// The labels it may be moved to, dropped down under it.
+    pub menu: Option<Menu>,
+}
+
+/// The labels a message looked through may be moved to, dropped down
+/// under it: narrowed by what is typed, the one picked lit.
+#[derive(Clone, Debug, Default)]
+pub struct Menu {
+    pub key: crate::index::Key,
+    pub typed: String,
+    pub at: usize,
+}
+
+/// How many labels are dropped down: the nearest few, or more of those
+/// holding what is typed.
+const MENU_NEAREST: usize = 5;
+const MENU_TYPED: usize = 8;
+
+/// What may be picked in the labels dropped down.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pick {
+    /// A label, and how far it is from the message by angle.
+    Label(String, f32),
+    /// A label not yet made, as typed.
+    New(String),
+    /// Where it goes, picked on the map.
+    OnMap,
 }
 
 /// What to do with a message in the Inbox.
@@ -839,6 +868,8 @@ pub struct App {
     pub map_later: bool,
     /// The Inbox, being looked through beside the map.
     pub review: Option<Review>,
+    /// What was chosen in it, kept while it is closed, till it is done.
+    pub review_kept: std::collections::BTreeMap<crate::index::Key, Choice>,
     /// Each account's second connection, kept for its sync while the map
     /// is not begun.
     twins: Vec<Option<Box<dyn Store>>>,
@@ -1059,6 +1090,7 @@ impl App {
             map_off,
             map_later,
             review: None,
+            review_kept: Default::default(),
             twins: Vec::new(),
             open_map: open_map_index,
             syncs: Vec::new(),
@@ -2423,6 +2455,9 @@ impl App {
         if self.dialog.is_open() {
             return self.dialog_key(key);
         }
+        if self.review.as_ref().is_some_and(|r| r.menu.is_some()) {
+            return self.menu_key(key);
+        }
         if let Some(r) = self.review.as_mut().filter(|r| r.asking) {
             r.asking = false;
             if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
@@ -2504,7 +2539,9 @@ impl App {
             Act::Back => {}
             // The map has no sidebar: between it and the message read.
             Act::NextPane | Act::PreviousPane if self.map.mode == Mode::Map => {
-                self.focus = if self.focus == Focus::List && self.reading.is_some() {
+                self.focus = if self.focus == Focus::List
+                    && (self.reading.is_some() || self.review.is_some())
+                {
                     Focus::Reader
                 } else {
                     Focus::List
@@ -2941,6 +2978,13 @@ impl App {
                     self.resizing = true;
                     return;
                 }
+                // The labels dropped down: a click elsewhere puts them away.
+                if let Some(r) = self.review.as_mut().filter(|r| r.menu.is_some())
+                    && !matches!(at, Some(Target::MenuItem(_)))
+                {
+                    r.menu = None;
+                    return;
+                }
                 if at == Some(Target::Map) && !self.dialog.is_open() {
                     return self.map_press(m.column, m.row);
                 }
@@ -3025,6 +3069,7 @@ impl App {
             Some(Target::Branch(row)) => self.branch_click(row),
             Some(Target::ReviewRow(row)) => self.review_click(row),
             Some(Target::Choose(row, which)) => self.choice_click(row, which),
+            Some(Target::MenuItem(at)) => self.pick_item(at),
             Some(Target::Message(i)) => {
                 self.focus = Focus::List;
                 self.list.select(Some(i));
@@ -5062,12 +5107,13 @@ impl App {
     }
 
     /// Open the Inbox to look through beside the map; or close it, what was
-    /// chosen let go.
+    /// chosen kept for when it is opened again.
     fn open_review(&mut self) {
-        if self.review.take().is_some() {
+        if let Some(r) = self.review.take() {
+            self.review_kept = r.chosen;
             self.focus = Focus::List;
             self.map.moving = None;
-            self.status = "the Inbox looked through, closed".to_string();
+            self.status = "the Inbox looked through, closed: i opens it as it was".to_string();
             return;
         }
         if self.map.mode != Mode::Map {
@@ -5077,7 +5123,10 @@ impl App {
             }
         }
         let first = self.review_rows().first().copied();
-        self.review = Some(Review::default());
+        self.review = Some(Review {
+            chosen: std::mem::take(&mut self.review_kept),
+            ..Review::default()
+        });
         self.focus = Focus::Reader;
         self.pick_review(first);
         self.status =
@@ -5135,18 +5184,127 @@ impl App {
         }
     }
 
-    /// Move the message `i`: where it would go, if it would go anywhere and
-    /// is not to go there already; else pick where on the map.
-    fn choose_move(&mut self, i: usize, on: bool) {
-        let Some(s) = self.map.snapshot.clone() else {
+    /// Drop down the labels the message `i` may be moved to.
+    fn open_menu(&mut self, i: usize) {
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
             return;
         };
-        if let Some(label) = s.suggestion(i)
-            && !matches!(self.choice(i), Choice::Move(_))
-        {
-            return self.choose(i, Choice::Move(label.to_string()), on);
+        if let Some(r) = &mut self.review {
+            r.menu = Some(Menu {
+                key,
+                ..Menu::default()
+            });
         }
-        let key = s.dots[i].key.clone();
+        self.status = "move it to: type to narrow, ↑ ↓ pick, ⏎ moves it there, esc".to_string();
+    }
+
+    /// The labels the message dropped down for may be moved to: where it
+    /// would go first, then the rest by how near they are to it by angle,
+    /// the nearest few, or, typed, every one holding what is typed; a new
+    /// one, if none is called that; and picking on the map.
+    pub fn menu_items(&self) -> Vec<Pick> {
+        let (Some(s), Some(menu)) = (
+            self.map.snapshot.as_ref(),
+            self.review.as_ref().and_then(|r| r.menu.as_ref()),
+        ) else {
+            return Vec::new();
+        };
+        let Some(i) = s.find(&menu.key) else {
+            return Vec::new();
+        };
+        let typed = menu.typed.trim().to_lowercase();
+        let first = s.suggestion(i).map(crate::index::fold);
+        let mut labels: Vec<(String, f32)> = s
+            .model
+            .label_vectors
+            .iter()
+            .filter(|(folded, (name, _))| {
+                typed.is_empty() || folded.contains(&typed) || name.to_lowercase().contains(&typed)
+            })
+            .map(|(_, (name, v))| (name.clone(), crate::model::degrees(&s.model.vectors[i], v)))
+            .collect();
+        labels.sort_by(|a, b| {
+            let lead = |n: &str| Some(crate::index::fold(n)) != first;
+            lead(&a.0)
+                .cmp(&lead(&b.0))
+                .then(a.1.total_cmp(&b.1))
+                .then(a.0.cmp(&b.0))
+        });
+        let named = labels
+            .iter()
+            .any(|(n, _)| crate::index::fold(n) == crate::index::fold(&menu.typed));
+        labels.truncate(if typed.is_empty() {
+            MENU_NEAREST
+        } else {
+            MENU_TYPED
+        });
+        let mut items: Vec<Pick> = labels.into_iter().map(|(n, d)| Pick::Label(n, d)).collect();
+        if !typed.is_empty() && !named {
+            items.push(Pick::New(menu.typed.trim().to_string()));
+        }
+        items.push(Pick::OnMap);
+        items
+    }
+
+    /// A key while the labels are dropped down: what is typed narrows them.
+    fn menu_key(&mut self, key: KeyEvent) {
+        let count = self.menu_items().len();
+        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.as_mut()) else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.review.as_mut().expect("open").menu = None;
+                self.status = "not moved".to_string();
+            }
+            KeyCode::Char('g') if ctrl => {
+                self.review.as_mut().expect("open").menu = None;
+                self.status = "not moved".to_string();
+            }
+            // Round, past either end.
+            KeyCode::Down => menu.at = (menu.at + 1) % count.max(1),
+            KeyCode::Char('n') if ctrl => menu.at = (menu.at + 1) % count.max(1),
+            KeyCode::Up => menu.at = (menu.at + count.max(1) - 1) % count.max(1),
+            KeyCode::Char('p') if ctrl => menu.at = (menu.at + count.max(1) - 1) % count.max(1),
+            KeyCode::Enter => {
+                let at = menu.at;
+                self.pick_item(at);
+            }
+            _ => {
+                if edit_line(&mut menu.typed, key) {
+                    menu.at = 0;
+                }
+            }
+        }
+    }
+
+    /// Pick the item `at` of the labels dropped down: moved there, to be
+    /// done with the rest; or, picking on the map, where it goes asked there.
+    fn pick_item(&mut self, at: usize) {
+        let item = self.menu_items().get(at).cloned();
+        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.take()) else {
+            return;
+        };
+        let Some(i) = self.map.snapshot.as_ref().and_then(|s| s.find(&menu.key)) else {
+            return;
+        };
+        match item {
+            Some(Pick::Label(name, _) | Pick::New(name)) => {
+                self.status = format!("to go to {name} · $ does it, with the rest");
+                self.choose(i, Choice::Move(name), true);
+            }
+            Some(Pick::OnMap) => self.pick_on_map(i),
+            None => {}
+        }
+    }
+
+    /// Pick where the message `i` goes on the map: a click on a cluster,
+    /// or ⏎ on one.
+    fn pick_on_map(&mut self, i: usize) {
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
+            return;
+        };
         if let Some(r) = &mut self.review {
             r.relabel = Some(key.clone());
         }
@@ -5179,17 +5337,19 @@ impl App {
         let Some(r) = &mut self.review else {
             return false;
         };
-        // Reading one, esc goes back to the rest.
+        // Reading one, esc goes back to the rest; what may be done with it
+        // is chosen as it is beside the rest, and the rest shown again.
         if r.reading {
-            if act == Act::Back {
-                r.reading = false;
-                return true;
+            match act {
+                Act::Back => r.reading = false,
+                Act::Review => self.open_review(),
+                Act::Trash | Act::Move | Act::FileFirst | Act::NewLabel => {
+                    r.reading = false;
+                    return self.review_act(act);
+                }
+                _ => return false,
             }
-            if act == Act::Review {
-                self.open_review();
-                return true;
-            }
-            return false;
+            return true;
         }
         let picked = self.review_at().map(|(i, _)| i);
         match (act, picked) {
@@ -5215,7 +5375,7 @@ impl App {
                 let next = all[(at + by).rem_euclid(all.len() as isize) as usize].clone();
                 self.choose(i, next, false);
             }
-            (Act::Move, Some(i)) => self.choose_move(i, true),
+            (Act::Move, Some(i)) => self.open_menu(i),
             (Act::NewLabel, Some(i)) => self.choose_new(i),
             (Act::ScreenDown, Some(i)) => self.choose(i, Choice::Keep, true),
             (Act::Trash, Some(i)) => self.choose(i, Choice::Discard, true),
@@ -5234,7 +5394,15 @@ impl App {
                 }
             }
             (Act::Apply, _) => self.ask_apply(),
-            (Act::Back | Act::Review, _) => self.open_review(),
+            (Act::Review, _) => self.open_review(),
+            // esc goes back to the map, all of it kept.
+            (Act::Back, _) => self.focus = Focus::List,
+            (Act::Seen, Some(_)) => self.dot_flag(Flag::Seen),
+            (Act::Flag, Some(_)) => self.dot_flag(Flag::Flagged),
+            (Act::Archive, _) => {
+                self.status =
+                    "here, m moves it, space keeps it, d discards it; $ does it all".to_string()
+            }
             (
                 Act::Left
                 | Act::Right
@@ -5300,6 +5468,7 @@ impl App {
             r.relabel = None;
             r.chosen.clear();
         }
+        self.review_kept.clear();
         let filed: usize = moves.values().map(Vec::len).sum();
         for (label, keys) in moves {
             self.file_keys(keys, &label);
@@ -5341,7 +5510,7 @@ impl App {
         self.focus = Focus::Reader;
         self.pick_review(Some(i));
         match which {
-            0 => self.choose_move(i, false),
+            0 => self.open_menu(i),
             1 => self.choose(i, Choice::Keep, false),
             2 => self.choose(i, Choice::Discard, false),
             _ => self.choose_new(i),
