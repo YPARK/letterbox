@@ -161,8 +161,8 @@ letterbox search grant report --account Work
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
-| `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
-| `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
+| `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first, on the map or in the list; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
+| `v` | in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `q` | quit |

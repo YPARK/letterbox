@@ -615,6 +615,8 @@ pub struct Review {
 #[derive(Clone, Debug, Default)]
 pub struct Menu {
     pub key: crate::index::Key,
+    /// Those to be moved with it, as many as are marked.
+    pub with: Vec<crate::index::Key>,
     pub typed: String,
     pub at: usize,
 }
@@ -2588,6 +2590,9 @@ impl App {
         if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
             return;
         }
+        if self.map.mode == Mode::List && self.focus != Focus::Side && self.list_marked_act(act) {
+            return;
+        }
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
             Act::Quit => self.quit = true,
@@ -2693,8 +2698,10 @@ impl App {
             | Act::ShowSent
             | Act::Unfiled => self.view(act),
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
+            Act::Mark if self.map.mode == Mode::List => self.list_mark(),
             Act::Mark => self.mark_cluster(),
             Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt => self.list_file(act),
+            Act::FileAll if self.map.mode == Mode::List => self.list_file_all(),
             Act::FileAll
             | Act::View
             | Act::ZoomIn
@@ -5222,6 +5229,114 @@ impl App {
         );
     }
 
+    /// Mark the message picked in the list, or let it go, and go on to the
+    /// next: what is marked is acted on together.
+    fn list_mark(&mut self) {
+        let Some(key) = self
+            .listed_on_map()
+            .and_then(|i| self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()))
+        else {
+            self.status = "not on the map yet: it is marked once the map has read it".to_string();
+            return;
+        };
+        let region = self.map.region.get_or_insert_with(|| map::Region {
+            keys: Vec::new(),
+            boxed: None,
+        });
+        match region.keys.iter().position(|k| *k == key) {
+            Some(at) => {
+                region.keys.remove(at);
+            }
+            None => region.keys.push(key),
+        }
+        let n = region.keys.len();
+        if n == 0 {
+            self.map.region = None;
+        }
+        self.status = format!(
+            "{n} marked: d trashes them, e archives them, m moves them, u and s mark them, esc lets them go"
+        );
+        self.step(1);
+    }
+
+    /// What a key does to what is marked in the list; whether it was its
+    /// to do.
+    fn list_marked_act(&mut self, act: Act) -> bool {
+        let Some(keys) = self.map.region.as_ref().map(|r| r.keys.clone()) else {
+            return false;
+        };
+        match act {
+            Act::Seen => self.region_flag(Flag::Seen),
+            Act::Flag => self.region_flag(Flag::Flagged),
+            Act::Trash => self.region_trash(),
+            Act::Archive => self.region_archive(),
+            Act::Back => {
+                self.map.region = None;
+                self.status = "let go".to_string();
+                true
+            }
+            Act::Move => {
+                let Some(i) = keys
+                    .first()
+                    .and_then(|k| self.map.snapshot.as_ref()?.find(k))
+                else {
+                    return false;
+                };
+                self.open_menu(i);
+                if let Some(menu) = &mut self.menu {
+                    menu.with = keys[1..].to_vec();
+                }
+                true
+            }
+            Act::NewLabel => {
+                self.map.moving = Some(keys);
+                self.ask_new_label();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Mark every message listed that would go where the one picked would;
+    /// marked so already, file them all there.
+    fn list_file_all(&mut self) {
+        let Some(i) = self.listed_on_map() else {
+            self.status = "not on the map yet: it is filed once the map has read it".to_string();
+            return;
+        };
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let Some(label) = s.suggestion(i).map(str::to_string) else {
+            self.status = "nowhere it would go: m picks where".to_string();
+            return;
+        };
+        let keys: Vec<crate::index::Key> = self
+            .shown
+            .iter()
+            .filter_map(|l| {
+                let ident = &self.accounts.get(l.account)?.ident;
+                let key = self
+                    .index
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .key_at(ident, &l.folder, l.summary.uid)?;
+                let j = s.find(&key)?;
+                (s.suggestion(j) == Some(label.as_str())).then_some(key)
+            })
+            .collect();
+        if self.map.region.as_ref().is_some_and(|r| r.keys == keys) {
+            self.file_keys(keys, &label);
+            self.map.region = None;
+        } else {
+            self.status = format!(
+                "{} would go to {label}, marked: Y files them, esc lets go",
+                keys.len()
+            );
+            self.map.region = Some(map::Region { keys, boxed: None });
+        }
+    }
+
     /// The message picked in the list, by its place in the map.
     fn listed_on_map(&self) -> Option<usize> {
         let l = self.current()?;
@@ -5782,7 +5897,9 @@ impl App {
         if self.map.mode == Mode::List {
             match item {
                 Some(Pick::Label(name, _) | Pick::New(name)) => {
-                    self.file_keys(vec![menu.key], &name)
+                    let mut keys = vec![menu.key];
+                    keys.extend(menu.with);
+                    self.file_keys(keys, &name)
                 }
                 Some(Pick::OnMap) => {
                     self.show_map();

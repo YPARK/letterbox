@@ -1708,10 +1708,30 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     // its colour.
     let together = app.listing.as_ref().is_some_and(|l| l.mixed());
     let names: Vec<String> = app.accounts.iter().map(|a| clip(&a.name, 12)).collect();
+    // What is marked, by where each is: its account, folder and UID.
+    let marked: std::collections::HashSet<(String, String, u32)> =
+        match (&app.map.region, &app.map.snapshot) {
+            (Some(r), Some(s)) => r
+                .keys
+                .iter()
+                .filter_map(|k| s.find(k))
+                .flat_map(|i| {
+                    let d = &s.dots[i];
+                    d.places
+                        .iter()
+                        .map(|p| (d.key.account.clone(), p.folder.clone(), p.uid))
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            _ => Default::default(),
+        };
     let items: Vec<ListItem> = app.shown[top..end]
         .iter()
         .map(|m| {
             let unseen = !m.flags.seen;
+            let is_marked = app.accounts.get(m.account).is_some_and(|a| {
+                marked.contains(&(a.ident.clone(), m.folder.clone(), m.summary.uid))
+            });
             let date = m.date.map(|d| short_date(d, &now)).unwrap_or_default();
             let mut right = Vec::new();
             if m.flags.flagged {
@@ -1741,7 +1761,9 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
             );
             let pad = width.saturating_sub(3 + from.width() + right_w);
             let mut first = vec![
-                if unseen {
+                if is_marked {
+                    Span::styled(" ▪ ", Style::new().fg(t.on_accent).bg(t.accent).bold())
+                } else if unseen {
                     Span::styled(" ● ", Style::new().fg(t.accent))
                 } else {
                     Span::raw("   ")

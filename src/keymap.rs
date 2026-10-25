@@ -454,7 +454,7 @@ pub const KEYS: &[Binding] = &[
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, or drag a box over some; m, d, e, u and s then act on all of it, and v again lets it go",
+        help: "in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go; m, d, e, u and s then act on all of it, and esc lets it go",
     },
     // The message being written: edit's keys.
     Binding {

@@ -8759,3 +8759,94 @@ fn mail_read_before_the_index_read_as_it_now_does_is_read_again_a_few_a_pass() {
     }
     assert_eq!(old(&shared.lock().unwrap()), 0);
 }
+
+// ---- marking in the list ----
+
+#[test]
+fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
+    let mut app = demo();
+    let first = app.shown[0].summary.subject.clone();
+    let second = app.shown[1].summary.subject.clone();
+    // v marks the one picked and goes on; on one marked, lets it go.
+    press(&mut app, &["v", "v", "v"]);
+    assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(3));
+    press(&mut app, &["k", "v"]);
+    assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(2));
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(screen.contains("2 marked"), "{screen}");
+    assert!(screen.contains('▪'), "marked rows marked: {screen}");
+    // u marks them read, together.
+    press(&mut app, &["u"]);
+    app.settle(Duration::from_secs(5));
+    for subject in [&first, &second] {
+        let l = app
+            .shown
+            .iter()
+            .find(|l| &l.summary.subject == subject)
+            .unwrap();
+        assert!(l.summary.flags.seen, "{subject} read");
+    }
+    // m drops down the labels; ⏎ files both there at once.
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_some());
+    let label = match &app.menu_items()[0] {
+        app::Pick::Label(n, _) => n.clone(),
+        other => panic!("{other:?}"),
+    };
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    for subject in [&first, &second] {
+        let (labels, inbox) = dot_labels(&app, subject);
+        assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
+    }
+    assert!(app.map.region.is_none(), "let go once filed");
+    // Marked again, esc lets go; d trashes what is marked.
+    press(&mut app, &["v", "<esc>"]);
+    assert!(app.map.region.is_none());
+    let count = app.shown.len();
+    press(&mut app, &["v", "v", "d"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.shown.len(), count - 2);
+}
+
+#[test]
+fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
+    let mut app = demo();
+    let s = app.map.snapshot.clone().unwrap();
+    let going = app
+        .shown
+        .iter()
+        .position(|l| {
+            s.dots
+                .iter()
+                .enumerate()
+                .any(|(i, d)| d.subject == l.summary.subject && s.suggestion(i).is_some())
+        })
+        .unwrap();
+    let subject = app.shown[going].summary.subject.clone();
+    let i = s.dots.iter().position(|d| d.subject == subject).unwrap();
+    let label = s.suggestion(i).unwrap().to_string();
+    let like: Vec<String> = app
+        .shown
+        .iter()
+        .filter(|l| {
+            s.dots.iter().enumerate().any(|(j, d)| {
+                d.subject == l.summary.subject && s.suggestion(j) == Some(label.as_str())
+            })
+        })
+        .map(|l| l.summary.subject.clone())
+        .collect();
+    app.list.select(Some(going));
+    press(&mut app, &["Y"]);
+    assert_eq!(
+        app.map.region.as_ref().map(|r| r.keys.len()),
+        Some(like.len())
+    );
+    assert!(app.status.contains(&label), "{}", app.status);
+    press(&mut app, &["Y"]);
+    app.settle(Duration::from_secs(5));
+    for subject in &like {
+        let (labels, inbox) = dot_labels(&app, subject);
+        assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
+    }
+}
