@@ -174,6 +174,68 @@ which existing folder to use, and remembers it on the account:
 trash = "Deleted Items"
 ```
 
+## The map
+
+`M-g` shows a second way into your mail, in the list's place: every
+message of every account laid out as a map, near what it is about and
+who it is from, in clusters, coloured by how they are related. Filing a
+message is moving it onto a cluster; letterbox learns from what you file
+and says what else would go there. `M-l` goes back to the list.
+
+![letterbox's map of the demo's mail](docs/map.png)
+
+Each message is a cell: `●` unread, `•` read, `⚑` flagged, `▪` labelled
+by you, and a digit for several in one. Mail come since the map was last
+looked at, and still in the Inbox, is drawn reversed. Its colour is what
+it is about, at one lightness for every hue; `C` turns it to how near
+the message picked, by angle, or to its state. Each label has an anchor,
+`◆` in its hue with its name; a cluster that is no label yet has a
+tinted `◇` with its three commonest words, or its senders when the map
+is laid out by people. The line under the map says how faithful it is:
+of each message's ten nearest by what they say, how many are near it on
+the map too. Below 70%, `M-r` lays it out again from where it is, and
+shows what moved, with trails, to keep or drop.
+
+The arrows and `h` `j` `k` `l` go to the nearest message that way, and
+the message read beside the map follows, with its labels, the cluster it
+is in, and the five messages nearest it. `[` and `]` narrow the map to
+one cluster after another. `w` lays it out by words and people, by words
+alone or by people alone; `t` shows all of it, this week's or today's;
+`r` hides read mail, and `!` dims the clusters with nothing new. The
+sidebar lists the clusters too, and the messages that fit nowhere; `M-l`
+lists the one picked.
+
+`m` moves the message picked onto a cluster: `enter` on a message of
+it, or a click on its anchor. It is given the cluster's label and taken
+out of the Inbox; `N` gives it a new label instead. `v` marks a cluster,
+or drag a box with the mouse; then `m`, `d`, `a`, `u` and `s` act on all
+of it. Once a message is filed, the message read says what would go to
+the label too: `y` files the first, `Y` all of them, and `-` says the
+first is not one, which the map learns from. `R` renames a label.
+
+Labels are flat: a message may have several, and a label of one name is
+the same label on every account. Folders are labels, every level of
+them: `Projects/Grant` is `Projects` and `Grant`. A label is kept where
+the server keeps labels: on Gmail, as a Gmail label, the message's
+`\Inbox` taken off; on a server that takes keywords of any name, as
+Dovecot's and Fastmail's do, as a keyword, the message moved from the
+Inbox to Archive; on one of folders alone, as Microsoft's, by moving the
+message to the folder the label is, any further label kept by letterbox.
+
+The map reads every folder but Junk, Trash and Drafts, the newest first,
+on a connection of its own, in the background, and then what is new
+every two minutes. Its index is kept beside the vault, in `map/`
+(`$LETTERBOX_MAP`), encrypted with a key letterbox makes, whose secret
+is kept where passwords are, in the keyring or the vault. Nothing of
+your mail is written there in the clear, and the vectors the map is
+drawn from are not written at all: they are made again from the mail.
+
+```sh
+lbx map rebuild                 # lay the map out again, the same mail the same map
+lbx map rebuild --from-servers  # read every account again first; your labels stay
+lbx map key --export            # the map's key, as age and rage read one
+```
+
 ## Sending
 
 A message is sent by SMTP submission, on port 587, over TLS once the server
