@@ -252,6 +252,10 @@ Dovecot's and Fastmail's do, as a keyword, the message moved from the
 Inbox to Archive; on one of folders alone, as Microsoft's, by moving the
 message to the folder the label is, any further label kept by letterbox.
 
+Nothing is read for the map until it is wanted: the first time it is
+opened, letterbox says what it will do and asks, and makes its key and
+its index only once you agree. From then on it begins with letterbox.
+
 The map reads every folder but Junk, Trash and Drafts, the newest first,
 on a connection of its own, in the background, and then what is new
 every two minutes. Its index is kept beside the vault, in `map/`

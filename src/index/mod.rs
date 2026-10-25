@@ -347,6 +347,20 @@ impl Index {
         Ok(Index::open_with(dir, &identity))
     }
 
+    /// The index in `dir`, opened as `open` opens it, if its key was ever
+    /// made; none if not, for the map is begun only once it is wanted.
+    pub fn open_made(
+        dir: &Path,
+        keepers: fn() -> Vec<Keeper>,
+        find: fn(Keeper, &str, &str) -> anyhow::Result<String>,
+        keep: crate::setup::Keep,
+    ) -> Result<Option<Index>, String> {
+        match key::card(dir) {
+            Ok(None) => Ok(None),
+            _ => Index::open(dir, keepers, find, keep).map(Some),
+        }
+    }
+
     /// Write the journals again as a base each, where their logs run long
     /// or the cache could not be read.
     fn compact(&mut self) {

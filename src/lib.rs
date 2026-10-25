@@ -506,9 +506,9 @@ fn command(args: &Args) -> anyhow::Result<()> {
         None => {
             let stores = stores_for_tui(args)?;
             let index = if args.demo {
-                Ok(index::Index::memory())
+                Ok(Some(index::Index::memory()))
             } else {
-                index::Index::open(
+                index::Index::open_made(
                     &index::key::dir(),
                     secret::keepers,
                     secret::find,

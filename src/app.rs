@@ -591,6 +591,8 @@ pub enum Dialog {
     Attach(Box<crate::pick::Picker>),
     /// What the map shows, and how, to be changed: `keymap::VIEW`.
     View,
+    /// Whether to begin the map, asked the first time it is wanted.
+    StartMap,
 }
 
 impl Dialog {
@@ -794,6 +796,14 @@ pub struct App {
     pub index: Arc<Mutex<Index>>,
     /// Why there is no map, if there is none: as its key could not be had.
     pub map_off: Option<String>,
+    /// The map is not begun: no key was ever made for it. It is begun once
+    /// it is asked for, and agreed to.
+    pub map_later: bool,
+    /// Each account's second connection, kept for its sync while the map
+    /// is not begun.
+    twins: Vec<Option<Box<dyn Store>>>,
+    /// How the map's index is made and opened, once it is begun.
+    pub open_map: fn() -> Result<Index, String>,
     /// Each account's sync, by the account's place, and what stops its
     /// pass; none once the account is removed.
     syncs: Vec<Option<(Sender<sync::Ask>, Arc<AtomicBool>)>>,
@@ -931,19 +941,20 @@ impl App {
     /// The app over `stores`, each an account by its name; their folders
     /// are asked for at once. Its map is in memory alone.
     pub fn new(stores: Vec<(String, Box<dyn Store>)>, config: PathBuf) -> Self {
-        Self::with_index(stores, config, Ok(Index::memory()))
+        Self::with_index(stores, config, Ok(Some(Index::memory())))
     }
 
-    /// The app over `stores`, its map read from `index`, or with none, and
-    /// why, when it could not be opened.
+    /// The app over `stores`, its map read from `index`; or not begun yet,
+    /// none made; or with none, and why, when it could not be opened.
     pub fn with_index(
         stores: Vec<(String, Box<dyn Store>)>,
         config: PathBuf,
-        index: Result<Index, String>,
+        index: Result<Option<Index>, String>,
     ) -> Self {
-        let (index, map_off) = match index {
-            Ok(index) => (index, None),
-            Err(why) => (Index::memory(), Some(why)),
+        let (index, map_off, map_later) = match index {
+            Ok(Some(index)) => (index, None, false),
+            Ok(None) => (Index::memory(), None, true),
+            Err(why) => (Index::memory(), Some(why), false),
         };
         let (replies_to, replies) = mpsc::channel();
         let ledger = trash::Ledger::load();
@@ -992,6 +1003,9 @@ impl App {
             quit: false,
             index: Arc::new(Mutex::new(index)),
             map_off,
+            map_later,
+            twins: Vec::new(),
+            open_map: open_map_index,
             syncs: Vec::new(),
             mapping: String::new(),
             map: Map::default(),
@@ -1020,9 +1034,15 @@ impl App {
         let ident = store.ident();
         let twin = store.twin().filter(|_| self.map_off.is_none());
         let asks = worker::spawn(a, store, self.replies_to.clone());
-        self.syncs.push(
-            twin.map(|twin| sync::spawn(a, twin, self.index.clone(), self.replies_to.clone())),
-        );
+        if self.map_later {
+            self.twins.push(twin);
+            self.syncs.push(None);
+        } else {
+            self.twins.push(None);
+            self.syncs.push(
+                twin.map(|twin| sync::spawn(a, twin, self.index.clone(), self.replies_to.clone())),
+            );
+        }
         self.accounts.push(Account {
             name,
             email: String::new(),
@@ -2497,6 +2517,13 @@ impl App {
             Dialog::Files(_) => self.files_key(key),
             Dialog::Attach(_) => self.attach_key(key),
             Dialog::View => self.view_key(key),
+            Dialog::StartMap => match key.code {
+                KeyCode::Char('y' | 'Y') => self.start_map(),
+                _ => {
+                    self.dialog = Dialog::Closed;
+                    self.status = "the map is not begun: M-g asks again".to_string();
+                }
+            },
             Dialog::Trash(_) => match keymap::act(key) {
                 Some(Act::Down) => self.dialog.step(1),
                 Some(Act::Up) => self.dialog.step(-1),
@@ -2584,6 +2611,10 @@ impl App {
                 }
             }
             (Dialog::View, _) => self.dialog = Dialog::Closed,
+            (Dialog::StartMap, _) => {
+                self.dialog = Dialog::Closed;
+                self.status = "the map is not begun: M-g asks again".to_string();
+            }
             (Dialog::Form(form), Some(Target::Field(i))) if !form.checking => {
                 if i == KEEP && form.at == KEEP {
                     form.turn(1);
@@ -3788,11 +3819,43 @@ impl App {
         }
     }
 
+    /// Begin the map, as was agreed: its key made and its index opened, and
+    /// each account's sync set going; then show it. What stops it is said.
+    fn start_map(&mut self) {
+        self.dialog = Dialog::Closed;
+        self.map_later = false;
+        let index = match (self.open_map)() {
+            Ok(index) => index,
+            Err(why) => {
+                self.status = format!("no map: {why}");
+                self.map_off = Some(why);
+                return;
+            }
+        };
+        *self.index.lock().unwrap_or_else(|e| e.into_inner()) = index;
+        for a in 0..self.twins.len() {
+            if let Some(twin) = self.twins[a].take() {
+                self.syncs[a] = Some(sync::spawn(
+                    a,
+                    twin,
+                    self.index.clone(),
+                    self.replies_to.clone(),
+                ));
+                self.map_pass(a);
+            }
+        }
+        self.show_map();
+    }
+
     /// Show the map in the middle pane, mail new since it was last looked
     /// at marked.
     fn show_map(&mut self) {
         if let Some(why) = &self.map_off {
             self.status = format!("no map: {why}");
+            return;
+        }
+        if self.map_later {
+            self.dialog = Dialog::StartMap;
             return;
         }
         if self.map.mode != Mode::Map {
@@ -3965,7 +4028,7 @@ impl App {
     /// Make the map's snapshot again, off this thread, if the index has
     /// changed since, or the map is to be laid out and never was.
     fn map_due(&mut self) {
-        if self.map.computing || self.map_off.is_some() {
+        if self.map.computing || self.map_off.is_some() || self.map_later {
             return;
         }
         let layout = self.map.mode == Mode::Map;
@@ -4774,6 +4837,16 @@ fn unescaped(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The map's index, its key made if it was not, where letterbox keeps it.
+fn open_map_index() -> Result<Index, String> {
+    Index::open(
+        &crate::index::key::dir(),
+        crate::secret::keepers,
+        crate::secret::find,
+        crate::secret::store,
+    )
 }
 
 /// `$LETTERBOX_DOWNLOADS`, else `~/Downloads`.

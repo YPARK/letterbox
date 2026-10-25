@@ -5252,6 +5252,47 @@ fn the_map_says_why_it_is_not_there() {
     assert_eq!(app.map.mode, crate::map::Mode::List);
 }
 
+#[test]
+fn the_map_is_begun_only_once_it_is_asked_for_and_agreed_to() {
+    let mut app = App::with_index(
+        vec![("Demo".to_string(), Box::new(Demo::new()) as Box<dyn Store>)],
+        PathBuf::from("/nowhere/accounts.toml"),
+        Ok(None),
+    );
+    app.open_map = || Ok(Index::memory());
+    app.ledger = scratch_ledger();
+    app.settle(Duration::from_secs(5));
+    // Nothing is read for it until then.
+    assert!(app.index.lock().unwrap().records.is_empty());
+    press(&mut app, &["<m-g>"]);
+    assert!(matches!(app.dialog, app::Dialog::StartMap));
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(
+        screen.contains("Begin the map?") && screen.contains("encrypted"),
+        "{screen}"
+    );
+    // Not now: nothing begun, and asked again.
+    press(&mut app, &["n"]);
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    assert!(app.status.contains("asks again"), "{}", app.status);
+    assert!(app.index.lock().unwrap().records.is_empty());
+    // Yes, clicked: the map is begun, read and shown.
+    press(&mut app, &["<m-g>"]);
+    click_at(
+        &mut app,
+        app::Target::Key(crate::keymap::key_named("y").unwrap()),
+    );
+    assert!(!app.map_later);
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    assert!(!app.index.lock().unwrap().records.is_empty());
+    assert!(
+        app.map
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| !s.dots.is_empty())
+    );
+}
+
 // ---- regions of the map ----
 
 /// The messages of the demo's map, by subject, and whether each is read.

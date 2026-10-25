@@ -122,6 +122,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
         Dialog::View => Some(view_dialog(f, &t, &app.map)),
+        Dialog::StartMap => Some((
+            question(
+                f,
+                &t,
+                "Begin the map?",
+                "y begins it · n not now",
+                "The map lays out every account's mail by what it is about and who it is from. \
+                 To do so letterbox reads each message's headers and first lines into an index \
+                 beside the vault, encrypted with a key kept where your passwords are, and keeps \
+                 it up to date in the background, newest first. Nothing leaves this machine.",
+                |_| Line::raw(""),
+            )
+            .0,
+            Vec::new(),
+        )),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
