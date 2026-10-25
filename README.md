@@ -153,7 +153,7 @@ letterbox search grant report --account Work
 | `$` | in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
-| `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
+| `N` | while moving, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
@@ -284,7 +284,8 @@ the mail is about and who it is from, as the map has it.
 in an Inbox, newest first, each with what may be done with it, `→ Grant`,
 `keep` or `discard`, and what is suggested already picked: filed where it
 would go, else kept. `m` files it where it would go, or, pressed again or
-with nowhere suggested, picks where on the map; `space` keeps it, `d`
+with nowhere suggested, picks where on the map; `N` names a new label
+or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
 `←` and `→` go round them, and a click picks one. Nothing is done until
 `$`, or the Apply button, asks and is told `y`: then each is filed, or

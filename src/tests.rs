@@ -6960,3 +6960,42 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     press(&mut app, &["i"]);
     assert!(app.review.is_none());
 }
+
+#[test]
+fn a_message_looked_through_goes_under_a_new_label_named_for_it() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    let subject = s.dots[rows[0]].subject.clone();
+    // N asks its name, its commonest word given; esc lets it go.
+    press(&mut app, &["N"]);
+    assert!(matches!(app.dialog, app::Dialog::Label(_)));
+    press(&mut app, &["<esc>"]);
+    assert_eq!(app.focus, app::Focus::Reader);
+    assert!(app.map.moving.is_none());
+    assert_eq!(app.choice(rows[0]), app::App::suggested(&s, rows[0]));
+    // Named: chosen, not yet done; the new label beside it.
+    press(&mut app, &["N", "<c-u>"]);
+    for c in "Engines".chars() {
+        let shift = if c.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        app.key(KeyEvent::new(KeyCode::Char(c), shift));
+    }
+    press(&mut app, &["<enter>"]);
+    assert_eq!(app.choice(rows[0]), app::Choice::Move("Engines".into()));
+    assert!(dot_labels(&app, &subject).1, "still in the Inbox");
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("→ Engines"), "{screen}");
+    // $ and y: made, and filed under it.
+    app.focus = app::Focus::Reader;
+    press(&mut app, &["$", "y"]);
+    let (labels, inbox) = dot_labels(&app, &subject);
+    assert!(
+        labels.contains(&"Engines".to_string()) && !inbox,
+        "{labels:?}"
+    );
+}

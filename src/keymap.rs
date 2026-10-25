@@ -367,9 +367,9 @@ pub const KEYS: &[Binding] = &[
     Binding {
         keys: &[("N", NewLabel)],
         name: "N",
-        hint: "",
-        foot: &[],
-        help: "while moving, a new label for it alone: its name is asked, its commonest word given",
+        hint: "N",
+        foot: &[(Reviewing, "new label")],
+        help: "while moving, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed",
     },
     Binding {
         keys: &[("y", FileFirst), ("Y", FileAll), ("-", NotIt)],

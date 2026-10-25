@@ -2868,6 +2868,7 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 t.on_accent,
                 suggested == Choice::Discard,
             ),
+            ("new…".to_string(), false, t.accent, t.on_accent, false),
         ];
         let mut cx = x + 2;
         for (k, (what, on, bg, fg, _)) in options.iter().enumerate() {

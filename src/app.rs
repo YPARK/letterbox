@@ -2655,7 +2655,16 @@ impl App {
                 }
             },
             Dialog::Label(typed) => match key.code {
-                KeyCode::Esc => self.dialog = Dialog::Closed,
+                KeyCode::Esc => {
+                    self.dialog = Dialog::Closed;
+                    // Named for a message looked through: back to it.
+                    if let Some(r) = &mut self.review
+                        && r.relabel.take().is_some()
+                    {
+                        self.map.moving = None;
+                        self.focus = Focus::Reader;
+                    }
+                }
                 KeyCode::Enter => {
                     let typed = std::mem::take(typed);
                     self.dialog = Dialog::Closed;
@@ -5148,6 +5157,19 @@ impl App {
             .to_string();
     }
 
+    /// Move the message `i` under a new label, its name asked: chosen, to be
+    /// made as it is filed.
+    fn choose_new(&mut self, i: usize) {
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
+            return;
+        };
+        if let Some(r) = &mut self.review {
+            r.relabel = Some(key.clone());
+        }
+        self.map.moving = Some(vec![key]);
+        self.ask_new_label();
+    }
+
     /// Do what a key does in the Inbox looked through, with the focus on
     /// it; whether it was its to do.
     fn review_act(&mut self, act: Act) -> bool {
@@ -5194,6 +5216,7 @@ impl App {
                 self.choose(i, next, false);
             }
             (Act::Move, Some(i)) => self.choose_move(i, true),
+            (Act::NewLabel, Some(i)) => self.choose_new(i),
             (Act::ScreenDown, Some(i)) => self.choose(i, Choice::Keep, true),
             (Act::Trash, Some(i)) => self.choose(i, Choice::Discard, true),
             (Act::FileFirst, Some(i)) => {
@@ -5216,6 +5239,7 @@ impl App {
                 Act::Left
                 | Act::Right
                 | Act::Move
+                | Act::NewLabel
                 | Act::ScreenDown
                 | Act::Trash
                 | Act::FileFirst
@@ -5319,7 +5343,8 @@ impl App {
         match which {
             0 => self.choose_move(i, false),
             1 => self.choose(i, Choice::Keep, false),
-            _ => self.choose(i, Choice::Discard, false),
+            2 => self.choose(i, Choice::Discard, false),
+            _ => self.choose_new(i),
         }
     }
 
