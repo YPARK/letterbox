@@ -286,7 +286,11 @@ the clusters, shown with `f`, say which would take what is shown. `y`
 files it there, `Y` marks every message that would go there too and,
 pressed again, files them all, and `-` says it is not one for that
 label, which the map learns. No subject is read to say where: only what
-the mail is about and who it is from, as the map has it.
+the mail is about and who it is from, as the map has it. Where a message
+would go is voted by the ten filed messages nearest it, within 45°, each
+for its labels, the nearer the more; one with none so near is said to go
+nowhere. `letterbox map check` grades it on your mail: each filed message,
+its labels hidden, put back by the vote, and by other ways to compare.
 
 `i` opens the Inbox beside the map, to look through as far as you like:
 every message still in an Inbox, newest first, those kept before after

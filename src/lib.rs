@@ -31,7 +31,7 @@ mod ui;
 mod vault;
 mod worker;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -256,6 +256,9 @@ enum MapAction {
         #[arg(long)]
         from_servers: bool,
     },
+    /// How well the map would file what you filed: each message under a
+    /// label, its own hidden, put back by the label nearest it
+    Check,
     /// The map's key: where it is kept
     Key {
         /// Print its secret, as age and rage read a key file
@@ -440,6 +443,61 @@ fn stores(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
         .collect())
 }
 
+/// How well the map would file what was filed, as `letterbox map check`
+/// says it: by each way of reading the mail.
+fn map_check(index: &index::Index) -> String {
+    let given: Vec<(&index::Record, Vec<String>, bool)> = index
+        .records
+        .values()
+        .map(|r| (r, index.labels(&r.key), index.system(&r.key).sent))
+        .collect();
+    let corpus = model::Corpus::read(&given, index::Lens::Both);
+    let said = |c: model::LabelCheck| {
+        let pct = if c.total == 0 {
+            0.0
+        } else {
+            100.0 * c.hits as f32 / c.total as f32
+        };
+        let right = if c.said == 0 {
+            0.0
+        } else {
+            100.0 * c.hits as f32 / c.said as f32
+        };
+        format!(
+            "{} of {} ({pct:.0}%), said for {} and right for {right:.0}% of those",
+            c.hits, c.total, c.said
+        )
+    };
+    let mut out = format!(
+        "{} messages; each filed one put back under a label of its own, its own hidden:\n",
+        given.len()
+    );
+    let within = |deg: f32| corpus.label_check_nearest(&given, corpus.base(), model::VOTERS, deg);
+    for (how, check) in [
+        (
+            format!(
+                "the nearest filed mail voting, within {}° (as it is)",
+                model::VOTED_WITHIN
+            ),
+            within(model::VOTED_WITHIN),
+        ),
+        ("  within 30°".to_string(), within(30.0)),
+        ("  within 60°".to_string(), within(60.0)),
+        ("  at any distance".to_string(), within(90.0)),
+        (
+            "the label whose mean is nearest".to_string(),
+            corpus.label_check(&given, corpus.base()),
+        ),
+        (
+            "always the commonest label".to_string(),
+            model::commonest_label_check(&given),
+        ),
+    ] {
+        out.push_str(&format!("  {how}: {}\n", said(check)));
+    }
+    out
+}
+
 /// The map's index, its key found where it is kept: the vault opened
 /// first if an account keeps its password there.
 fn open_index(args: &Args) -> anyhow::Result<index::Index> {
@@ -545,7 +603,6 @@ fn trash_seeds(
 /// Turn throwing new mail away on its own on, for mail come from `now`, or
 /// off, as the file at `path` keeps it.
 fn set_auto(path: &std::path::Path, on: bool, now: i64) -> anyhow::Result<()> {
-    use anyhow::Context;
     let mut a = filter::Auto::read(&std::fs::read_to_string(path).unwrap_or_default(), now);
     if on && !a.on {
         a.since = now;
@@ -1031,6 +1088,21 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 _ => filter::DECAY,
             };
             print!("{}", check(&index, decay));
+            Ok(())
+        }
+        Some(Command::Map {
+            action: MapAction::Check,
+        }) => {
+            let index = if args.demo {
+                open_index(args)?
+            } else {
+                if config::load(&args.config)?.iter().any(in_vault) && !vault::is_open() {
+                    let _ = vault::unlock_by_key();
+                }
+                index::Index::read(&index::key::dir(), secret::find)?
+                    .context("the map is not begun: open letterbox and press M to begin it")?
+            };
+            print!("{}", map_check(&index));
             Ok(())
         }
         Some(Command::Map {

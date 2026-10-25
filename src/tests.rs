@@ -6965,10 +6965,13 @@ fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
         .collect();
     assert!(!going.is_empty(), "some would go to a label");
     let (first, label) = going[0].clone();
-    // Where it would go, beside it, by the cluster it lies in.
-    assert_eq!(
-        s.group_of(first).unwrap().label.as_deref(),
-        Some(label.as_str())
+    // Where it would go, a label there is, as the filed mail nearest it
+    // votes.
+    assert!(
+        s.model
+            .label_vectors
+            .contains_key(&crate::index::fold(&label)),
+        "{label}"
     );
     app.map.cursor = Some(s.dots[first].key.clone());
     press(&mut app, &["<enter>"]);
@@ -9035,4 +9038,150 @@ fn the_index_read_only_reads_all_of_it_and_writes_nothing() {
             .records
             .contains_key(&b.key)
     );
+}
+
+// ---- how well the map would file what you filed ----
+
+#[test]
+fn the_map_is_graded_on_putting_each_filed_message_back_under_its_label() {
+    // Grant letters and seminar notices, each filed under its own; a few
+    // mislabelled, to be missed.
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..12 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Grant".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let corpus = crate::model::Corpus::read(&messages, index::Lens::Both);
+    let check = corpus.label_check(&messages, corpus.base());
+    assert_eq!(check.total, 24);
+    assert_eq!(check.hits, 24, "{check:?}");
+    // Labels given at random: about half put back.
+    let mixed: Vec<crate::model::Given> = given
+        .iter()
+        .enumerate()
+        .map(|(k, (r, _))| {
+            let l = if (k * 7) % 3 == 0 {
+                "Grant"
+            } else {
+                "Seminars"
+            };
+            (r, vec![l.to_string()], false)
+        })
+        .collect();
+    let corpus = crate::model::Corpus::read(&mixed, index::Lens::Both);
+    let check = corpus.label_check(&mixed, corpus.base());
+    assert!(check.hits < 20, "{check:?}");
+}
+
+#[test]
+fn a_label_of_two_kinds_is_put_back_by_its_nearest_not_its_mean() {
+    // Projects holds two kinds of mail, a grant's and a course's; Seminars
+    // one kind, between them. By the mean, Projects' mail goes to Seminars;
+    // by the nearest filed, to Projects.
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..10 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("c{k}"),
+                "teach@uni.example",
+                &format!("Course syllabus marking {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let corpus = crate::model::Corpus::read(&messages, index::Lens::Both);
+    let near = corpus.label_check_nearest(&messages, corpus.base(), crate::model::VOTERS, 90.0);
+    assert_eq!((near.hits, near.total), (30, 30), "{near:?}");
+    // Always the commonest label: the share of it.
+    let common = crate::model::commonest_label_check(&messages);
+    assert_eq!((common.hits, common.total), (20, 30));
+}
+
+#[test]
+fn where_mail_would_go_is_voted_by_the_filed_mail_nearest_it() {
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..10 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("c{k}"),
+                "teach@uni.example",
+                &format!("Course syllabus marking {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let course = sent_by(
+        "new",
+        "teach@uni.example",
+        "Course syllabus marking, the last",
+    );
+    let talk = sent_by(
+        "talk",
+        "talks@uni.example",
+        "Seminar speaker abstract, the next",
+    );
+    given.push((course.clone(), Vec::new()));
+    given.push((talk.clone(), Vec::new()));
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let model = crate::model::Model::build(&messages, &Default::default(), index::Lens::Both);
+    let at = |r: &index::Record| model.place[&r.key];
+    let voted = model.voted(|_, _| false);
+    // A course's mail, though Projects' mean is far from it: Projects.
+    assert_eq!(voted[at(&course)].as_deref(), Some("Projects"));
+    assert_eq!(voted[at(&talk)].as_deref(), Some("Seminars"));
+    // Filed mail is voted for nothing; a label turned down is not voted.
+    assert!(voted[0].is_none());
+    let voted = model.voted(|i, l| i == at(&course) && l == "projects");
+    assert_ne!(voted[at(&course)].as_deref(), Some("Projects"));
 }

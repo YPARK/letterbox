@@ -495,6 +495,110 @@ pub type Given<'a> = (&'a Record, Vec<String>, bool);
 const GROWN: f32 = 1.25;
 const SHRUNK: f32 = 0.8;
 
+/// How well labels were put back: of so many filed, how many under one
+/// of their own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LabelCheck {
+    pub hits: usize,
+    pub total: usize,
+    /// How many were said to go somewhere at all.
+    pub said: usize,
+}
+
+/// How many filed messages nearest one vote for where it would go, and
+/// how near, in degrees, each is to be to vote at all: graded on real
+/// mail, within 45° it said where for nine in ten filed messages, and was
+/// right for four in five of them; nearer, it said less, and farther, it
+/// was less often right.
+pub const VOTERS: usize = 10;
+pub const VOTED_WITHIN: f32 = 45.0;
+
+/// How many messages hold each label.
+fn label_counts(labels: &[BTreeSet<String>]) -> HashMap<String, usize> {
+    let mut count = HashMap::new();
+    for ls in labels {
+        for l in ls {
+            *count.entry(l.clone()).or_insert(0) += 1;
+        }
+    }
+    count
+}
+
+/// The label the `k` messages of `filed` nearest `i` by `base` vote for,
+/// each its labels, the nearer the more; `i` itself not among them.
+fn vote(
+    labels: &[BTreeSet<String>],
+    base: &[Vector],
+    filed: &[usize],
+    i: usize,
+    k: usize,
+    within: f32,
+) -> Option<String> {
+    ranked_votes(labels, base, filed, i, k, within)
+        .into_iter()
+        .next()
+}
+
+/// The labels the `k` messages of `filed` nearest `i` vote for, most voted
+/// first: of those within `within` degrees of it, if any are.
+fn ranked_votes(
+    labels: &[BTreeSet<String>],
+    base: &[Vector],
+    filed: &[usize],
+    i: usize,
+    k: usize,
+    within: f32,
+) -> Vec<String> {
+    let least = within.to_radians().cos();
+    let mut near: Vec<(usize, f32)> = filed
+        .iter()
+        .copied()
+        .filter(|&j| j != i)
+        .map(|j| (j, dot(&base[i], &base[j])))
+        .filter(|&(_, cos)| cos >= least)
+        .collect();
+    let k = k.min(near.len());
+    if k == 0 {
+        return Vec::new();
+    }
+    near.select_nth_unstable_by(k - 1, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut votes: BTreeMap<&String, f32> = BTreeMap::new();
+    for &(j, cos) in &near[..k] {
+        for l in &labels[j] {
+            *votes.entry(l).or_default() += cos.max(0.0) + 1e-3;
+        }
+    }
+    let mut ranked: Vec<(&String, f32)> = votes.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+    ranked.into_iter().map(|(l, _)| l.clone()).collect()
+}
+
+/// How well labels would be suggested by always the commonest: the
+/// baseline any other is to beat.
+pub fn commonest_label_check(messages: &[Given]) -> LabelCheck {
+    let labels: Vec<BTreeSet<String>> = messages
+        .iter()
+        .map(|(_, l, _)| l.iter().map(|x| fold(x)).collect())
+        .collect();
+    let count = label_counts(&labels);
+    let Some(commonest) = count
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+        .map(|(l, _)| l.clone())
+    else {
+        return LabelCheck::default();
+    };
+    let eligible: Vec<&BTreeSet<String>> = labels
+        .iter()
+        .filter(|ls| ls.iter().any(|l| count[l] >= 2))
+        .collect();
+    LabelCheck {
+        hits: eligible.iter().filter(|ls| ls.contains(&commonest)).count(),
+        said: eligible.len(),
+        total: eligible.len(),
+    }
+}
+
 /// What the model has read of each message, kept from one snapshot to the
 /// next, so that new mail is read alone and the rest is not read again.
 /// Each message's direction is made once, by how rare its tokens were
@@ -754,6 +858,139 @@ impl Corpus {
 
     /// The model of what is read, taught by the labels of `messages` and
     /// by `not_it`, each message and label, folded, it was said not to be.
+    /// Each message's direction before labels teach it.
+    pub fn base(&self) -> &[Vector] {
+        &self.base
+    }
+
+
+    /// How well labels would be suggested from directions `base`: each
+    /// message filed under labels with others in them, its own labels
+    /// hidden, its labels made again without it and it pulled as mail not
+    /// yet filed is, put back under one of its own by the label nearest it.
+    pub fn label_check(&self, messages: &[Given], base: &[Vector]) -> LabelCheck {
+        let n = self.len();
+        let mut labels: Vec<BTreeSet<String>> = vec![BTreeSet::new(); n];
+        for (r, l, _) in messages {
+            if let Some(&i) = self.place.get(&r.key) {
+                labels[i] = l.iter().map(|x| fold(x)).collect();
+            }
+        }
+        // Each label's members, the sum of their directions, and how many
+        // of them hold each token.
+        let mut members: BTreeMap<&String, Vec<usize>> = BTreeMap::new();
+        for (i, ls) in labels.iter().enumerate() {
+            for l in ls {
+                members.entry(l).or_default().push(i);
+            }
+        }
+        let sums: BTreeMap<&String, (Vector, HashMap<u64, usize>)> = members
+            .iter()
+            .map(|(l, of)| {
+                let mut sum = [0f32; DIM];
+                let mut held: HashMap<u64, usize> = HashMap::new();
+                for &i in of {
+                    sum.iter_mut().zip(&base[i]).for_each(|(s, x)| *s += x);
+                    for t in self.bags[i].iter() {
+                        *held.entry(t.0).or_default() += 1;
+                    }
+                }
+                (*l, (sum, held))
+            })
+            .collect();
+        let weigh = |b: u64, w: f32| w * self.rarity.factor(b);
+        let hits: Vec<bool> = (0..n)
+            .into_par_iter()
+            .filter(|&i| {
+                labels[i]
+                    .iter()
+                    .any(|l| members.get(l).is_some_and(|m| m.len() >= 2))
+            })
+            .map(|i| {
+                let bag = &self.bags[i];
+                let total: f32 = bag.iter().map(|t| weigh(t.0, t.1)).sum();
+                // Each label as it would be without this message.
+                let without: Vec<(&String, Vector, f32)> = sums
+                    .iter()
+                    .filter_map(|(l, (sum, held))| {
+                        let mine = labels[i].contains(*l);
+                        if mine && members[l].len() < 2 {
+                            return None;
+                        }
+                        let mut v = *sum;
+                        if mine {
+                            v.iter_mut().zip(&base[i]).for_each(|(s, x)| *s -= x);
+                        }
+                        let shared: f32 = bag
+                            .iter()
+                            .filter(|t| held.get(&t.0).is_some_and(|&c| c > usize::from(mine)))
+                            .map(|t| weigh(t.0, t.1))
+                            .sum();
+                        let share = if total > 0.0 { shared / total } else { 0.0 };
+                        Some((*l, normalised(v), share))
+                    })
+                    .collect();
+                let mut v = base[i];
+                for (_, l, share) in &without {
+                    v.iter_mut()
+                        .zip(l)
+                        .for_each(|(x, y)| *x += PULL * share * y);
+                }
+                let v = normalised(v);
+                without
+                    .iter()
+                    .min_by(|a, b| degrees(&v, &a.1).total_cmp(&degrees(&v, &b.1)))
+                    .is_some_and(|(l, _, _)| labels[i].contains(*l))
+            })
+            .collect();
+        LabelCheck {
+            hits: hits.iter().filter(|h| **h).count(),
+            said: hits.len(),
+            total: hits.len(),
+        }
+    }
+
+    /// How well labels would be suggested by the `k` filed messages
+    /// nearest each, by directions `base`, each voting for its labels, the
+    /// nearer the more: each filed message, its own labels hidden, put back
+    /// under one of its own.
+    pub fn label_check_nearest(
+        &self,
+        messages: &[Given],
+        base: &[Vector],
+        k: usize,
+        within: f32,
+    ) -> LabelCheck {
+        let labels = self.labels_of(messages);
+        let count = label_counts(&labels);
+        let filed: Vec<usize> = (0..self.len()).filter(|&i| !labels[i].is_empty()).collect();
+        let hits: Vec<(bool, bool)> = filed
+            .par_iter()
+            .copied()
+            .filter(|&i| labels[i].iter().any(|l| count[l] >= 2))
+            .map(|i| {
+                let said = vote(&labels, base, &filed, i, k, within);
+                (said.is_some(), said.is_some_and(|l| labels[i].contains(&l)))
+            })
+            .collect();
+        LabelCheck {
+            hits: hits.iter().filter(|h| h.1).count(),
+            said: hits.iter().filter(|h| h.0).count(),
+            total: hits.len(),
+        }
+    }
+
+    /// Each message's labels, folded, by its place.
+    fn labels_of(&self, messages: &[Given]) -> Vec<BTreeSet<String>> {
+        let mut labels: Vec<BTreeSet<String>> = vec![BTreeSet::new(); self.len()];
+        for (r, l, _) in messages {
+            if let Some(&i) = self.place.get(&r.key) {
+                labels[i] = l.iter().map(|x| fold(x)).collect();
+            }
+        }
+        labels
+    }
+
     pub fn model(&mut self, messages: &[Given], not_it: &BTreeSet<(Key, String)>) -> Model {
         let n = self.len();
         let mut labels: Vec<Vec<String>> = vec![Vec::new(); n];
@@ -885,6 +1122,36 @@ impl Model {
                         (j, if shared { d * SHARED } else { d })
                     })
                     .collect()
+            })
+            .collect()
+    }
+
+    /// Where each message filed under no label would go: the label its
+    /// `VOTERS` nearest filed messages vote for, the nearer the more; none
+    /// that `skip` turns down, by its place and the label folded. Graded on
+    /// real mail, filed mail was put back so three times as often as by
+    /// the label whose mean is nearest.
+    pub fn voted(&self, skip: impl Fn(usize, &str) -> bool + Sync) -> Vec<Option<String>> {
+        let labels: Vec<BTreeSet<String>> = self
+            .labels
+            .iter()
+            .map(|ls| ls.iter().map(|l| fold(l)).collect())
+            .collect();
+        let filed: Vec<usize> = (0..self.len()).filter(|&i| !labels[i].is_empty()).collect();
+        (0..self.len())
+            .into_par_iter()
+            .map(|i| {
+                if !labels[i].is_empty() {
+                    return None;
+                }
+                ranked_votes(&labels, &self.vectors, &filed, i, VOTERS, VOTED_WITHIN)
+                    .into_iter()
+                    .find(|l| !skip(i, l))
+                    .map(|l| {
+                        self.label_vectors
+                            .get(&l)
+                            .map_or(l.clone(), |(name, _)| name.clone())
+                    })
             })
             .collect()
     }

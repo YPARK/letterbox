@@ -186,6 +186,9 @@ pub struct Snapshot {
     pub fresh: Option<Vec<(Key, f32, f32)>>,
     /// Each message and label, folded, it was said not to be.
     pub not_it: std::collections::BTreeSet<(Key, String)>,
+    /// Where each message filed under no label would go, as the filed mail
+    /// nearest it votes, none turned down for it.
+    pub voted: Vec<Option<String>>,
     /// What the model has read, to be handed to the next snapshot.
     pub corpus: Option<Corpus>,
 }
@@ -240,18 +243,15 @@ impl Snapshot {
             .copied()
     }
 
-    /// Where the message `i`, filed under no label, would go: the label of
-    /// the cluster it is in, unless it was said not to be one for it.
+    /// Where the message `i`, filed under no label, would go: the label
+    /// the filed mail nearest it votes for, unless it was said not to be one
+    /// for it.
     pub fn suggestion(&self, i: usize) -> Option<&str> {
         let d = self.dots.get(i)?;
         if !d.labels.is_empty() || d.system.sent {
             return None;
         }
-        let label = self.group_of(i)?.label.as_deref()?;
-        let turned_down = self
-            .not_it
-            .contains(&(d.key.clone(), crate::index::fold(label)));
-        (!turned_down).then_some(label)
+        self.voted.get(i)?.as_deref()
     }
 
     pub fn group(&self, id: u32) -> Option<&Group> {
@@ -579,9 +579,15 @@ pub fn compute(input: Input) -> Snapshot {
         })
         .collect();
 
+    let voted = model.voted(|i, l| {
+        input
+            .not_it
+            .contains(&(model.keys[i].clone(), l.to_string()))
+    });
     Snapshot {
         version: input.version,
         lens: input.lens,
+        voted,
         dots,
         model,
         clustering,
