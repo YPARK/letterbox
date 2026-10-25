@@ -114,9 +114,9 @@ letterbox search grant report --account Work
 | `h` / `l`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
 | `space` / `b` | a page down, or up, in the message |
-| `n` / `p` | read the next message, or the one before |
+| `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G` | go to the top, or the end |
-| `/` | search the messages listed as you type; `enter` searches the server |
+| `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
 | `esc` | back to the list; clear the search |
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
@@ -227,7 +227,11 @@ shows what moved, with trails, to keep or drop.
 The arrows and `h` `j` `k` `l` go to the nearest message that way, and
 the message read beside the map follows, with its labels, the cluster it
 is in, and the five messages nearest it. `[` and `]` narrow the map to
-one cluster after another. `,` opens what the map shows, and how, each
+one cluster after another. `/` searches it as you type: the messages
+whose subject, sender, address, first lines or labels hold every word
+are lit, the rest faded, and the line over the map says how many; `n`
+and `p` go from one to the next, newest first, and `esc` lets it go.
+`,` opens what the map shows, and how, each
 by a key, kept open to change more: `w` lays it out by words and people,
 by words alone or by people alone; `t` shows all of it, this week's or
 today's; `r` hides read mail, `s` the mail you sent, and `n` dims the
@@ -292,9 +296,11 @@ added to Sent.
 `--demo` writes the message into Sent and does not send it.
 
 Moving through the list, the message picked is shown beside it, and marked
-read, once you pause on it, as a mail app does. The mouse picks and
-scrolls, and presses the keys shown at the foot and the forms' fields and
-buttons. Each account is asked from a thread of its own, so the screen
+read, once you pause on it, as a mail app does. Another folder listed,
+the message beside it goes, as it is not in that list. The mouse picks
+and scrolls, and presses the keys shown at the foot and the forms' fields
+and buttons; drag the line before the message read to make it wider or
+narrower. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
 ## For AI agents: MCP

@@ -470,6 +470,9 @@ pub enum Target {
     Key(KeyEvent),
     /// Two keys pressed in turn, as `C-c C-c`, clicked.
     Chord(KeyEvent, KeyEvent),
+    /// The line between the middle pane and the message read: dragged, it
+    /// makes the message wider or narrower.
+    Divider,
     /// The map, where its messages are; and a cluster's anchor on it, by
     /// the cluster's number.
     Map,
@@ -815,6 +818,13 @@ pub struct App {
     map_corpus: Option<crate::model::Corpus>,
     /// The folder files were last attached from.
     pub attach_dir: Option<PathBuf>,
+    /// How wide the message read is, as it was dragged; else as the
+    /// screen's width has it.
+    pub reader_width: Option<u16>,
+    /// The line before the message read is being dragged.
+    pub resizing: bool,
+    /// Where the panes end on the right, as last drawn.
+    pub panes_right: u16,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -849,7 +859,8 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 Event::Mouse(m) => {
                     app.mouse(m);
                     // A box being drawn on the map is drawn as it goes.
-                    stale |= matches!(m.kind, MouseEventKind::Drag(_)) && app.map.drag.is_some();
+                    stale |= matches!(m.kind, MouseEventKind::Drag(_))
+                        && (app.map.drag.is_some() || app.resizing);
                 }
                 Event::Paste(text) => app.paste(&text),
                 _ => {}
@@ -1011,6 +1022,9 @@ impl App {
             map: Map::default(),
             map_corpus: None,
             attach_dir: None,
+            reader_width: None,
+            resizing: false,
+            panes_right: 0,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1976,10 +1990,14 @@ impl App {
         self.found = None;
         self.searching = false;
         // What was picked before is not picked again: the list starts at
-        // its top.
+        // its top, and the message read is let go, not left beside a list
+        // it is not in.
         self.shown.clear();
         self.list.select(Some(0));
         *self.list.offset_mut() = 0;
+        self.reading = None;
+        self.scroll = 0;
+        self.due = None;
         let folders = match view {
             View::Folder(a, path) => vec![(a, path)],
             View::All(role) => self.folders_of(role),
@@ -2364,7 +2382,17 @@ impl App {
                 KeyCode::Esc => {
                     self.query.clear();
                     self.found = None;
+                    self.map.hits = None;
                     self.searching = false;
+                }
+                // On the map, what is found is lit there; nothing is asked of
+                // the servers.
+                KeyCode::Enter if self.map.mode == Mode::Map => {
+                    self.searching = false;
+                    let now = jiff::Timestamp::now().as_second();
+                    let found = self.map.seek(&self.query, now);
+                    self.status =
+                        format!("{found} found · n next, p the one before, esc lets it go");
                 }
                 KeyCode::Enter => {
                     self.searching = false;
@@ -2378,6 +2406,10 @@ impl App {
                 }
             }
             self.narrow();
+            if self.map.mode == Mode::Map {
+                self.map
+                    .seek(&self.query, jiff::Timestamp::now().as_second());
+            }
             return;
         }
         if let Some(act) = keymap::act(key) {
@@ -2816,10 +2848,22 @@ impl App {
         }
         let by = match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if at == Some(Target::Divider) && !self.dialog.is_open() {
+                    self.resizing = true;
+                    return;
+                }
                 if at == Some(Target::Map) && !self.dialog.is_open() {
                     return self.map_press(m.column, m.row);
                 }
                 return self.click(at);
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
+                self.reader_width = Some(self.panes_right.saturating_sub(m.column));
+                return;
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.resizing => {
+                self.resizing = false;
+                return;
             }
             MouseEventKind::Drag(MouseButton::Left) => return self.map_drag(m.column, m.row),
             MouseEventKind::Up(MouseButton::Left) => return self.map_release(m.column, m.row),
@@ -3690,6 +3734,23 @@ impl App {
             }
             Act::Rename => {
                 self.ask_rename_label();
+                return true;
+            }
+            Act::Back if !self.query.is_empty() && self.map.region.is_none() => {
+                self.query.clear();
+                self.found = None;
+                self.map.hits = None;
+                self.narrow();
+                self.status = "the search let go".to_string();
+                return true;
+            }
+            Act::NextMessage | Act::PreviousMessage if !self.query.is_empty() => {
+                let by = if act == Act::NextMessage { 1 } else { -1 };
+                let now = jiff::Timestamp::now().as_second();
+                self.map.next_found(&self.query.clone(), by, now);
+                if self.side_by_side {
+                    self.due = Some((Instant::now(), Due::Message));
+                }
                 return true;
             }
             Act::Back if self.map.suggesting.is_some() && self.map.region.is_none() => {

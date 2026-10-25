@@ -31,6 +31,8 @@ const LIST: u16 = 46;
 /// side by side; and with the sidebar beside the list.
 const WIDE: u16 = 120;
 const MEDIUM: u16 = 70;
+/// How narrow the middle pane, or the message read, may be dragged.
+const NARROWEST: u16 = 24;
 const LABEL: usize = 6;
 /// The most lines the keys take at the foot.
 const FOOT: usize = 2;
@@ -81,11 +83,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
-    let [side_w, list_w, read_w] = if app.map.mode == crate::map::Mode::Map {
+    let [side_w, mut list_w, mut read_w] = if app.map.mode == crate::map::Mode::Map {
         map_panes(main.width, app.focus)
     } else {
         panes(main.width, app.focus)
     };
+    // The message as wide as it was dragged, with room left for the rest.
+    if list_w > 0
+        && read_w > 0
+        && let Some(w) = app.reader_width
+    {
+        let both = list_w + read_w;
+        read_w = w.clamp(NARROWEST.min(both / 2), both.saturating_sub(NARROWEST));
+        list_w = both - read_w;
+    }
+    app.panes_right = main.right();
     app.side_by_side = list_w > 0 && read_w > 0;
     let [side, list, read] = Layout::horizontal([
         Constraint::Length(side_w),
@@ -106,6 +118,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if read_w > 0 {
         reader(f, app, read);
+    }
+    if list_w > 0 && read_w > 0 {
+        app.targets
+            .push((Rect { width: 1, ..read }, Target::Divider));
     }
     keys(f, app, foot_area, foot_lines, spots);
     if app.compose.is_some() {
@@ -1124,7 +1140,9 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
     if app.compose.is_some() {
         spans = vec![Span::styled(" Compose", Style::new().fg(t.title).bold())];
     } else if app.query.is_empty() && !app.searching {
-        let what = if folder.is_empty() || room < 16 {
+        let what = if app.map.mode == crate::map::Mode::Map && room >= 16 {
+            "Search the map".to_string()
+        } else if folder.is_empty() || room < 16 {
             "Search".to_string()
         } else {
             format!("Search {folder}")
@@ -1620,6 +1638,14 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .count();
     let unread = shown.iter().filter(|&&i| !s.dots[i].flags.seen).count();
     let mut head = vec![Span::styled(" Map", dim.add_modifier(Modifier::BOLD))];
+    // What is searched for, first, as it is what is looked at.
+    let query = app.query.clone();
+    if let Some(h) = app.map.hits(&query) {
+        head.push(Span::styled(
+            format!(" · {} found for “{}”", h.count, query.trim()),
+            Style::new().fg(t.title).bold(),
+        ));
+    }
     let mut what = format!(
         " · {} · {} · {} messages",
         s.lens.name(),
@@ -1730,6 +1756,10 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .filter_map(|&i| s.clustering.of.get(i).copied())
         .collect();
     let ground = t.ground();
+    let found: Option<Vec<bool>> = {
+        let query = app.query.clone();
+        app.map.hits(&query).map(|h| h.matched.clone())
+    };
     let marked: std::collections::BTreeSet<usize> = app
         .map
         .region
@@ -1788,7 +1818,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             && !members
                 .iter()
                 .any(|i| s.clustering.of.get(*i).is_some_and(|c| lively.contains(c)));
-        if !in_focus || quiet {
+        // Searched for, what holds it is lit and the rest let fade.
+        let hit = found.as_ref().map(|m| members.iter().any(|&i| m[i]));
+        if !in_focus || quiet || hit == Some(false) {
             colour = t.rule;
         } else if members
             .iter()
@@ -1804,6 +1836,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         };
         if !new_here && members.iter().any(|i| marked.contains(i)) {
             style = style.bg(t.row);
+        }
+        if hit == Some(true) {
+            style = style.bold();
         }
         if picked.is_some_and(|p| members.contains(&p)) {
             style = Style::new().fg(t.title).bg(t.focus).bold();

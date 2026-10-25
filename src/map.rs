@@ -575,6 +575,18 @@ pub struct Map {
     pub preview: Option<Vec<Point>>,
     /// Whether it is being laid out again.
     pub relaying: bool,
+    /// The messages that hold what is searched for, as last found.
+    pub hits: Option<Hits>,
+}
+
+/// The messages of a snapshot that hold every word searched for.
+pub struct Hits {
+    query: String,
+    /// The snapshot they were found in.
+    of: usize,
+    /// Whether each message holds them, by its place.
+    pub matched: Vec<bool>,
+    pub count: usize,
 }
 
 /// What is marked on the map: the messages of a cluster, or those in a
@@ -586,6 +598,95 @@ pub struct Region {
 }
 
 impl Map {
+    /// Which messages hold every word of `query`, in their subject, sender,
+    /// address, first lines or labels, case let go: none for no words.
+    /// Found again only once the query or the snapshot changes.
+    pub fn hits(&mut self, query: &str) -> Option<&Hits> {
+        use rayon::prelude::*;
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let s = self.snapshot.clone()?;
+        if words.is_empty() {
+            self.hits = None;
+            return None;
+        }
+        let of = Arc::as_ptr(&s) as usize;
+        if !self
+            .hits
+            .as_ref()
+            .is_some_and(|h| h.query == query && h.of == of)
+        {
+            let matched: Vec<bool> = s
+                .dots
+                .par_iter()
+                .map(|d| {
+                    let text = format!(
+                        "{} {} {} {} {}",
+                        d.from,
+                        d.address,
+                        d.subject,
+                        d.preview,
+                        d.labels.join(" ")
+                    )
+                    .to_lowercase();
+                    words.iter().all(|w| text.contains(w.as_str()))
+                })
+                .collect();
+            let count = matched.iter().filter(|&&m| m).count();
+            self.hits = Some(Hits {
+                query: query.to_string(),
+                of,
+                matched,
+                count,
+            });
+        }
+        self.hits.as_ref()
+    }
+
+    /// The messages drawn that hold what is searched for, newest first.
+    fn found(&mut self, query: &str, now: i64) -> Vec<usize> {
+        let shown = self.shown(now);
+        let (Some(hits), Some(s)) = (
+            self.hits(query).map(|h| h.matched.clone()),
+            self.snapshot.clone(),
+        ) else {
+            return Vec::new();
+        };
+        let mut found: Vec<usize> = shown.into_iter().filter(|&i| hits[i]).collect();
+        found.sort_by_key(|&i| (std::cmp::Reverse(s.dots[i].date), i));
+        found
+    }
+
+    /// Pick the newest message found, unless the one picked is found too;
+    /// how many are.
+    pub fn seek(&mut self, query: &str, now: i64) -> usize {
+        let found = self.found(query, now);
+        if !self.picked().is_some_and(|p| found.contains(&p))
+            && let (Some(&first), Some(s)) = (found.first(), &self.snapshot)
+        {
+            self.cursor = Some(s.dots[first].key.clone());
+        }
+        found.len()
+    }
+
+    /// Pick the next message found, newest first, or the one before; round.
+    pub fn next_found(&mut self, query: &str, by: isize, now: i64) {
+        let found = self.found(query, now);
+        if found.is_empty() {
+            return;
+        }
+        let at = self
+            .picked()
+            .and_then(|p| found.iter().position(|&i| i == p));
+        let n = found.len() as isize;
+        let next = match at {
+            Some(at) => (at as isize + by).rem_euclid(n),
+            None => 0,
+        } as usize;
+        if let Some(s) = &self.snapshot {
+            self.cursor = Some(s.dots[found[next]].key.clone());
+        }
+    }
+
     /// When mail is new since: the map's last look, or a day ago.
     pub fn since_look(&self, now: i64) -> i64 {
         self.looked.unwrap_or(now - FIRST_LOOK)

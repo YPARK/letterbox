@@ -178,7 +178,7 @@ pub const KEYS: &[Binding] = &[
         name: "n p",
         hint: "n/p",
         foot: &[(Reader, "next/previous")],
-        help: "read the next message, or the one before",
+        help: "read the next message, or the one before; in the map, searched, the next found, or the one before",
     },
     Binding {
         keys: &[("g", Top), ("home", Top), ("G", End), ("end", End)],
@@ -226,8 +226,8 @@ pub const KEYS: &[Binding] = &[
         keys: &[("/", Search)],
         name: "/",
         hint: "/",
-        foot: &[(List, "search")],
-        help: "search the messages listed as you type; ⏎ searches the server",
+        foot: &[(List, "search"), (Map, "search")],
+        help: "search the messages listed as you type; ⏎ searches the server. In the map, what holds every word is lit as you type, the rest faded; n and p go from one found to the next",
     },
     Binding {
         keys: &[("u", Seen)],
@@ -313,7 +313,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("M-l", ListView), ("s-l", ListView)],
         name: "M-l s-l",
         hint: "M-l",
-        foot: &[(Map, "list")],
+        foot: &[],
         help: "back to the list, of what the sidebar picks: a folder, a label, a cluster, or the map's every cluster",
     },
     Binding {

@@ -5031,7 +5031,7 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     let foot: Vec<&str> = screen.lines().rev().take(2).collect();
     let foot = foot.join(" ");
     assert!(
-        foot.contains("M-l list") && foot.contains("m move to"),
+        foot.contains("/ search") && foot.contains("m move to"),
         "{foot}"
     );
 }
@@ -5491,6 +5491,89 @@ fn space_marks_in_the_picker_after_typing_too() {
         .map(|f| f.file_name().unwrap().to_owned())
         .collect();
     assert_eq!(names, ["one draft.txt", "two draft.txt"]);
+}
+
+#[test]
+fn a_search_on_the_map_lights_what_holds_it_and_n_goes_through_them() {
+    let mut app = demo_map();
+    press(&mut app, &["/", "biosketch"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let found: Vec<usize> = (0..s.dots.len())
+        .filter(|&i| app.map.hits.as_ref().unwrap().matched[i])
+        .collect();
+    assert_eq!(found.len(), 2, "Mira's, and your answer");
+    assert!(
+        found
+            .iter()
+            .all(|&i| s.dots[i].subject.to_lowercase().contains("biosketch"))
+    );
+    // The one picked is one found, as it is typed.
+    assert!(found.contains(&app.map.picked().unwrap()));
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("2 found for “biosketch”"), "{screen}");
+    // ⏎ asks no server; n goes to the other, and round again.
+    press(&mut app, &["<enter>"]);
+    assert!(!app.searching);
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    let first = app.map.picked().unwrap();
+    press(&mut app, &["n"]);
+    let second = app.map.picked().unwrap();
+    assert_ne!(first, second);
+    assert!(found.contains(&second));
+    press(&mut app, &["n"]);
+    assert_eq!(app.map.picked().unwrap(), first);
+    // Of two words, both; and esc lets it go.
+    press(&mut app, &["/", "<c-u>", "mira budget"]);
+    assert_eq!(app.map.hits.as_ref().unwrap().count, 1);
+    press(&mut app, &["<enter>", "<esc>"]);
+    assert!(app.query.is_empty());
+    assert!(app.map.hits.is_none());
+}
+
+#[test]
+fn another_folder_listed_leaves_the_message_read_behind() {
+    let mut app = demo();
+    press(&mut app, &["<enter>"]);
+    let subject = app.message().expect("read").subject.clone();
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains(&subject), "{screen}");
+    // Sent, from the sidebar: the message of the Inbox is not beside it.
+    while app.focus != app::Focus::Side {
+        press(&mut app, &["h"]);
+    }
+    press(&mut app, &["j", "j"]);
+    assert_eq!(app.folder_name(), "Sent");
+    assert!(app.reading.is_none());
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains(&subject), "{screen}");
+}
+
+#[test]
+fn the_line_before_the_message_is_dragged_to_make_it_wider() {
+    let mut app = demo();
+    let divider = |app: &mut App| {
+        let _ = app::screen(app, 150, 40);
+        app.targets
+            .iter()
+            .find(|(_, t)| *t == app::Target::Divider)
+            .map(|(r, _)| r.x)
+            .expect("a line to drag")
+    };
+    let x = divider(&mut app);
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, 10));
+    app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), x - 20, 10));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x - 20, 10));
+    assert!(!app.resizing);
+    assert_eq!(divider(&mut app), x - 20, "the message twenty wider");
+    // Not past what leaves the list room.
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x - 20, 10));
+    app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 10));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, 10));
+    let narrowest = divider(&mut app);
+    assert!(narrowest > 24, "{narrowest}");
+    // The map keeps it too.
+    press(&mut app, &["<m-g>"]);
+    assert_eq!(divider(&mut app), narrowest);
 }
 
 /// The labels of the map's message with `subject`, and whether it is in
