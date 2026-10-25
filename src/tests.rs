@@ -8686,3 +8686,76 @@ fn without_paperstack_p_says_how_to_have_it() {
     let note = p.note.clone().unwrap_or_default();
     assert!(note.contains("paperstack"), "{note}");
 }
+
+#[test]
+fn mail_read_before_the_index_read_as_it_now_does_is_read_again_a_few_a_pass() {
+    let mut store = Demo::new();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    // Read as fresh mail is.
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .records
+            .values()
+            .all(|r| r.read_as == index::record::READ_AS)
+    );
+    // Every message read as an older letterbox read it.
+    let stale: Vec<index::Record> = shared
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .cloned()
+        .map(|mut r| {
+            r.read_as = 0;
+            r.bulk = false;
+            r
+        })
+        .collect();
+    shared
+        .lock()
+        .unwrap()
+        .cache(
+            stale
+                .iter()
+                .cloned()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let old = |index: &Index| {
+        index
+            .records
+            .values()
+            .filter(|r| r.read_as < index::record::READ_AS)
+            .count()
+    };
+    let n = stale.len();
+    assert!(n > index::sync::AGAIN, "{n}");
+    // A pass reads so many again, the Inbox first; the next, the rest.
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    {
+        let index = shared.lock().unwrap();
+        assert_eq!(old(&index), n - index::sync::AGAIN);
+        assert!(
+            index
+                .records
+                .values()
+                .filter(|r| index.system(&r.key).inbox)
+                .all(|r| r.read_as == index::record::READ_AS),
+            "the Inbox first"
+        );
+        assert!(
+            index.records.values().any(|r| r.bulk),
+            "the robots' mail, bulk again"
+        );
+    }
+    for _ in 0..n / index::sync::AGAIN + 1 {
+        index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    }
+    assert_eq!(old(&shared.lock().unwrap()), 0);
+}

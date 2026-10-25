@@ -99,6 +99,10 @@ pub struct FolderState {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub key: Key,
+    /// How it was read, as `READ_AS` says: read as an older letterbox read
+    /// it, it is read again.
+    #[serde(default)]
+    pub read_as: u8,
     pub places: Vec<Place>,
     /// The labels the server keeps on it: Gmail's, as it gives them, or
     /// its keywords.
@@ -134,6 +138,10 @@ pub struct Record {
     /// When the index first saw it, in seconds since 1970.
     pub first_seen: i64,
 }
+
+/// How a message is read now: 1, whether it was sent to many, by its
+/// `List-Unsubscribe` and `Precedence`.
+pub const READ_AS: u8 = 1;
 
 /// A message as a server gives it to be indexed: its UID and flags, the
 /// labels it keeps on it, Gmail's IDs, its size, and its header with the
@@ -192,6 +200,7 @@ impl Record {
         );
         Record {
             key,
+            read_as: READ_AS,
             places: vec![Place {
                 folder: folder.to_string(),
                 validity,

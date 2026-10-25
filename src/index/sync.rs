@@ -87,8 +87,17 @@ pub fn mapped(folders: &[Folder], kind: Kind) -> Vec<&Folder> {
     out
 }
 
+/// How many messages read as an older letterbox read them are read again
+/// a pass: few in a test, to see it take passes.
+#[cfg(not(test))]
+pub const AGAIN: usize = 500;
+#[cfg(test)]
+pub const AGAIN: usize = 40;
+
 /// Read the messages `keys` of this store's account again, as the index
-/// now reads a message, where each is and its labels kept. How many were.
+/// now reads a message, where each is and its labels kept; one the server
+/// no longer gives, marked read as it is now, not to be asked again. How
+/// many were read.
 pub fn refresh(
     store: &mut dyn Store,
     index: &Mutex<Index>,
@@ -112,8 +121,10 @@ pub fn refresh(
         }
     }
     let mut events = Vec::new();
+    let mut n = 0;
     for (folder, old) in by_folder {
         let uids: Vec<u32> = old.iter().map(|(u, _)| *u).collect();
+        let mut read = std::collections::HashSet::new();
         for chunk in uids.chunks(100) {
             for got in store.fetch_index(&folder, chunk)? {
                 let Some((_, was)) = old.iter().find(|(u, _)| *u == got.uid) else {
@@ -126,11 +137,18 @@ pub fn refresh(
                 // Its places as they were, each folder's validity with it.
                 r.places = was.places.clone();
                 r.server = was.server.clone();
+                read.insert(got.uid);
                 events.push(Cached::Upsert(Box::new(r)));
+                n += 1;
             }
         }
+        for (_, was) in old.into_iter().filter(|(u, _)| !read.contains(u)) {
+            events.push(Cached::Upsert(Box::new(Record {
+                read_as: super::record::READ_AS,
+                ..was
+            })));
+        }
     }
-    let n = events.len();
     apply(index, events)?;
     Ok(n)
 }
@@ -242,6 +260,25 @@ pub fn pass(
             apply(index, events)?;
             read += chunk.len();
             say(format!("mapping: {read} of {total} messages read"));
+        }
+    }
+    // What an older letterbox read, read again, so many a pass: the Inbox
+    // first, newest first.
+    if !stop.load(Ordering::Relaxed) {
+        let keys: Vec<Key> = {
+            let index = lock(index);
+            let mut old: Vec<&Record> = index
+                .records
+                .values()
+                .filter(|r| r.key.account == account && r.read_as < super::record::READ_AS)
+                .collect();
+            old.sort_by_key(|r| (!index.system(&r.key).inbox, std::cmp::Reverse(r.date)));
+            old.into_iter().take(AGAIN).map(|r| r.key.clone()).collect()
+        };
+        if !keys.is_empty()
+            && let Err(e) = refresh(store, index, &keys, now)
+        {
+            say(format!("cannot read again what was read before: {e:#}"));
         }
     }
     if complete {
