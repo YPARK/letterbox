@@ -58,6 +58,11 @@ or with `--keep`:
 | `keyring` | the system's own store, by [keyring-rs](https://github.com/open-source-cooperative/keyring-rs): the keychain on macOS, the Credential Manager on Windows, the Secret Service (GNOME's keyring, KWallet) on Linux. Unlocked as you log in; the default where there is one. |
 | `vault` | one file, `~/.local/share/letterbox/vault.age`, encrypted with a passphrase of yours in the [age](https://age-encryption.org) format, by the age crate. The same on every system, as a server reached over ssh, with no keyring; its passphrase is asked for as letterbox starts, and the file opens with `age -d` or `rage -d` too. |
 
+Made with no passphrase (nothing typed when asked for one), the vault's
+key is a file beside it, `vault.key`, which only you may read: nothing is
+ever asked, as letterbox starts or after, and it is as safe as that file,
+as an ssh key with no passphrase is.
+
 `letterbox keep vault` moves every password letterbox keeps, and the
 map's key, into the vault, and `letterbox keep keyring` moves them back:
 each is read where it is, kept in the other, its account set to say so,

@@ -156,10 +156,13 @@ impl Server {
             if account.keep == secret::Keeper::Vault
                 && account.password_command.is_none()
                 && !crate::vault::is_open()
+                // A vault with a key file opens without asking.
+                && !crate::vault::unlock_by_key().is_some_and(|r| r.is_ok())
             {
                 bail!(
                     "{}'s password is in letterbox's vault, whose passphrase cannot be asked for \
-                     here: keep it in the keyring to read it from an agent",
+                     here: keep it in the keyring, or the vault with a key file, to read it from \
+                     an agent",
                     account.name
                 );
             }

@@ -2,7 +2,9 @@
 //! encrypted with a passphrase, in the age format (age-encryption.org),
 //! by the age crate, in Rust. It is the same file on every system, and
 //! `age -d` or `rage -d` opens it too, should letterbox not. The passphrase
-//! is asked for once a run, and the passwords then kept in memory.
+//! is asked for once a run, and the passwords then kept in memory. Or,
+//! made without one, its key is a file beside it, `vault.key`, only you
+//! may read, and it is never asked for: as safe as that file is.
 
 use age::secrecy::SecretString;
 use anyhow::{Context, bail};
@@ -13,6 +15,9 @@ use std::sync::Mutex;
 struct Open {
     path: PathBuf,
     passphrase: SecretString,
+    /// Whether the passphrase is the key file's, too long and random to be
+    /// guessed, so not made slow to try.
+    keyed: bool,
     /// Each password, by `user@host`.
     entries: BTreeMap<String, String>,
 }
@@ -42,6 +47,36 @@ pub fn exists() -> bool {
     path().is_file()
 }
 
+/// The vault's key file, beside it, if it was made without a passphrase.
+pub fn key_path() -> PathBuf {
+    path().with_extension("key")
+}
+
+/// Open the vault by its key file, if it has one: never asked.
+pub fn unlock_by_key() -> Option<anyhow::Result<()>> {
+    let key = std::fs::read_to_string(key_path()).ok()?;
+    Some(open_with(key.trim(), true))
+}
+
+/// Make a vault with no passphrase: its key, long and random, in a file
+/// beside it only you may read; and open it.
+pub fn make_key() -> anyhow::Result<()> {
+    use age::secrecy::ExposeSecret;
+    if exists() {
+        bail!(
+            "there is a vault already, with a passphrase: {}",
+            path().display()
+        );
+    }
+    let key = age::x25519::Identity::generate().to_string();
+    let at = key_path();
+    if let Some(dir) = at.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    write_private(&at, key.expose_secret().as_bytes())?;
+    open_with(key.expose_secret(), true)
+}
+
 pub fn is_open() -> bool {
     open().is_some()
 }
@@ -53,6 +88,10 @@ fn key(host: &str, user: &str) -> String {
 /// Open the vault with `passphrase`; a new, empty one if there is none
 /// yet, to be written once a password is put in it.
 pub fn unlock(passphrase: &str) -> anyhow::Result<()> {
+    open_with(passphrase, false)
+}
+
+fn open_with(passphrase: &str, keyed: bool) -> anyhow::Result<()> {
     let path = path();
     let entries = match std::fs::read(&path) {
         Ok(bytes) => {
@@ -76,6 +115,7 @@ pub fn unlock(passphrase: &str) -> anyhow::Result<()> {
     *open() = Some(Open {
         path,
         passphrase: SecretString::from(passphrase.to_string()),
+        keyed,
         entries,
     });
     Ok(())
@@ -119,7 +159,7 @@ pub fn remove(host: &str, user: &str) -> anyhow::Result<bool> {
 fn write(v: &Open) -> anyhow::Result<()> {
     let plain = serde_json::to_vec(&v.entries)?;
     let mut recipient = age::scrypt::Recipient::new(v.passphrase.clone());
-    if cfg!(test) {
+    if cfg!(test) || v.keyed {
         recipient.set_work_factor(10);
     }
     let sealed = age::encrypt(&recipient, &plain).context("cannot encrypt the vault")?;

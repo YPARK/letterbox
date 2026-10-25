@@ -1927,6 +1927,29 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     assert!(crate::config::load(&path).unwrap().is_empty());
     assert!(crate::vault::get("127.0.0.1", "me").is_err(), "forgotten");
     crate::vault::lock();
+
+    // One made with no passphrase: its key a file only you may read, and
+    // opened by it, nothing asked.
+    let e = crate::vault::make_key().unwrap_err();
+    assert!(e.to_string().contains("a vault already"), "{e}");
+    let keyed = dir.path().join("keyed/vault.age");
+    unsafe { std::env::set_var("LETTERBOX_VAULT", &keyed) };
+    assert!(crate::vault::unlock_by_key().is_none(), "none yet");
+    crate::vault::make_key().unwrap();
+    crate::vault::put("imap.example.com", "me", "pw").unwrap();
+    crate::vault::lock();
+    crate::vault::unlock_by_key().unwrap().unwrap();
+    assert_eq!(crate::vault::get("imap.example.com", "me").unwrap(), "pw");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(crate::vault::key_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    crate::vault::lock();
     unsafe { std::env::remove_var("LETTERBOX_VAULT") };
 }
 

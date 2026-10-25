@@ -419,15 +419,25 @@ fn open_vault(create: bool) -> anyhow::Result<()> {
     if vault::is_open() {
         return Ok(());
     }
+    if let Some(opened) = vault::unlock_by_key() {
+        return opened;
+    }
     if !vault::exists() {
         if !create {
             return Ok(());
         }
         eprintln!(
-            "A new vault, {}: its passphrase is asked for each time letterbox starts.",
+            "A new vault, {}: a passphrase is asked for each time letterbox starts; \
+             with none, its key is kept in a file beside it, which only you may read, \
+             and nothing is ever asked.",
             vault::path().display()
         );
-        let first = ask_password("New vault passphrase")?;
+        let first = ask_password("New vault passphrase, or nothing for a key file")?;
+        if first.is_empty() {
+            vault::make_key()?;
+            eprintln!("its key: {}", vault::key_path().display());
+            return Ok(());
+        }
         if ask_password("Again")? != first {
             bail!("the two passphrases differ");
         }
