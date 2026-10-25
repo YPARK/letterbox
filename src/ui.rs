@@ -610,6 +610,13 @@ fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (Rect, Target
             Act::Colours => colour,
             Act::ShowRead => shown(map.hide_read),
             Act::ShowSent => shown(map.hide_sent),
+            Act::Unfiled => {
+                if map.unfiled_only {
+                    "only it"
+                } else {
+                    "with the rest"
+                }
+            }
             Act::NewOnly => on(map.new_only),
             _ => "",
         };
@@ -1657,10 +1664,15 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         ));
     }
     let mut what = format!(
-        " · {} · {} · {} messages",
+        " · {} · {} · {} {}",
         s.lens.name(),
         app.map.since.name(),
-        shown.len()
+        shown.len(),
+        if app.map.unfiled_only {
+            "not yet filed"
+        } else {
+            "messages"
+        }
     );
     if let Some(g) = app.map.tree.as_ref().and_then(|tree| s.group(tree.id)) {
         what = format!(" · {} as a tree{what}", g.name());
@@ -1733,7 +1745,11 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     if shown.is_empty() {
         return say(
             f,
-            "Nothing to map here: r shows read mail, t goes further back.",
+            if app.map.unfiled_only {
+                "Everything here is filed: , f shows the filed mail too."
+            } else {
+                "Nothing to map here: r shows read mail, t goes further back."
+            },
         );
     }
     if canvas.height == 0 || canvas.width < 3 {

@@ -275,6 +275,14 @@ struct Last {
 /// What a snapshot of `index` by `lens` is made from: begun from `last`,
 /// its clusters and where its messages were, and from what `corpus` has
 /// read; laid out if `layout` and it never was.
+/// Whether `r` is no mail but what Microsoft's servers give in place of an
+/// item they cannot send over IMAP, as a calendar's: "Retrieval using the
+/// IMAP4 protocol failed for the following message: 839".
+pub fn is_placeholder(r: &Record) -> bool {
+    r.subject
+        .starts_with("Retrieval using the IMAP4 protocol failed for the following message")
+}
+
 pub fn input(
     index: &Index,
     lens: Lens,
@@ -285,6 +293,7 @@ pub fn input(
     let records = index
         .records
         .values()
+        .filter(|r| !is_placeholder(r))
         .map(|r| {
             let mine = index.keep.labels.contains_key(&r.key)
                 || index
@@ -643,6 +652,8 @@ pub struct Map {
     pub colour: Colour,
     pub hide_read: bool,
     pub hide_sent: bool,
+    /// Whether only the mail not yet filed under a label is shown.
+    pub unfiled_only: bool,
     /// Whether areas with nothing new are dimmed.
     pub new_only: bool,
     /// When the map was looked at before this look, in seconds since 1970.
@@ -1138,8 +1149,9 @@ impl Map {
     }
 
     /// The messages drawn: all, but the read ones if they are hidden, the
-    /// sent ones if they are, and those older than how far back the map
-    /// goes.
+    /// sent ones if they are, those filed under a label, and the sent, if
+    /// only what is not yet filed is, and those older than how far back the
+    /// map goes.
     pub fn shown(&self, now: i64) -> Vec<usize> {
         let Some(s) = &self.snapshot else {
             return Vec::new();
@@ -1150,6 +1162,7 @@ impl Map {
                 let d = &s.dots[i];
                 !(self.hide_read && d.flags.seen)
                     && !(self.hide_sent && d.system.sent)
+                    && !(self.unfiled_only && (!d.labels.is_empty() || d.system.sent))
                     && d.date.unwrap_or(d.arrived) >= from
             })
             .collect()

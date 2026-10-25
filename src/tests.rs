@@ -6714,3 +6714,50 @@ fn mail_that_differs_by_its_number_alone_is_one_thread() {
     assert_eq!(thread_of("Re: Fwd: Invoice #4471"), "Invoice #…");
     assert_ne!(thread_of("Aims page"), thread_of("Aims page, third pass"));
 }
+
+#[test]
+fn the_folders_that_hold_no_mail_and_microsofts_stand_ins_are_not_mapped() {
+    use crate::mail::Folder;
+    let folders = vec![
+        Folder::new("INBOX", Some("/"), None, true),
+        Folder::new("Calendar", Some("/"), None, true),
+        Folder::new("Calendar/Birthdays", Some("/"), None, true),
+        Folder::new("Contacts", Some("/"), None, true),
+        Folder::new("Sync Issues/Conflicts", Some("/"), None, true),
+        Folder::new("Projects/Calendar talk", Some("/"), None, true),
+        Folder::new("Notes", None, None, true),
+    ];
+    let mapped: Vec<&str> = crate::index::sync::mapped(&folders, crate::store::Kind::Folders)
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(mapped, ["INBOX", "Projects/Calendar talk"]);
+    let mut r = crate::index::record::Record {
+        subject: "Retrieval using the IMAP4 protocol failed for the following message: 839".into(),
+        ..Default::default()
+    };
+    assert!(crate::map::is_placeholder(&r));
+    r.subject = "Re: Retrieval of the samples".into();
+    assert!(!crate::map::is_placeholder(&r));
+}
+
+#[test]
+fn the_view_shows_only_the_mail_not_yet_filed() {
+    let mut app = demo_map();
+    let now = jiff::Timestamp::now().as_second();
+    let all = app.map.shown(now).len();
+    press(&mut app, &[",", "f", "<esc>"]);
+    assert!(app.map.unfiled_only);
+    let s = app.map.snapshot.clone().unwrap();
+    let shown = app.map.shown(now);
+    assert!(!shown.is_empty() && shown.len() < all);
+    assert!(
+        shown
+            .iter()
+            .all(|&i| s.dots[i].labels.is_empty() && !s.dots[i].system.sent)
+    );
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("not yet filed"), "{screen}");
+    press(&mut app, &[",", "f", "<esc>"]);
+    assert_eq!(app.map.shown(now).len(), all);
+}

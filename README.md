@@ -144,7 +144,7 @@ letterbox search grant report --account Work
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
-| `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `n` dims the areas with nothing new; `l` lays it out again |
+| `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
 | `N` | while moving, a new label for it alone: its name is asked, its commonest word given |
 | `y` / `Y` / `-` | once filed, the label's first suggestion filed too, or all of them; `-` says the first is not one, and the map learns it |
@@ -263,7 +263,8 @@ and `p` go from one to the next, newest first, and `esc` lets it go.
 `,` opens what the map shows, and how, each
 by a key, kept open to change more: `w` lays it out by words and people,
 by words alone or by people alone; `t` shows all of it, this week's or
-today's; `r` hides read mail, `s` the mail you sent, and `n` dims the
+today's; `r` hides read mail, `s` the mail you sent, `f` all but the
+mail not yet filed under a label, what is still to be filed, and `n` dims the
 clusters with nothing new. The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages

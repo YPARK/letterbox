@@ -2527,7 +2527,8 @@ impl App {
             | Act::Colours
             | Act::NewOnly
             | Act::ShowRead
-            | Act::ShowSent => self.view(act),
+            | Act::ShowSent
+            | Act::Unfiled => self.view(act),
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
             Act::Mark => self.mark_cluster(),
             Act::Move
@@ -3930,6 +3931,15 @@ impl App {
                     "sent mail hidden"
                 } else {
                     "sent mail shown"
+                }
+                .to_string()
+            }
+            Act::Unfiled => {
+                self.map.unfiled_only = !self.map.unfiled_only;
+                if self.map.unfiled_only {
+                    "only the mail not yet filed under a label"
+                } else {
+                    "filed mail shown too"
                 }
                 .to_string()
             }

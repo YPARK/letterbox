@@ -51,6 +51,8 @@ pub enum Act {
     ShowRead,
     /// In the map, mail sent from here shown or hidden.
     ShowSent,
+    /// In the map, only the mail not yet filed under a label, or all.
+    Unfiled,
     /// The message read made wider, or narrower.
     Wider,
     Narrower,
@@ -129,6 +131,7 @@ pub const VIEW: &[(char, Act, &str)] = &[
     ('c', Colours, "colour"),
     ('r', ShowRead, "read mail"),
     ('s', ShowSent, "sent mail"),
+    ('f', Unfiled, "not yet filed"),
     ('n', NewOnly, "new only"),
     ('l', Relayout, "lay it out again"),
 ];
@@ -377,7 +380,7 @@ pub const KEYS: &[Binding] = &[
         name: ",",
         hint: ",",
         foot: &[(Map, "view")],
-        help: "in the map, what it shows and how: w its lens, t how far back, c its colours, r read mail, s sent mail, n the areas with nothing new dimmed, l lay it out again",
+        help: "in the map, what it shows and how: w its lens, t how far back, c its colours, r read mail, s sent mail, f only the mail not yet filed, n the areas with nothing new dimmed, l lay it out again",
     },
     Binding {
         keys: &[("v", Mark)],

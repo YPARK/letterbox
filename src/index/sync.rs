@@ -38,8 +38,34 @@ pub enum Ask {
     Pass,
 }
 
+/// Folders that hold no mail, as Microsoft's servers show a calendar, the
+/// contacts and the like, and Apple's its notes, by their top folder's
+/// name, in lower case.
+const NOT_MAIL: &[&str] = &[
+    "calendar",
+    "contacts",
+    "tasks",
+    "notes",
+    "journal",
+    "sync issues",
+    "conversation history",
+    "rss feeds",
+    "rss subscriptions",
+    "outbox",
+];
+
+/// Whether `folder` holds no mail, or is under one that holds none.
+fn not_mail(folder: &Folder) -> bool {
+    let top = match folder.delimiter.as_deref().filter(|d| !d.is_empty()) {
+        Some(d) => folder.path.split(d).next().unwrap_or(&folder.path),
+        None => folder.path.split(['/', '.']).next().unwrap_or(&folder.path),
+    };
+    NOT_MAIL.contains(&top.to_lowercase().as_str())
+}
+
 /// The folders of `folders` the map reads, in the order it reads them:
-/// every one but Junk, Trash and Drafts; on Gmail, All Mail alone.
+/// every one but Junk, Trash and Drafts, and those that hold no mail; on
+/// Gmail, All Mail alone.
 pub fn mapped(folders: &[Folder], kind: Kind) -> Vec<&Folder> {
     if kind == Kind::Gmail
         && let Some(all) = folders.iter().find(|f| f.all && f.selectable)
@@ -49,6 +75,7 @@ pub fn mapped(folders: &[Folder], kind: Kind) -> Vec<&Folder> {
     let mut out: Vec<&Folder> = folders
         .iter()
         .filter(|f| f.selectable && !matches!(f.role, Role::Junk | Role::Trash | Role::Drafts))
+        .filter(|f| !not_mail(f))
         .collect();
     out.sort_by_key(|f| match f.role {
         Role::Inbox => 0,
