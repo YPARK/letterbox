@@ -1687,7 +1687,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     head.push(Span::styled(what, dim));
     let key = if app.map.tree.is_some() {
-        "   h out  l in  j/k along  ⏎ read  • one  ● a few  ⬤ many"
+        "   h out  l in  j/k along  ⏎ read  • one  ● more"
     } else if app.map.clusters {
         "   ⬤ the bigger the more it holds, bright with unread  ◆ label  ◇ cluster"
     } else {
@@ -2153,13 +2153,13 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
         let hits = found
             .as_ref()
             .map(|m| b.messages.iter().filter(|&&i| m[i]).count());
+        // No ⬤ here: some terminals draw it wider than a cell, over the name.
         let glyph = match b.messages.len() {
             1 if d.flags.flagged => '⚑',
             1 if d.mine => '▪',
             1 if d.system.sent => '▹',
             1 => '•',
-            2..=4 => '●',
-            _ => '⬤',
+            _ => '●',
         };
         let mut said = format!("{glyph} {}", b.name);
         if !b.is_leaf() {

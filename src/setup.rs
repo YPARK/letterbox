@@ -12,6 +12,53 @@ use std::path::Path;
 
 /// Keep a password: given where, the host, the user and the password.
 pub type Keep = fn(Keeper, &str, &str, &str) -> anyhow::Result<()>;
+/// Find a password: given where, the host and the user.
+pub type Find = fn(Keeper, &str, &str) -> anyhow::Result<String>;
+/// Forget a password: given where, the host and the user.
+pub type Forget = fn(Keeper, &str, &str) -> anyhow::Result<()>;
+
+/// Move every password letterbox keeps for the accounts in the file at
+/// `path`, and the map's key in `map`, to `to`: each read where it is by
+/// `find`, kept in `to` by `keep`, its account or `map.toml` made to say
+/// so, and only then forgotten where it was by `forget`, so that none is
+/// lost if a step fails. What was done, a line each.
+pub fn move_secrets(
+    path: &Path,
+    map: &Path,
+    to: Keeper,
+    find: Find,
+    keep: Keep,
+    forget: Forget,
+) -> anyhow::Result<Vec<String>> {
+    use anyhow::Context;
+    let mut said = Vec::new();
+    let stays = |what: &str, why: String| format!("{what}: moved, but its old copy stays: {why}");
+    for a in config::load(path)? {
+        if a.password_command.is_some() {
+            said.push(format!("{}: its password_command is left as it is", a.name));
+            continue;
+        }
+        if a.keep == to {
+            continue;
+        }
+        let (host, user) = (a.host.as_str(), a.user());
+        let secret = find(a.keep, host, user)
+            .with_context(|| format!("cannot read {}'s password", a.name))?;
+        keep(to, host, user, &secret)
+            .with_context(|| format!("cannot keep {}'s password", a.name))?;
+        config::set_keep(path, &a.name, to)?;
+        said.push(match forget(a.keep, host, user) {
+            Ok(()) => format!("{}: kept {}", a.name, to.about()),
+            Err(e) => stays(&a.name, format!("{e:#}")),
+        });
+    }
+    match crate::index::key::move_to(map, to, find, keep, forget)? {
+        (true, None) => said.push(format!("the map's key: kept {}", to.about())),
+        (true, Some(why)) => said.push(stays("the map's key", why)),
+        (false, _) => {}
+    }
+    Ok(said)
+}
 
 /// Sign in as `account`, with the password it was given as typed (an app
 /// password as its provider shows it, run together), or the token

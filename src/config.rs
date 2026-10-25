@@ -409,6 +409,20 @@ pub fn set_trash(path: &Path, name: &str, folder: &str) -> anyhow::Result<()> {
     write_doc(path, &doc)
 }
 
+/// Say in the file at `path` where the account named `name` keeps its
+/// password: nothing said for the system's store, as it is the default.
+pub fn set_keep(path: &Path, name: &str, keeper: Keeper) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    let table = account_table(&mut doc, name)?;
+    match keeper {
+        Keeper::Keyring => {
+            table.remove("keep");
+        }
+        Keeper::Vault => table["keep"] = toml_edit::value(keeper.name()),
+    }
+    write_doc(path, &doc)
+}
+
 /// Whether the `[[account]]` table is the account named `name`, in any case.
 fn is_named(t: &toml_edit::Table, name: &str) -> bool {
     t.get("name")

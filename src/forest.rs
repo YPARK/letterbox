@@ -116,7 +116,7 @@ pub fn grow(
         .filter(|p| !p.is_empty())
         .map(|mut part| {
             part.sort_by_key(|&i| when(s, i));
-            let words = model::part_words(&s.model, &part, &named);
+            let words = model::part_words(&s.model, &part, &members, &named);
             Branch {
                 name: if words.is_empty() {
                     "the rest".to_string()
@@ -143,14 +143,29 @@ pub fn grow(
     ))
 }
 
-/// The threads of `messages`, oldest first: those of a subject, `Re:` and
-/// `Fwd:` let go, together; a message alone is a leaf of its own.
+/// A subject as threads are told apart: `Re:` and `Fwd:` let go, and each
+/// number one alike, as mail a program sends differs by its number alone.
+pub fn thread_of(subject: &str) -> String {
+    model::bare_subject(subject)
+        .split_whitespace()
+        .map(|w| {
+            let bare = w.trim_matches(|c: char| !c.is_alphanumeric());
+            if !bare.is_empty() && bare.chars().all(|c| c.is_ascii_digit()) {
+                w.replace(bare, "…")
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The threads of `messages`, oldest first: those of a subject together,
+/// as `thread_of` tells them apart; a message alone is a leaf of its own.
 fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
     let mut by: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for &i in messages {
-        let subject = model::bare_subject(&s.dots[i].subject)
-            .trim()
-            .to_lowercase();
+        let subject = thread_of(&s.dots[i].subject).to_lowercase();
         let key = if subject.is_empty() {
             format!("\0{i}")
         } else {
@@ -158,30 +173,35 @@ fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
         };
         by.entry(key).or_default().push(i);
     }
+    let bare = |i: usize| model::bare_subject(&s.dots[i].subject).trim().to_string();
     let mut threads: Vec<Branch> = by
         .into_values()
         .map(|mut thread| {
             thread.sort_by_key(|&i| when(s, i));
             let first = thread[0];
-            let subject = model::bare_subject(&s.dots[first].subject).trim();
-            let subject = if subject.is_empty() {
-                "(no subject)"
-            } else {
-                subject
-            };
             if thread.len() == 1 {
+                let subject = match bare(first) {
+                    s if s.is_empty() => "(no subject)".to_string(),
+                    s => s,
+                };
                 return Branch {
                     name: format!("{subject} — {}", who(s, first)),
                     messages: thread,
                     branches: Vec::new(),
                 };
             }
+            // Told apart by a number, each says its own subject.
+            let differ = thread.iter().any(|&i| bare(i) != bare(first));
             Branch {
-                name: subject.to_string(),
+                name: thread_of(&s.dots[first].subject),
                 branches: thread
                     .iter()
                     .map(|&i| Branch {
-                        name: who(s, i),
+                        name: if differ {
+                            format!("{} — {}", bare(i), who(s, i))
+                        } else {
+                            who(s, i)
+                        },
                         messages: vec![i],
                         branches: Vec::new(),
                     })

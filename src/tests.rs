@@ -6520,3 +6520,197 @@ fn how_the_model_does_on_mail_of_known_topics() {
         measure(n);
     }
 }
+
+// ---- Moving the passwords between the keyring and the vault ----
+
+/// A stand-in for both stores, by where, host and user.
+static KEPT: std::sync::Mutex<std::collections::BTreeMap<(String, String, String), String>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn kept_at(k: Keeper, host: &str, user: &str) -> (String, String, String) {
+    (k.name().to_string(), host.to_string(), user.to_string())
+}
+
+fn fake_find(k: Keeper, host: &str, user: &str) -> anyhow::Result<String> {
+    KEPT.lock()
+        .unwrap()
+        .get(&kept_at(k, host, user))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("none kept for {user} at {host}"))
+}
+
+fn fake_keep(k: Keeper, host: &str, user: &str, secret: &str) -> anyhow::Result<()> {
+    KEPT.lock()
+        .unwrap()
+        .insert(kept_at(k, host, user), secret.to_string());
+    Ok(())
+}
+
+fn fake_forget(k: Keeper, host: &str, user: &str) -> anyhow::Result<()> {
+    KEPT.lock().unwrap().remove(&kept_at(k, host, user));
+    Ok(())
+}
+
+#[test]
+fn every_password_and_the_maps_key_move_to_the_vault_and_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        "# my accounts\n\
+         [[account]]\n\
+         name = \"Work\"\n\
+         email = \"me@keep.example\"\n\
+         host = \"imap.keep.example\"\n\
+         # its own comment\n\n\
+         [[account]]\n\
+         name = \"Pass\"\n\
+         email = \"p@keep.example\"\n\
+         host = \"imap.keep.example\"\n\
+         password_command = \"echo pw\"\n\n\
+         [[account]]\n\
+         name = \"Broken\"\n\
+         email = \"b@keep.example\"\n\
+         host = \"imap.broken.example\"\n",
+    )
+    .unwrap();
+    let map = dir.path().join("map");
+    crate::index::key::write(
+        &map,
+        &crate::index::key::Card {
+            version: 1,
+            recipient: "age1keep".to_string(),
+            keeper: Keeper::Keyring,
+        },
+    )
+    .unwrap();
+    fake_keep(
+        Keeper::Keyring,
+        "imap.keep.example",
+        "me@keep.example",
+        "pw1",
+    )
+    .unwrap();
+    fake_keep(Keeper::Keyring, "map", "identity", "AGE-SECRET-KEY-1").unwrap();
+    // One it cannot read: nothing of it is changed, and it says so.
+    let e = crate::setup::move_secrets(
+        &path,
+        &map,
+        Keeper::Vault,
+        fake_find,
+        fake_keep,
+        fake_forget,
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("Broken"), "{e:#}");
+    let accounts = crate::config::load(&path).unwrap();
+    assert_eq!(accounts[0].keep, Keeper::Vault, "Work, before it, moved");
+    assert_eq!(accounts[2].keep, Keeper::Keyring);
+    fake_keep(
+        Keeper::Keyring,
+        "imap.broken.example",
+        "b@keep.example",
+        "pw3",
+    )
+    .unwrap();
+    // All of them, then: each kept in the vault, and gone from the keyring.
+    let said = crate::setup::move_secrets(
+        &path,
+        &map,
+        Keeper::Vault,
+        fake_find,
+        fake_keep,
+        fake_forget,
+    )
+    .unwrap();
+    assert!(
+        said.iter().any(|l| l.starts_with("Broken: kept")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter().any(|l| l.starts_with("the map's key: kept")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter().any(|l| l.contains("password_command")),
+        "{said:?}"
+    );
+    let get = |k, h: &str, u: &str| fake_find(k, h, u).ok();
+    assert_eq!(
+        get(Keeper::Vault, "imap.keep.example", "me@keep.example").as_deref(),
+        Some("pw1")
+    );
+    assert_eq!(
+        get(Keeper::Vault, "imap.broken.example", "b@keep.example").as_deref(),
+        Some("pw3")
+    );
+    assert_eq!(
+        get(Keeper::Vault, "map", "identity").as_deref(),
+        Some("AGE-SECRET-KEY-1")
+    );
+    assert!(get(Keeper::Keyring, "imap.keep.example", "me@keep.example").is_none());
+    assert!(get(Keeper::Keyring, "map", "identity").is_none());
+    let accounts = crate::config::load(&path).unwrap();
+    assert!(
+        accounts
+            .iter()
+            .all(|a| a.keep == Keeper::Vault || a.name == "Pass")
+    );
+    assert_eq!(accounts[1].keep, Keeper::Keyring, "a command's is left");
+    let card = crate::index::key::card(&map).unwrap().unwrap();
+    assert_eq!(card.keeper, Keeper::Vault);
+    assert_eq!(card.recipient, "age1keep");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("# my accounts") && text.contains("# its own comment"),
+        "{text}"
+    );
+    // Again: nothing to move.
+    assert!(
+        crate::setup::move_secrets(
+            &path,
+            &map,
+            Keeper::Vault,
+            fake_find,
+            fake_keep,
+            fake_forget
+        )
+        .unwrap()
+        .iter()
+        .all(|l| l.contains("password_command"))
+    );
+    // And back: the file says nothing of where, as the keyring is the default.
+    crate::setup::move_secrets(
+        &path,
+        &map,
+        Keeper::Keyring,
+        fake_find,
+        fake_keep,
+        fake_forget,
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("keep ="), "{text}");
+    assert_eq!(
+        get(Keeper::Keyring, "map", "identity").as_deref(),
+        Some("AGE-SECRET-KEY-1")
+    );
+    assert!(get(Keeper::Vault, "map", "identity").is_none());
+}
+
+#[test]
+fn mail_that_differs_by_its_number_alone_is_one_thread() {
+    use crate::forest::thread_of;
+    let failed = |n: u32| {
+        thread_of(&format!(
+            "Retrieval using the IMAP4 protocol failed for the following message: {n}"
+        ))
+    };
+    assert_eq!(failed(839), failed(8));
+    assert_eq!(
+        failed(12),
+        "Retrieval using the IMAP4 protocol failed for the following message: …"
+    );
+    assert_eq!(thread_of("Re: Fwd: Invoice #4471"), "Invoice #…");
+    assert_ne!(thread_of("Aims page"), thread_of("Aims page, third pass"));
+}

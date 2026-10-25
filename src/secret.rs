@@ -82,6 +82,18 @@ pub fn find(keeper: Keeper, host: &str, user: &str) -> anyhow::Result<String> {
     }
 }
 
+/// Forget the password kept for `user` at `host` in `keeper`; none kept
+/// there is forgotten already.
+pub fn remove(keeper: Keeper, host: &str, user: &str) -> anyhow::Result<()> {
+    match keeper {
+        Keeper::Keyring => match entry(host, user)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e).context("cannot forget it in the system's store"),
+        },
+        Keeper::Vault => vault::remove(host, user).map(|_| ()),
+    }
+}
+
 /// Forget the password kept for `account`, if letterbox kept it; whether
 /// it is gone, or, kept in a vault still locked, is not.
 pub fn forget(account: &Account) -> bool {

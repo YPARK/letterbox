@@ -114,6 +114,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Move every password letterbox keeps, and the map's key, to the
+    /// system's store or to letterbox's vault; each is forgotten where it
+    /// was only once it is kept in the other
+    Keep {
+        #[arg(value_enum)]
+        to: secret::Keeper,
+    },
     /// The map of every account's mail: lay it out again, or say its key
     Map {
         #[command(subcommand)]
@@ -700,6 +707,33 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 index = shared.into_inner().unwrap_or_else(|e| e.into_inner());
             }
             println!("{}", map::rebuild(&mut index)?);
+            Ok(())
+        }
+        Some(Command::Keep { to }) => {
+            let accounts = config::load(&args.config)?;
+            let dir = index::key::dir();
+            let map_in_vault =
+                index::key::card(&dir)?.is_some_and(|c| c.keeper == secret::Keeper::Vault);
+            if *to == secret::Keeper::Keyring && !secret::keepers().contains(to) {
+                bail!("there is no system store here to keep them in");
+            }
+            if *to == secret::Keeper::Vault || accounts.iter().any(in_vault) || map_in_vault {
+                open_vault(*to == secret::Keeper::Vault)?;
+            }
+            let said = setup::move_secrets(
+                &args.config,
+                &dir,
+                *to,
+                secret::find,
+                secret::store,
+                secret::remove,
+            )?;
+            if said.is_empty() {
+                println!("all of them are kept {} already", to.about());
+            }
+            for line in said {
+                println!("{line}");
+            }
             Ok(())
         }
         Some(Command::Map {

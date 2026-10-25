@@ -103,6 +103,38 @@ pub fn identity(
     Ok(identity)
 }
 
+/// Move the key's secret in `dir` to `to`, if it is kept elsewhere: read
+/// where it is by `find`, kept in `to` by `keep`, `map.toml` made to say
+/// so, and only then forgotten where it was by `forget`, so that it is
+/// never lost. Whether it was moved, and why its old copy stays, if it does.
+pub fn move_to(
+    dir: &Path,
+    to: Keeper,
+    find: crate::setup::Find,
+    keep: crate::setup::Keep,
+    forget: crate::setup::Forget,
+) -> anyhow::Result<(bool, Option<String>)> {
+    let Some(card) = card(dir)? else {
+        return Ok((false, None));
+    };
+    if card.keeper == to {
+        return Ok((false, None));
+    }
+    let secret = find(card.keeper, HOST, USER).context("cannot find the map's key")?;
+    keep(to, HOST, USER, &secret).context("cannot keep the map's key")?;
+    write(
+        dir,
+        &Card {
+            keeper: to,
+            ..card.clone()
+        },
+    )?;
+    let stays = forget(card.keeper, HOST, USER)
+        .err()
+        .map(|e| format!("{e:#}"));
+    Ok((true, stays))
+}
+
 /// The secret of `identity`, as `age` and `rage` read a key file.
 pub fn export(identity: &Identity) -> String {
     format!(

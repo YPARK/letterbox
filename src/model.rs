@@ -1211,20 +1211,46 @@ pub fn parts(
             .zip(&vectors[j])
             .for_each(|(s, x)| *s += x);
     }
-    let centres = match centres.filter(|c| !c.is_empty()) {
+    let centres: Vec<Vector> = match centres.filter(|c| !c.is_empty()) {
         Some(c) => c.to_vec(),
         None => sums.into_iter().map(normalised).collect(),
     };
+    // Parts that hardly differ, as mail a program sends, numbered, are one.
+    let alike = centres
+        .iter()
+        .enumerate()
+        .all(|(a, x)| centres[a + 1..].iter().all(|y| dot(x, y) > ALIKE));
+    if k > 1 && alike {
+        return (vec![members.to_vec()], Vec::new());
+    }
     (parts, centres)
 }
 
-/// What a part of a cluster is named by: its two weightiest words, or
-/// senders, not those the cluster is named by.
-pub fn part_words(model: &Model, members: &[usize], without: &[String]) -> Vec<String> {
-    let mut words = ranked_words(model, members);
-    words.retain(|w| !without.contains(w));
-    words.truncate(2);
+/// How near by angle the centres of a cluster's parts are, at least, to be
+/// one part: within about 18°.
+const ALIKE: f32 = 0.95;
+
+/// What a part of a cluster is named by: the two words, or senders, most
+/// its own, weighty in it and not as weighty in the rest of the cluster, of
+/// `all` its members; not those the cluster is named by.
+pub fn part_words(
+    model: &Model,
+    members: &[usize],
+    all: &[usize],
+    without: &[String],
+) -> Vec<String> {
+    let whole = weights(model, all);
+    let mut words: Vec<(&str, f32)> = weights(model, members)
+        .into_iter()
+        .filter(|(w, _)| !w.is_empty() && !without.iter().any(|x| x == w))
+        .map(|(w, x)| (w, x * x / whole.get(w).copied().unwrap_or(x).max(1e-6)))
+        .collect();
+    words.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
     words
+        .into_iter()
+        .take(2)
+        .map(|(w, _)| w.to_string())
+        .collect()
 }
 
 /// What a cluster is named by: its three weightiest words, or, read by
@@ -1238,6 +1264,20 @@ fn top_words(model: &Model, members: &[usize]) -> Vec<String> {
 /// The words of `members`, the weightiest first, or, read by the people
 /// lens, their senders, the commonest first.
 fn ranked_words(model: &Model, members: &[usize]) -> Vec<String> {
+    let mut all: Vec<(&str, f32)> = weights(model, members)
+        .into_iter()
+        .filter(|(w, _)| !w.is_empty())
+        .collect();
+    all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+    all.into_iter()
+        .take(8)
+        .map(|(w, _)| w.to_string())
+        .collect()
+}
+
+/// What each word of `members` weighs in them all, or, read by the people
+/// lens, how many each sender sent.
+fn weights<'a>(model: &'a Model, members: &[usize]) -> HashMap<&'a str, f32> {
     let mut weight: HashMap<&str, f32> = HashMap::new();
     if model.lens == Lens::People {
         for &i in members {
@@ -1250,12 +1290,7 @@ fn ranked_words(model: &Model, members: &[usize]) -> Vec<String> {
             }
         }
     }
-    let mut all: Vec<(&str, f32)> = weight.into_iter().filter(|(w, _)| !w.is_empty()).collect();
-    all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
-    all.into_iter()
-        .take(8)
-        .map(|(w, _)| w.to_string())
-        .collect()
+    weight
 }
 
 /// The width σ that makes a message's memberships in its neighbours,

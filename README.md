@@ -58,6 +58,14 @@ or with `--keep`:
 | `keyring` | the system's own store, by [keyring-rs](https://github.com/open-source-cooperative/keyring-rs): the keychain on macOS, the Credential Manager on Windows, the Secret Service (GNOME's keyring, KWallet) on Linux. Unlocked as you log in; the default where there is one. |
 | `vault` | one file, `~/.local/share/letterbox/vault.age`, encrypted with a passphrase of yours in the [age](https://age-encryption.org) format, by the age crate. The same on every system, as a server reached over ssh, with no keyring; its passphrase is asked for as letterbox starts, and the file opens with `age -d` or `rage -d` too. |
 
+`letterbox keep vault` moves every password letterbox keeps, and the
+map's key, into the vault, and `letterbox keep keyring` moves them back:
+each is read where it is, kept in the other, its account set to say so,
+and only then forgotten where it was. On macOS, the keychain asks again
+whenever letterbox's program changes, as it does with each build and
+each version, for each password it keeps; in the vault, there is one
+passphrase, asked for as letterbox starts.
+
 Or an account gives a `password_command` of yours, as `pass show mail/work`,
 which runs before the TUI takes the terminal, so a passphrase it asks for
 is asked for first.
