@@ -7075,7 +7075,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     let i = rows[going];
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m"]);
-    assert!(app.review.as_ref().unwrap().menu.is_some());
+    assert!(app.menu.is_some());
     let items = app.menu_items();
     assert!(
         matches!(&items[0], app::Pick::Label(n, _) if n == "Grant"),
@@ -7104,7 +7104,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     );
     press(&mut app, &["<enter>"]);
     assert_eq!(app.choice(i), app::Choice::Move("Projects".into()));
-    assert!(app.review.as_ref().unwrap().menu.is_none());
+    assert!(app.menu.is_none());
     // A new one, by its name typed.
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m"]);
@@ -7123,7 +7123,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     // esc puts it away, nothing chosen; a click picks one.
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m", "<esc>"]);
-    assert!(app.review.as_ref().unwrap().menu.is_none());
+    assert!(app.menu.is_none());
     assert_eq!(app.choice(i), app::Choice::Move("Engines".into()));
     press(&mut app, &["m"]);
     click_at(&mut app, app::Target::MenuItem(0));
@@ -7357,4 +7357,95 @@ fn only_those_chosen_are_done_and_those_kept_come_last_next_time() {
     assert_eq!(s.dots[*rows.last().unwrap()].key, first);
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("1 kept before"), "{screen}");
+}
+
+// ---- the list and the map, one key apart ----
+
+#[test]
+fn m_goes_between_the_map_and_the_list_and_lets_go_of_what_was_the_maps() {
+    let mut app = demo();
+    press(&mut app, &["M"]);
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    // Something marked on the map is let go in the list.
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some());
+    press(&mut app, &["M"]);
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    assert!(app.map.region.is_none() && app.map.moving.is_none());
+    // The view menu open, M-l closes it and goes to the list.
+    press(&mut app, &["M", ",", "f", "<m-l>"]);
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    // From the Inbox looked through, the list is picked, not the message.
+    press(&mut app, &["M", "i", "M"]);
+    assert_eq!(app.focus, app::Focus::List);
+    // A cluster listed counts what it lists.
+    press(&mut app, &["M", "Z", "<enter>", "M"]);
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(!screen.contains(" 0 messages"), "{screen}");
+}
+
+#[test]
+fn in_the_list_a_message_is_filed_as_in_the_map() {
+    let mut app = demo();
+    let subject = app.current().unwrap().summary.subject.clone();
+    // m drops down the labels; ⏎ files it there at once.
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_some());
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(screen.contains("Move to"), "{screen}");
+    let first = match &app.menu_items()[0] {
+        app::Pick::Label(n, _) => n.clone(),
+        other => panic!("{other:?}"),
+    };
+    press(&mut app, &["<enter>"]);
+    assert!(app.menu.is_none());
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &subject);
+    assert!(labels.contains(&first) && !inbox, "{labels:?}");
+    assert!(
+        !app.shown.iter().any(|l| l.summary.subject == subject),
+        "out of the Inbox listed"
+    );
+    // N names a new label for the next; esc lets it go.
+    let next = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["N"]);
+    assert!(matches!(app.dialog, app::Dialog::Label(_)));
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.moving.is_none());
+    press(&mut app, &["N", "<c-u>"]);
+    for c in "Engines".chars() {
+        let shift = if c.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        app.key(KeyEvent::new(KeyCode::Char(c), shift));
+    }
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &next);
+    assert!(
+        labels.contains(&"Engines".to_string()) && !inbox,
+        "{labels:?}"
+    );
+    // y files one where it would go, as the map would.
+    let s = app.map.snapshot.clone().unwrap();
+    let going = app
+        .shown
+        .iter()
+        .position(|l| {
+            s.dots.iter().enumerate().any(|(i, d)| {
+                d.subject == l.summary.subject && d.system.inbox && s.suggestion(i).is_some()
+            })
+        })
+        .expect("one that would go somewhere");
+    let subject = app.shown[going].summary.subject.clone();
+    let i = s.dots.iter().position(|d| d.subject == subject).unwrap();
+    let label = s.suggestion(i).unwrap().to_string();
+    app.list.select(Some(going));
+    press(&mut app, &["y"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &subject);
+    assert!(labels.contains(&label) && !inbox, "{labels:?}");
 }

@@ -380,6 +380,9 @@ impl Listing {
     }
 
     pub fn total(&self) -> u32 {
+        if let Some(fixed) = &self.fixed {
+            return fixed.len() as u32;
+        }
         self.parts.iter().map(|p| p.total).sum()
     }
 
@@ -602,12 +605,11 @@ pub struct Review {
     pub asking: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
-    /// The labels it may be moved to, dropped down under it.
-    pub menu: Option<Menu>,
 }
 
-/// The labels a message looked through may be moved to, dropped down
-/// under it: narrowed by what is typed, the one picked lit.
+/// The labels a message may be moved to, dropped down under it, in the
+/// list or the Inbox looked through: narrowed by what is typed, the one
+/// picked lit.
 #[derive(Clone, Debug, Default)]
 pub struct Menu {
     pub key: crate::index::Key,
@@ -869,6 +871,8 @@ pub struct App {
     pub map_later: bool,
     /// The Inbox, being looked through beside the map.
     pub review: Option<Review>,
+    /// The labels the message picked may be moved to, dropped down.
+    pub menu: Option<Menu>,
     /// What was chosen in it, kept while it is closed, till it is done.
     pub review_kept: std::collections::BTreeMap<crate::index::Key, Choice>,
     /// Each account's second connection, kept for its sync while the map
@@ -1092,6 +1096,7 @@ impl App {
             map_later,
             review: None,
             review_kept: Default::default(),
+            menu: None,
             twins: Vec::new(),
             open_map: open_map_index,
             syncs: Vec::new(),
@@ -2460,7 +2465,7 @@ impl App {
         if self.dialog.is_open() {
             return self.dialog_key(key);
         }
-        if self.review.as_ref().is_some_and(|r| r.menu.is_some()) {
+        if self.menu.is_some() {
             return self.menu_key(key);
         }
         if let Some(r) = self.review.as_mut().filter(|r| r.asking) {
@@ -2626,17 +2631,14 @@ impl App {
             | Act::Unfiled => self.view(act),
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
             Act::Mark => self.mark_cluster(),
-            Act::Move
-            | Act::NewLabel
-            | Act::FileFirst
-            | Act::FileAll
-            | Act::NotIt
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt => self.list_file(act),
+            Act::FileAll
             | Act::View
             | Act::ZoomIn
             | Act::ZoomOut
             | Act::ZoomAll
             | Act::Relayout => {
-                self.status = "M-g shows the map, where mail is filed".to_string();
+                self.status = "that is the map's: M or M-g shows it".to_string();
             }
             Act::Wider | Act::Narrower if self.read_width > 0 => {
                 let by: i16 = if act == Act::Wider { 4 } else { -4 };
@@ -2644,6 +2646,8 @@ impl App {
             }
             Act::Wider | Act::Narrower => {}
             Act::MapView => self.show_map(),
+            Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
+            Act::SwitchView => self.show_map(),
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
@@ -2699,6 +2703,11 @@ impl App {
             Dialog::Label(typed) => match key.code {
                 KeyCode::Esc => {
                     self.dialog = Dialog::Closed;
+                    // Named in the list: let go.
+                    if self.map.mode == Mode::List {
+                        self.map.moving = None;
+                        self.status = "not moved".to_string();
+                    }
                     // Named for a message looked through: back to it.
                     if let Some(r) = &mut self.review
                         && r.relabel.take().is_some()
@@ -2984,10 +2993,8 @@ impl App {
                     return;
                 }
                 // The labels dropped down: a click elsewhere puts them away.
-                if let Some(r) = self.review.as_mut().filter(|r| r.menu.is_some())
-                    && !matches!(at, Some(Target::MenuItem(_)))
-                {
-                    r.menu = None;
+                if self.menu.is_some() && !matches!(at, Some(Target::MenuItem(_))) {
+                    self.menu = None;
                     return;
                 }
                 if at == Some(Target::Map) && !self.dialog.is_open() {
@@ -4032,6 +4039,15 @@ impl App {
     /// open to change more; or the map laid out again; any other key
     /// closes it.
     fn view_key(&mut self, key: KeyEvent) {
+        // M-l, C-n and the like are not the menu's: it closes, and they do
+        // what they do.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.dialog = Dialog::Closed;
+            return self.key(key);
+        }
         let row = match key.code {
             KeyCode::Char(c) => keymap::VIEW.iter().find(|v| v.0 == c),
             _ => None,
@@ -4228,6 +4244,17 @@ impl App {
             };
             if let Some(i) = narrowed.and_then(|n| self.rows.iter().position(|r| *r == n)) {
                 self.row = i;
+            }
+        }
+        // A move or a mark begun on the map is the map's: let go.
+        if self.map.moving.take().is_some() || self.map.region.take().is_some() {
+            self.status = "what was moving or marked on the map, let go".to_string();
+        }
+        if let Some(r) = &mut self.review {
+            r.relabel = None;
+            // The Inbox looked through is the map's: back to the list.
+            if self.focus == Focus::Reader {
+                self.focus = Focus::List;
             }
         }
         self.map.mode = Mode::List;
@@ -4805,13 +4832,61 @@ impl App {
         self.map.region = None;
         self.map.suggesting = Some(label.clone());
         self.status = format!(
-            "{} under {label}, out of the Inbox · y files the next it would go with too",
+            "{} under {label}, out of the Inbox{}",
             if filed == 1 {
                 "filed".to_string()
             } else {
                 format!("{filed} filed")
+            },
+            if self.map.mode == Mode::Map {
+                " · y files the next it would go with too"
+            } else {
+                ""
             }
         );
+    }
+
+    /// The message picked in the list, by its place in the map.
+    fn listed_on_map(&self) -> Option<usize> {
+        let l = self.current()?;
+        let ident = &self.accounts.get(l.account)?.ident;
+        let key = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .key_at(ident, &l.folder, l.summary.uid)?;
+        self.map.snapshot.as_ref()?.find(&key)
+    }
+
+    /// File the message picked in the list as the map does: `m` drops down
+    /// the labels it may go to, `N` names a new one, `y` files it where it
+    /// would go, and `-` says it is not one for there.
+    fn list_file(&mut self, act: Act) {
+        let Some(i) = self.listed_on_map() else {
+            self.status = if self.map_off.is_some() || self.map_later {
+                "filing is by the map: M or M-g begins it".to_string()
+            } else {
+                "not on the map yet: it is filed once the map has read it".to_string()
+            };
+            return;
+        };
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
+            return;
+        };
+        self.map.cursor = Some(key.clone());
+        let suggested = self.picked_suggestion();
+        match act {
+            Act::Move => self.open_menu(i),
+            Act::NewLabel => {
+                self.map.moving = Some(vec![key]);
+                self.ask_new_label();
+            }
+            Act::FileFirst if suggested.is_some() => {
+                self.file_where_suggested(false);
+            }
+            Act::NotIt if suggested.is_some() => self.not_it(),
+            _ => self.status = "nowhere it would go: m picks where".to_string(),
+        }
     }
 
     /// The suggestions for the label last filed under, nearest first.
@@ -5232,12 +5307,10 @@ impl App {
         let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
             return;
         };
-        if let Some(r) = &mut self.review {
-            r.menu = Some(Menu {
-                key,
-                ..Menu::default()
-            });
-        }
+        self.menu = Some(Menu {
+            key,
+            ..Menu::default()
+        });
         self.status = "move it to: type to narrow, ↑ ↓ pick, ⏎ moves it there, esc".to_string();
     }
 
@@ -5246,10 +5319,7 @@ impl App {
     /// the nearest few, or, typed, every one holding what is typed; a new
     /// one, if none is called that; and picking on the map.
     pub fn menu_items(&self) -> Vec<Pick> {
-        let (Some(s), Some(menu)) = (
-            self.map.snapshot.as_ref(),
-            self.review.as_ref().and_then(|r| r.menu.as_ref()),
-        ) else {
+        let (Some(s), Some(menu)) = (self.map.snapshot.as_ref(), self.menu.as_ref()) else {
             return Vec::new();
         };
         let Some(i) = s.find(&menu.key) else {
@@ -5292,17 +5362,17 @@ impl App {
     /// A key while the labels are dropped down: what is typed narrows them.
     fn menu_key(&mut self, key: KeyEvent) {
         let count = self.menu_items().len();
-        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.as_mut()) else {
+        let Some(menu) = self.menu.as_mut() else {
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
-                self.review.as_mut().expect("open").menu = None;
+                self.menu = None;
                 self.status = "not moved".to_string();
             }
             KeyCode::Char('g') if ctrl => {
-                self.review.as_mut().expect("open").menu = None;
+                self.menu = None;
                 self.status = "not moved".to_string();
             }
             // Round, past either end.
@@ -5322,16 +5392,34 @@ impl App {
         }
     }
 
-    /// Pick the item `at` of the labels dropped down: moved there, to be
-    /// done with the rest; or, picking on the map, where it goes asked there.
+    /// Pick the item `at` of the labels dropped down: in the list, filed
+    /// there at once; in the Inbox looked through, to be, with the rest; or,
+    /// picking on the map, where it goes asked there.
     fn pick_item(&mut self, at: usize) {
         let item = self.menu_items().get(at).cloned();
-        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.take()) else {
+        let Some(menu) = self.menu.take() else {
             return;
         };
         let Some(i) = self.map.snapshot.as_ref().and_then(|s| s.find(&menu.key)) else {
             return;
         };
+        if self.map.mode == Mode::List {
+            match item {
+                Some(Pick::Label(name, _) | Pick::New(name)) => {
+                    self.file_keys(vec![menu.key], &name)
+                }
+                Some(Pick::OnMap) => {
+                    self.show_map();
+                    self.map.cursor = Some(menu.key.clone());
+                    self.map.moving = Some(vec![menu.key]);
+                    self.status =
+                        "where it goes: a click on a cluster, or ⏎ on one; N a new label; esc stops"
+                            .to_string();
+                }
+                None => {}
+            }
+            return;
+        }
         match item {
             Some(Pick::Label(name, _) | Pick::New(name)) => {
                 self.status = format!("to go to {name} · $ does it, with the rest");

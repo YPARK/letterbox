@@ -148,6 +148,7 @@ letterbox search grant report --account Work
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
+| `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
@@ -155,8 +156,8 @@ letterbox search grant report --account Work
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
-| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
-| `N` | while moving, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
+| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once |
+| `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
@@ -166,9 +167,10 @@ letterbox search grant report --account Work
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 ⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
 keyboard protocol, as kitty, WezTerm and Ghostty do, and keeps no
-shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`,
-or a click on Map at the top right, shows the map in any terminal, and
-List goes back.
+shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`
+needs ⌥ sent as Meta (in Terminal, Settings › Profiles › Keyboard, “Use
+Option as Meta key”). `M`, or a click on Map at the top right, shows the
+map in any terminal, and `M` or List goes back.
 
 `c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
@@ -221,12 +223,12 @@ trash = "Deleted Items"
 
 ## The map
 
-`M-g` (⌘G or Super+G where the terminal passes it on, or a click on Map
-at the top right) shows a second way into your mail, in place of the sidebar and the list: every
+`M` (or `M-g`, ⌘G or Super+G where the terminal passes it on, or a click
+on Map at the top right) shows a second way into your mail, in place of the sidebar and the list: every
 message of every account laid out as a map, near what it is about and
 who it is from, in clusters, coloured by how they are related. Filing a
 message is moving it onto a cluster; letterbox learns from what you file
-and says what else would go there. `M-l` goes back to the list.
+and says what else would go there. `M` or `M-l` goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 

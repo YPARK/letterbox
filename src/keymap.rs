@@ -63,6 +63,8 @@ pub enum Act {
     /// The map, or the list, in the middle pane.
     MapView,
     ListView,
+    /// The map, from the list; the list, from the map.
+    SwitchView,
     PreviousCluster,
     NextCluster,
     /// The map laid out by another lens, back as far as another time, or
@@ -337,10 +339,17 @@ pub const KEYS: &[Binding] = &[
     },
     // The map.
     Binding {
+        keys: &[("M", SwitchView)],
+        name: "M",
+        hint: "M",
+        foot: &[(Side, "map"), (List, "map"), (Map, "list")],
+        help: "the map, or back to the list from it, in any terminal: as M-g and M-l",
+    },
+    Binding {
         keys: &[("M-g", MapView), ("s-g", MapView)],
         name: "M-g s-g",
         hint: "M-g",
-        foot: &[(Side, "map"), (List, "map")],
+        foot: &[],
         help: "the map: every account's mail laid out by what it is about and who it is from",
     },
     Binding {

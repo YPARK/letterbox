@@ -1636,8 +1636,18 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
     *app.list.offset_mut() = top;
     let heights = vec![4; end - top];
+    let mut picked_at = None;
     for (at, row) in rows(inner, 0, &heights) {
+        if app.list.selected() == Some(top + at) {
+            picked_at = Some(row.y + 2);
+        }
         app.targets.push((row, Target::Message(top + at)));
+    }
+    // The labels it may be moved to, dropped down under it.
+    if app.menu.is_some()
+        && let Some(under) = picked_at
+    {
+        label_menu(f, app, area, under);
     }
 }
 
@@ -2802,11 +2812,7 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let now = Zoned::now();
     let mut y = area.y + 3;
-    let menu_for = app
-        .review
-        .as_ref()
-        .and_then(|r| r.menu.as_ref())
-        .and_then(|m| s.find(&m.key));
+    let menu_for = app.menu.as_ref().and_then(|m| s.find(&m.key));
     let mut menu_at = None;
     for (row, &i) in rows.iter().enumerate().skip(top).take(room) {
         if Some(i) == menu_for {
@@ -2925,15 +2931,15 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// The labels a message looked through may be moved to, dropped down under
-/// the line of what may be done with it, or over it where there is no room
+/// The labels a message may be moved to, dropped down under it in the
+/// list, or under the line of what may be done with it looked through, or over it where there is no room
 /// below: what is typed, then each label with how far it is by angle, the
 /// one picked lit.
 fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
     use crate::app::Pick;
     let t = app.theme;
     let items = app.menu_items();
-    let Some(menu) = app.review.as_ref().and_then(|r| r.menu.clone()) else {
+    let Some(menu) = app.menu.clone() else {
         return;
     };
     let width = area.width.saturating_sub(4).min(40);
