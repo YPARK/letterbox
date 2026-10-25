@@ -3,9 +3,10 @@
 //! One connection, opened when first needed and again if it is lost.
 
 use crate::config::{Account, Auth, Security};
+use crate::index::record::Indexed;
 use crate::mail::{self, Folder, Role, Summary};
 use crate::oauth;
-use crate::store::{Flag, Page, Removal, Store};
+use crate::store::{Change, Flag, Kind, Page, Removal, Status, Store};
 use anyhow::{Context, bail};
 use imap_proto::NameAttribute;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -119,11 +120,14 @@ type Session = imap::Session<Stream>;
 pub struct Imap {
     account: Account,
     session: Option<Session>,
-    /// The folder selected, and how many messages it held then.
-    selected: Option<(String, u32)>,
+    /// The folder selected, as it was then.
+    selected: Option<Selected>,
     /// Whether this connection can `MOVE`. Asked once, and asked again
     /// after the connection is lost.
     can_move: Option<bool>,
+    /// What this connection can do, once asked; CONDSTORE is asked for on
+    /// it then, where it can be.
+    caps: Option<Caps>,
 }
 
 impl Imap {
@@ -133,6 +137,7 @@ impl Imap {
             session: None,
             selected: None,
             can_move: None,
+            caps: None,
         }
     }
 
@@ -175,12 +180,13 @@ impl Imap {
     /// new connection, if the old one was lost.
     fn run<R>(
         &mut self,
-        mut f: impl FnMut(&mut Session, &mut Option<(String, u32)>) -> imap::Result<R>,
+        mut f: impl FnMut(&mut Session, &mut Option<Selected>) -> imap::Result<R>,
     ) -> anyhow::Result<R> {
         for attempt in 0..2 {
             if self.session.is_none() {
                 self.session = Some(self.connect()?);
                 self.selected = None;
+                self.caps = None;
             }
             let session = self.session.as_mut().expect("opened above");
             let done = f(session, &mut self.selected);
@@ -207,36 +213,74 @@ impl Imap {
     }
 }
 
+/// The folder selected, as SELECT said it was then.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Selected {
+    folder: String,
+    /// How many messages it held.
+    exists: u32,
+    validity: u32,
+    next: u32,
+    /// Whether it keeps keywords of any name: `\*` among its PERMANENTFLAGS.
+    keywords: bool,
+    modseq: Option<u64>,
+}
+
 /// Select `folder`, unless it is already, or `fresh` asks for its count now;
 /// how many messages it holds.
 fn select(
     s: &mut Session,
-    selected: &mut Option<(String, u32)>,
+    selected: &mut Option<Selected>,
     folder: &str,
     fresh: bool,
 ) -> imap::Result<u32> {
     match selected {
-        Some((f, n)) if f == folder && !fresh => Ok(*n),
+        Some(sel) if sel.folder == folder && !fresh => Ok(sel.exists),
         _ => {
             *selected = None;
-            let n = s.select(folder)?.exists;
-            *selected = Some((folder.to_string(), n));
-            Ok(n)
+            let m = s.select(folder)?;
+            let keywords = m
+                .permanent_flags
+                .iter()
+                .any(|f| matches!(f, imap::types::Flag::MayCreate));
+            *selected = Some(Selected {
+                folder: folder.to_string(),
+                exists: m.exists,
+                validity: m.uid_validity.unwrap_or(0),
+                next: m.uid_next.unwrap_or(0),
+                keywords,
+                modseq: m.highest_mod_seq,
+            });
+            Ok(m.exists)
         }
     }
 }
 
-fn flags(fetch: &imap::types::Fetch) -> mail::Flags {
+/// The flags of a message, by their names as a server gives them: those
+/// letterbox shows, and its keywords, but for those that are a mail
+/// program's own, as `$Junk`, and Junk and NonJunk.
+pub(crate) fn flags_named<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> (mail::Flags, Vec<String>) {
     let mut f = mail::Flags::default();
-    for flag in fetch.flags() {
-        match flag {
-            imap::types::Flag::Seen => f.seen = true,
-            imap::types::Flag::Flagged => f.flagged = true,
-            imap::types::Flag::Answered => f.answered = true,
-            _ => {}
+    let mut keywords = Vec::new();
+    for name in names {
+        match name.to_ascii_lowercase().as_str() {
+            "\\seen" => f.seen = true,
+            "\\flagged" => f.flagged = true,
+            "\\answered" => f.answered = true,
+            "junk" | "nonjunk" => {}
+            k if k.starts_with('\\') || k.starts_with('$') || k.is_empty() => {}
+            _ => keywords.push(name.to_string()),
         }
     }
-    f
+    (f, keywords)
+}
+
+/// A fetched message's flags, and its keywords.
+fn flags(fetch: &imap::types::Fetch) -> (mail::Flags, Vec<String>) {
+    let names: Vec<String> = fetch.flags().iter().map(|f| f.to_string()).collect();
+    flags_named(names.iter().map(String::as_str))
 }
 
 fn summaries(fetches: &imap::types::Fetches) -> Vec<(u32, Summary)> {
@@ -248,7 +292,7 @@ fn summaries(fetches: &imap::types::Fetches) -> Vec<(u32, Summary)> {
             raw.extend_from_slice(f.text().unwrap_or_default());
             Some((
                 f.message,
-                mail::summary(uid, flags(f), f.size.unwrap_or(0), &raw),
+                mail::summary(uid, flags(f).0, f.size.unwrap_or(0), &raw),
             ))
         })
         .collect()
@@ -284,7 +328,13 @@ impl Store for Imap {
                         .attributes()
                         .iter()
                         .any(|a| matches!(a, NameAttribute::NoSelect));
-                    Folder::new(n.name(), n.delimiter(), special(n.attributes()), selectable)
+                    let mut folder =
+                        Folder::new(n.name(), n.delimiter(), special(n.attributes()), selectable);
+                    folder.all = n
+                        .attributes()
+                        .iter()
+                        .any(|a| matches!(a, NameAttribute::All));
+                    folder
                 })
                 .collect::<Vec<_>>())
         })?;
@@ -445,11 +495,11 @@ impl Store for Imap {
             }
             // The folder stays selected. Its count drops by what this
             // expunge removed, so the next one does not select again.
-            if let Some((name, n)) = selected.as_mut()
-                && name == folder
+            if let Some(sel) = selected.as_mut()
+                && sel.folder == folder
             {
                 let removed = (&gone).into_iter().count() as u32;
-                *n = n.saturating_sub(removed);
+                sel.exists = sel.exists.saturating_sub(removed);
             }
             Ok(Removal::Gone)
         })
@@ -462,7 +512,7 @@ impl Store for Imap {
                 cmd.flag(imap::types::Flag::Seen);
             }
             cmd.finish()?;
-            if selected.as_ref().is_some_and(|(name, _)| name == folder) {
+            if selected.as_ref().is_some_and(|sel| sel.folder == folder) {
                 *selected = None;
             }
             Ok(())
@@ -499,9 +549,243 @@ impl Store for Imap {
         }
         Ok("sent".to_string())
     }
+
+    fn twin(&self) -> Option<Box<dyn Store>> {
+        Some(Box::new(Imap::new(self.account.clone())))
+    }
+
+    fn ident(&self) -> String {
+        format!("{}@{}", self.account.user(), self.account.host).to_lowercase()
+    }
+
+    fn kind(&mut self) -> anyhow::Result<Kind> {
+        if self.prepare()?.gmail {
+            return Ok(Kind::Gmail);
+        }
+        let archive = self
+            .folders()?
+            .into_iter()
+            .find(|f| f.role == Role::Archive && f.selectable)
+            .map(|f| f.path);
+        let keywords = self.run(|s, selected| {
+            let mut all = true;
+            for folder in std::iter::once("INBOX").chain(archive.as_deref()) {
+                select(s, selected, folder, true)?;
+                all &= selected.as_ref().is_some_and(|sel| sel.keywords);
+            }
+            Ok(all)
+        })?;
+        Ok(if keywords {
+            Kind::Keywords
+        } else {
+            Kind::Folders
+        })
+    }
+
+    fn status(&mut self, folder: &str) -> anyhow::Result<Status> {
+        // Selected, not asked its STATUS, as RFC 3501 would not have a
+        // folder about to be read asked: SELECT says the same, and the
+        // fetches that follow find it selected.
+        self.prepare()?;
+        self.run(|s, selected| {
+            let messages = select(s, selected, folder, true)?;
+            let sel = selected.clone().unwrap_or_default();
+            Ok(Status {
+                messages,
+                validity: sel.validity,
+                next: sel.next,
+                modseq: sel.modseq,
+            })
+        })
+    }
+
+    fn fetch_index(&mut self, folder: &str, uids: &[u32]) -> anyhow::Result<Vec<Indexed>> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let gmail = self.prepare()?.gmail;
+        let command = format!("UID FETCH {} {}", uid_set(uids), indexed_items(gmail));
+        self.run(|s, selected| {
+            select(s, selected, folder, false)?;
+            let (buf, _) = s.run(&command)?;
+            Ok(fetched(&buf).into_iter().filter_map(indexed).collect())
+        })
+    }
+
+    fn changed(
+        &mut self,
+        folder: &str,
+        since: Option<u64>,
+        uids: &[u32],
+    ) -> anyhow::Result<Vec<Change>> {
+        let caps = self.prepare()?;
+        let labels = if caps.gmail { " X-GM-LABELS" } else { "" };
+        let command = match since {
+            Some(m) if caps.condstore => {
+                format!("UID FETCH 1:* (UID FLAGS{labels}) (CHANGEDSINCE {m})")
+            }
+            _ if uids.is_empty() => return Ok(Vec::new()),
+            _ => format!("UID FETCH {} (UID FLAGS{labels})", uid_set(uids)),
+        };
+        self.run(|s, selected| {
+            select(s, selected, folder, false)?;
+            let (buf, _) = s.run(&command)?;
+            Ok(fetched(&buf)
+                .into_iter()
+                .filter_map(|f| {
+                    let i = indexed(f)?;
+                    Some(Change {
+                        uid: i.uid,
+                        flags: i.flags,
+                        labels: i.labels,
+                        modseq: i.modseq,
+                    })
+                })
+                .collect())
+        })
+    }
+
+    fn uids(&mut self, folder: &str) -> anyhow::Result<Vec<u32>> {
+        self.run(|s, selected| {
+            select(s, selected, folder, true)?;
+            let mut uids: Vec<u32> = s.uid_search("ALL")?.into_iter().collect();
+            uids.sort_unstable();
+            Ok(uids)
+        })
+    }
+}
+
+/// What a connection can do, as far as the map asks.
+#[derive(Clone, Copy, Debug, Default)]
+struct Caps {
+    /// Gmail's labels and IDs: `X-GM-EXT-1`.
+    gmail: bool,
+    /// Mod-sequences: CONDSTORE, asked for on the connection.
+    condstore: bool,
+}
+
+/// What the index fetches of each message: what is listed, and its
+/// `List-Id`; on Gmail, its IDs and labels too.
+fn indexed_items(gmail: bool) -> String {
+    let gmail = if gmail {
+        " X-GM-MSGID X-GM-THRID X-GM-LABELS"
+    } else {
+        ""
+    };
+    format!(
+        "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID \
+         LIST-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
+         BODY.PEEK[TEXT]<0.2048>{gmail})"
+    )
+}
+
+/// `uids` as an IMAP set, runs of them as ranges: `1:4,7,9:12`.
+pub(crate) fn uid_set(uids: &[u32]) -> String {
+    let mut sorted = uids.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let start = sorted[i];
+        let mut end = start;
+        while i + 1 < sorted.len() && sorted[i + 1] == end + 1 {
+            i += 1;
+            end = sorted[i];
+        }
+        parts.push(if start == end {
+            start.to_string()
+        } else {
+            format!("{start}:{end}")
+        });
+        i += 1;
+    }
+    parts.join(",")
+}
+
+/// Each `FETCH` in a server's answer, with what it holds: read here, not
+/// by the imap crate, which keeps Gmail's IDs to itself.
+fn fetched(buf: &[u8]) -> Vec<Vec<imap_proto::AttributeValue<'_>>> {
+    let mut out = Vec::new();
+    let mut rest = buf;
+    while !rest.is_empty() {
+        match imap_proto::parser::parse_response(rest) {
+            Ok((left, imap_proto::Response::Fetch(_, attributes))) => {
+                out.push(attributes);
+                rest = left;
+            }
+            Ok((left, _)) => rest = left,
+            Err(_) => break,
+        }
+    }
+    out
+}
+
+/// A message as the index takes it, from what was fetched of it.
+fn indexed(attributes: Vec<imap_proto::AttributeValue<'_>>) -> Option<Indexed> {
+    use imap_proto::{AttributeValue as A, MessageSection, SectionPath};
+    let mut i = Indexed::default();
+    let (mut uid, mut header, mut text) = (None, Vec::new(), Vec::new());
+    for a in attributes {
+        match a {
+            A::Uid(u) => uid = Some(u),
+            A::Flags(names) => {
+                let (flags, keywords) = flags_named(names.iter().map(|n| n.as_ref()));
+                i.flags = flags;
+                i.labels.extend(keywords);
+            }
+            A::Rfc822Size(n) => i.size = n,
+            A::GmailLabels(labels) => i.labels.extend(labels.iter().map(|l| l.to_string())),
+            A::GmailMsgId(id) => i.gmail = Some(id),
+            A::GmailThrId(id) => i.thread = Some(id),
+            A::ModSeq(m) => i.modseq = Some(m),
+            A::BodySection {
+                section: Some(SectionPath::Full(MessageSection::Header)),
+                data: Some(d),
+                ..
+            } => header = d.to_vec(),
+            A::BodySection {
+                section: Some(SectionPath::Full(MessageSection::Text)),
+                data: Some(d),
+                ..
+            } => text = d.to_vec(),
+            _ => {}
+        }
+    }
+    i.uid = uid?;
+    header.extend(text);
+    i.raw = header;
+    Some(i)
 }
 
 impl Imap {
+    /// What the connection can do, asked once a connection; CONDSTORE is
+    /// asked for where the server has it, so that SELECT says a folder's
+    /// mod-sequence.
+    fn prepare(&mut self) -> anyhow::Result<Caps> {
+        if let Some(caps) = self.caps
+            && self.session.is_some()
+        {
+            return Ok(caps);
+        }
+        let caps = self.run(|s, selected| {
+            let c = s.capabilities()?;
+            let caps = Caps {
+                gmail: c.has_str("X-GM-EXT-1"),
+                condstore: c.has_str("CONDSTORE"),
+            };
+            if caps.condstore && c.has_str("ENABLE") {
+                // Without it, CHANGEDSINCE still asks for it, as RFC 7162
+                // has it; SELECT then says no mod-sequence.
+                let _ = s.run_command_and_check_ok("ENABLE CONDSTORE");
+                *selected = None;
+            }
+            Ok(caps)
+        })?;
+        self.caps = Some(caps);
+        Ok(caps)
+    }
+
     /// The Sent folder, made if the server has none.
     fn sent_folder(&mut self) -> anyhow::Result<String> {
         let folders = self.folders()?;

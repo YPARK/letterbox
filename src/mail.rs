@@ -77,6 +77,9 @@ pub struct Folder {
     pub depth: usize,
     pub role: Role,
     pub selectable: bool,
+    /// Whether it holds every message of the account, as Gmail's All Mail.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
     pub total: Option<u32>,
     pub unseen: Option<u32>,
 }
@@ -107,6 +110,7 @@ impl Folder {
             },
             role,
             selectable,
+            all: false,
             total: None,
             unseen: None,
         }

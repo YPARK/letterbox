@@ -7,6 +7,8 @@ mod compose;
 mod config;
 mod demo;
 mod edit;
+// The map's sync, which reads what is added here, follows.
+#[allow(dead_code)]
 mod imap;
 // What the map is to read is written before the map that reads it.
 #[allow(dead_code)]
@@ -19,6 +21,7 @@ mod oauth;
 mod secret;
 mod setup;
 mod smtp;
+#[allow(dead_code)]
 mod store;
 mod theme;
 mod trash;

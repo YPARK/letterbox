@@ -17,17 +17,101 @@ use std::time::Duration;
 #[derive(Clone)]
 struct Letter {
     uid: u32,
-    flags: Vec<&'static str>,
+    flags: Vec<String>,
     raw: Vec<u8>,
+    /// When it last changed, as CONDSTORE counts.
+    modseq: u64,
+    /// Gmail's labels on it, and its ID there.
+    labels: Vec<String>,
+    msgid: u64,
+}
+
+impl Letter {
+    fn new(uid: u32, flags: &[&str], raw: Vec<u8>) -> Letter {
+        Letter {
+            uid,
+            flags: flags.iter().map(|f| f.to_string()).collect(),
+            raw,
+            modseq: 1,
+            labels: Vec::new(),
+            msgid: 0,
+        }
+    }
+
+    fn has(&self, flag: &str) -> bool {
+        self.flags.iter().any(|f| f.eq_ignore_ascii_case(flag))
+    }
 }
 
 struct Mailbox {
     name: String,
     attributes: &'static str,
     letters: Vec<Letter>,
+    validity: u32,
+    /// The UID the next message will have.
+    next: u32,
 }
 
-type Boxes = Arc<Mutex<Vec<Mailbox>>>;
+impl Mailbox {
+    fn new(name: &str, attributes: &'static str, letters: Vec<Letter>) -> Mailbox {
+        let next = letters.iter().map(|l| l.uid + 1).max().unwrap_or(1);
+        Mailbox {
+            name: name.to_string(),
+            attributes,
+            letters,
+            validity: 7,
+            next,
+        }
+    }
+
+    fn push(&mut self, letter: Letter) {
+        self.next = self.next.max(letter.uid + 1);
+        self.letters.push(letter);
+    }
+}
+
+/// How the fake server keeps labels, as servers do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mode {
+    /// In folders alone, as Microsoft's: no keywords, no CONDSTORE.
+    Folders,
+    /// In keywords of any name, with CONDSTORE, as Dovecot's and Fastmail's.
+    Keywords,
+    /// As Gmail's labels, with its IDs, and CONDSTORE.
+    Gmail,
+}
+
+/// The server's mail, how it keeps labels, its mod-sequence, and the
+/// commands it was sent.
+struct Fake {
+    boxes: Vec<Mailbox>,
+    mode: Mode,
+    modseq: u64,
+    said: Vec<String>,
+}
+
+impl std::ops::Deref for Fake {
+    type Target = Vec<Mailbox>;
+    fn deref(&self) -> &Vec<Mailbox> {
+        &self.boxes
+    }
+}
+
+impl std::ops::DerefMut for Fake {
+    fn deref_mut(&mut self) -> &mut Vec<Mailbox> {
+        &mut self.boxes
+    }
+}
+
+impl Fake {
+    /// The next mod-sequence, for a change made now.
+    fn tick(&mut self) -> u64 {
+        self.modseq += 1;
+        self.modseq
+    }
+}
+
+type Boxes = Arc<Mutex<Fake>>;
 
 fn raw(from: &str, subject: &str, extra: &str, body: &str) -> Vec<u8> {
     let id: String = subject
@@ -43,22 +127,35 @@ fn raw(from: &str, subject: &str, extra: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn fake(boxes: Vec<Mailbox>, mode: Mode) -> Boxes {
+    Arc::new(Mutex::new(Fake {
+        boxes,
+        mode,
+        modseq: 1,
+        said: Vec::new(),
+    }))
+}
+
 fn boxes() -> Boxes {
+    boxes_in(Mode::Folders)
+}
+
+fn boxes_in(mode: Mode) -> Boxes {
     let inbox = vec![
-        Letter {
-            uid: 11,
-            flags: vec!["\\Seen"],
-            raw: raw(
+        Letter::new(
+            11,
+            &["\\Seen"],
+            raw(
                 "Rosalind Franklin <rf@kings.example>",
                 "Photo 51",
                 "Content-Type: text/plain; charset=utf-8\r\n",
                 "The B form, at last.\r\n",
             ),
-        },
-        Letter {
-            uid: 12,
-            flags: vec!["\\Seen", "\\Flagged"],
-            raw: raw(
+        ),
+        Letter::new(
+            12,
+            &["\\Seen", "\\Flagged"],
+            raw(
                 "Alan Turing <alan@bletchley.example>",
                 "=?utf-8?q?Computable_numbers_=E2=80=94_the_paper?=",
                 "Content-Type: multipart/mixed; boundary=\"m1\"\r\n",
@@ -68,55 +165,101 @@ fn boxes() -> Boxes {
                  Content-Disposition: attachment; filename=\"../states.txt\"\r\n\r\n\
                  b None P0 c\r\n--m1--\r\n",
             ),
-        },
-        Letter {
-            uid: 14,
-            flags: vec![],
-            raw: raw(
+        ),
+        Letter::new(
+            14,
+            &[],
+            raw(
                 "=?utf-8?q?Emmy_N=C3=B6ther?= <noether@goettingen.example>",
                 "Symmetry\x1b[2J",
                 "Content-Type: text/plain; charset=utf-8\r\n",
                 "Every symmetry has its conserved quantity.\x1b]0;owned\x07\r\n",
             ),
-        },
+        ),
     ];
-    Arc::new(Mutex::new(vec![
-        Mailbox {
-            name: "INBOX".to_string(),
-            attributes: "\\HasNoChildren",
-            letters: inbox,
-        },
-        Mailbox {
-            name: "Projects".to_string(),
-            attributes: "\\HasChildren",
-            letters: Vec::new(),
-        },
-        Mailbox {
-            name: "Projects/Grant".to_string(),
-            attributes: "\\HasNoChildren",
-            letters: Vec::new(),
-        },
-        Mailbox {
-            name: "Deleted Items".to_string(),
-            attributes: "\\HasNoChildren",
-            letters: Vec::new(),
-        },
-        Mailbox {
-            name: "Sent Items".to_string(),
-            attributes: "\\HasNoChildren \\Sent",
-            letters: Vec::new(),
-        },
-        Mailbox {
-            name: "Entw&APw-rfe".to_string(),
-            attributes: "\\HasNoChildren",
-            letters: Vec::new(),
-        },
-        Mailbox {
-            name: "Drafts".to_string(),
-            attributes: "\\HasNoChildren \\Drafts",
-            letters: Vec::new(),
-        },
-    ]))
+    let mut all = vec![
+        Mailbox::new("INBOX", "\\HasNoChildren", inbox),
+        Mailbox::new("Projects", "\\HasChildren", Vec::new()),
+        Mailbox::new("Projects/Grant", "\\HasNoChildren", Vec::new()),
+        Mailbox::new("Deleted Items", "\\HasNoChildren", Vec::new()),
+        Mailbox::new("Sent Items", "\\HasNoChildren \\Sent", Vec::new()),
+        Mailbox::new("Entw&APw-rfe", "\\HasNoChildren", Vec::new()),
+        Mailbox::new("Drafts", "\\HasNoChildren \\Drafts", Vec::new()),
+    ];
+    if mode == Mode::Keywords {
+        all.push(Mailbox::new(
+            "Archive",
+            "\\HasNoChildren \\Archive",
+            Vec::new(),
+        ));
+    }
+    fake(all, mode)
+}
+
+/// Gmail's folders: the Inbox, and in [Gmail], All Mail, which holds every
+/// message with its labels, and the rest; a label of the user's, as a
+/// folder too.
+fn gmail_boxes() -> Boxes {
+    let letter = |uid: u32, flags: &[&str], labels: &[&str], from: &str, subject: &str| {
+        let mut l = Letter::new(
+            uid,
+            flags,
+            raw(
+                from,
+                subject,
+                "Content-Type: text/plain; charset=utf-8\r\n",
+                "Hello.\r\n",
+            ),
+        );
+        l.labels = labels.iter().map(|s| s.to_string()).collect();
+        l.msgid = 9000 + u64::from(uid);
+        l
+    };
+    let all = vec![
+        letter(
+            21,
+            &["\\Seen"],
+            &["\\Inbox", "Projects/Grant"],
+            "Mira Okafor <mira.okafor@uni.example>",
+            "Aims page, third pass",
+        ),
+        letter(
+            22,
+            &[],
+            &["\\Inbox", "\\Important"],
+            "Research Office <grants@uni.example>",
+            "R01 resubmission",
+        ),
+        letter(
+            23,
+            &["\\Seen"],
+            &["\\Sent"],
+            "Me <me@example.com>",
+            "Re: Aims page",
+        ),
+    ];
+    let inbox: Vec<Letter> = all
+        .iter()
+        .filter(|l| l.labels.iter().any(|x| x == "\\Inbox"))
+        .map(|l| Letter {
+            uid: l.uid - 20,
+            ..l.clone()
+        })
+        .collect();
+    fake(
+        vec![
+            Mailbox::new("INBOX", "\\HasNoChildren", inbox),
+            Mailbox::new("[Gmail]", "\\HasChildren \\Noselect", Vec::new()),
+            Mailbox::new("[Gmail]/All Mail", "\\HasNoChildren \\All", all),
+            Mailbox::new("[Gmail]/Sent Mail", "\\HasNoChildren \\Sent", Vec::new()),
+            Mailbox::new("[Gmail]/Drafts", "\\HasNoChildren \\Drafts", Vec::new()),
+            Mailbox::new("[Gmail]/Spam", "\\HasNoChildren \\Junk", Vec::new()),
+            Mailbox::new("[Gmail]/Trash", "\\HasNoChildren \\Trash", Vec::new()),
+            Mailbox::new("Projects", "\\HasChildren", Vec::new()),
+            Mailbox::new("Projects/Grant", "\\HasNoChildren", Vec::new()),
+        ],
+        Mode::Gmail,
+    )
 }
 
 /// The IMAP strings in `s`, quoted or not, unquoted.
@@ -153,12 +296,7 @@ fn words(s: &str) -> Vec<String> {
 }
 
 fn next_uid(boxes: &[Mailbox]) -> u32 {
-    boxes
-        .iter()
-        .flat_map(|b| b.letters.iter().map(|l| l.uid))
-        .max()
-        .unwrap_or(0)
-        + 1
+    boxes.iter().map(|b| b.next).max().unwrap_or(1)
 }
 
 /// The byte count of an IMAP literal, as `{310}` at the end of a command.
@@ -168,22 +306,58 @@ fn literal_size(args: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// The numbers in an IMAP set, as `1:3,7`.
-fn set(s: &str) -> Vec<u32> {
+/// The ranges of an IMAP set, as `1:3,7` or `5:*`.
+fn set(s: &str) -> Vec<(u32, u32)> {
+    let n = |x: &str| {
+        if x == "*" {
+            u32::MAX
+        } else {
+            x.parse().unwrap_or(0)
+        }
+    };
     s.split(',')
-        .flat_map(|part| match part.split_once(':') {
-            Some((a, b)) => (a.parse().unwrap_or(0)..=b.parse().unwrap_or(0)).collect(),
-            None => part.parse().into_iter().collect::<Vec<u32>>(),
+        .map(|part| match part.split_once(':') {
+            Some((a, b)) => (n(a).min(n(b)), n(a).max(n(b))),
+            None => (n(part), n(part)),
         })
         .collect()
 }
 
-fn fetched(seq: usize, l: &Letter, items: &str) -> Vec<u8> {
+fn within(ranges: &[(u32, u32)], n: u32) -> bool {
+    ranges.iter().any(|&(a, b)| a <= n && n <= b)
+}
+
+fn fetched(seq: usize, l: &Letter, items: &str, changed: bool) -> Vec<u8> {
     let mut out = format!("* {seq} FETCH (UID {}", l.uid).into_bytes();
+    if items.contains("X-GM-MSGID") {
+        let labels: Vec<String> = l
+            .labels
+            .iter()
+            .map(|x| {
+                if x.starts_with('\\') {
+                    x.clone()
+                } else {
+                    format!("\"{x}\"")
+                }
+            })
+            .collect();
+        out.extend(
+            format!(
+                " X-GM-MSGID {} X-GM-THRID {} X-GM-LABELS ({})",
+                l.msgid,
+                l.msgid,
+                labels.join(" ")
+            )
+            .bytes(),
+        );
+    }
+    if changed {
+        out.extend(format!(" MODSEQ ({})", l.modseq).bytes());
+    }
     if items.contains("BODY.PEEK[]") {
         out.extend(format!(" BODY[] {{{}}}\r\n", l.raw.len()).bytes());
         out.extend(&l.raw);
-    } else {
+    } else if items.contains("BODY") {
         let split = l
             .raw
             .windows(4)
@@ -208,15 +382,23 @@ fn fetched(seq: usize, l: &Letter, items: &str) -> Vec<u8> {
         out.extend(header);
         out.extend(format!(" BODY[TEXT]<0> {{{}}}\r\n", text.len()).bytes());
         out.extend(text);
+    } else {
+        out.extend(format!(" FLAGS ({})", l.flags.join(" ")).bytes());
     }
     out.extend(b")\r\n");
     out
+}
+
+/// The flags or labels a `STORE` names, in its parentheses.
+fn listed(s: &str) -> Vec<String> {
+    words(s.trim().trim_start_matches('(').trim_end_matches(')'))
 }
 
 fn serve(tcp: TcpStream, shared: Boxes) {
     let mut out = tcp.try_clone().unwrap();
     let mut lines = BufReader::new(tcp);
     let mut selected: Option<usize> = None;
+    let mut condstore = false;
     out.write_all(b"* OK [CAPABILITY IMAP4rev1] fake ready\r\n")
         .unwrap();
     let mut line = String::new();
@@ -230,6 +412,8 @@ fn serve(tcp: TcpStream, shared: Boxes) {
         let (command, args) = rest.split_once(' ').unwrap_or((rest, ""));
         let mut reply: Vec<u8> = Vec::new();
         let mut boxes = shared.lock().unwrap();
+        boxes.said.push(rest.to_string());
+        let mode = boxes.mode;
         let mut done = format!("{tag} OK done\r\n");
         match command.to_uppercase().as_str() {
             "LOGIN" => {
@@ -244,47 +428,69 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                     );
                 }
             }
+            "ENABLE" if mode != Mode::Folders => {
+                condstore = true;
+                reply.extend(b"* ENABLED CONDSTORE\r\n");
+            }
             "SELECT" | "EXAMINE" => {
                 let name = &words(args)[0];
                 match boxes.iter().position(|b| b.name == *name) {
                     Some(i) => {
                         selected = Some(i);
+                        let b = &boxes[i];
+                        let keywords = if mode == Mode::Folders { "" } else { " \\*" };
                         reply.extend(
                             format!(
                                 "* FLAGS (\\Seen \\Flagged)\r\n* {} EXISTS\r\n* 0 RECENT\r\n\
-                                 * OK [UIDVALIDITY 7] ok\r\n",
-                                boxes[i].letters.len()
+                                 * OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n\
+                                 * OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \
+                                 \\Answered{keywords})] ok\r\n",
+                                b.letters.len(),
+                                b.validity,
+                                b.next,
                             )
                             .bytes(),
                         );
+                        if condstore {
+                            let highest = b.letters.iter().map(|l| l.modseq).max().unwrap_or(1);
+                            reply.extend(format!("* OK [HIGHESTMODSEQ {highest}] ok\r\n").bytes());
+                        }
                         done = format!("{tag} OK [READ-WRITE] selected\r\n");
                     }
                     None => done = format!("{tag} NO no such folder\r\n"),
                 }
             }
             "STATUS" => {
-                let name = &words(args)[0];
-                let b = boxes.iter().find(|b| b.name == *name).unwrap();
-                let unseen = b
-                    .letters
-                    .iter()
-                    .filter(|l| !l.flags.contains(&"\\Seen"))
-                    .count();
-                reply.extend(
-                    format!(
-                        "* STATUS \"{}\" (MESSAGES {} UNSEEN {unseen})\r\n",
-                        b.name,
-                        b.letters.len()
-                    )
-                    .bytes(),
-                );
+                let w = words(args);
+                let b = boxes.iter().find(|b| b.name == w[0]).unwrap();
+                let asked = args.to_uppercase();
+                let mut items = Vec::new();
+                if asked.contains("MESSAGES") {
+                    items.push(format!("MESSAGES {}", b.letters.len()));
+                }
+                if asked.contains("UNSEEN") {
+                    let unseen = b.letters.iter().filter(|l| !l.has("\\Seen")).count();
+                    items.push(format!("UNSEEN {unseen}"));
+                }
+                if asked.contains("UIDNEXT") {
+                    items.push(format!("UIDNEXT {}", b.next));
+                }
+                if asked.contains("UIDVALIDITY") {
+                    items.push(format!("UIDVALIDITY {}", b.validity));
+                }
+                if asked.contains("HIGHESTMODSEQ") {
+                    let highest = b.letters.iter().map(|l| l.modseq).max().unwrap_or(1);
+                    items.push(format!("HIGHESTMODSEQ {highest}"));
+                }
+                reply.extend(format!("* STATUS \"{}\" ({})\r\n", b.name, items.join(" ")).bytes());
             }
             "FETCH" => {
                 let (seqs, items) = args.split_once(' ').unwrap();
                 let b = &boxes[selected.unwrap()];
-                for seq in set(seqs) {
-                    if let Some(l) = b.letters.get(seq as usize - 1) {
-                        reply.extend(fetched(seq as usize, l, items));
+                let seqs = set(seqs);
+                for (i, l) in b.letters.iter().enumerate() {
+                    if within(&seqs, i as u32 + 1) {
+                        reply.extend(fetched(i + 1, l, items, false));
                     }
                 }
             }
@@ -295,33 +501,43 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                     "FETCH" => {
                         let b = &boxes[selected.unwrap()];
                         let (uids, items) = args.split_once(' ').unwrap();
+                        let since: Option<u64> = items
+                            .split("(CHANGEDSINCE ")
+                            .nth(1)
+                            .and_then(|s| s.trim_end_matches(')').parse().ok());
                         let uids = set(uids);
                         for (i, l) in b.letters.iter().enumerate() {
-                            if uids.contains(&l.uid) {
-                                reply.extend(fetched(i + 1, l, items));
+                            if within(&uids, l.uid) && since.is_none_or(|m| l.modseq > m) {
+                                reply.extend(fetched(i + 1, l, items, since.is_some()));
                             }
                         }
                     }
                     "STORE" => {
+                        let seq = boxes.tick();
                         let b = &mut boxes[selected.unwrap()];
-                        let w = words(args);
-                        let (uid, how, flag) = (w[0].parse::<u32>().unwrap(), &w[1], &w[2]);
-                        let flag: &'static str = if flag.contains("Seen") {
-                            "\\Seen"
-                        } else if flag.contains("Flagged") {
-                            "\\Flagged"
-                        } else if flag.contains("Deleted") {
-                            "\\Deleted"
-                        } else if flag.contains("Answered") {
-                            "\\Answered"
-                        } else {
-                            "\\Seen"
-                        };
-                        if let Some(l) = b.letters.iter_mut().find(|l| l.uid == uid) {
-                            l.flags.retain(|f| *f != flag);
-                            if how.starts_with('+') {
-                                l.flags.push(flag);
+                        let (uids, rest) = args.split_once(' ').unwrap();
+                        let (how, what) = rest.split_once(' ').unwrap();
+                        let uids = set(uids);
+                        let how = how.to_uppercase();
+                        for l in b.letters.iter_mut().filter(|l| within(&uids, l.uid)) {
+                            let list = if how.contains("X-GM-LABELS") {
+                                &mut l.labels
+                            } else {
+                                &mut l.flags
+                            };
+                            for name in listed(what) {
+                                // A server without `\*` keeps no keyword it
+                                // was not made with.
+                                let keyword = !name.starts_with('\\');
+                                if keyword && mode == Mode::Folders && !how.contains("X-GM") {
+                                    continue;
+                                }
+                                list.retain(|f| !f.eq_ignore_ascii_case(&name));
+                                if how.starts_with('+') {
+                                    list.push(name);
+                                }
                             }
+                            l.modseq = seq;
                         }
                     }
                     "SEARCH" => {
@@ -331,14 +547,21 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                             && !w.iter().any(|x| {
                                 x.eq_ignore_ascii_case("TEXT") || x.eq_ignore_ascii_case("HEADER")
                             });
+                        let keyword = w
+                            .iter()
+                            .position(|x| x.eq_ignore_ascii_case("KEYWORD"))
+                            .and_then(|i| w.get(i + 1));
                         let wanted = w.last().unwrap().to_lowercase();
                         let uids: Vec<String> = b
                             .letters
                             .iter()
-                            .filter(|l| {
-                                all || String::from_utf8_lossy(&l.raw)
-                                    .to_lowercase()
-                                    .contains(&wanted)
+                            .filter(|l| match keyword {
+                                Some(k) => l.has(k),
+                                None => {
+                                    all || String::from_utf8_lossy(&l.raw)
+                                        .to_lowercase()
+                                        .contains(&wanted)
+                                }
                             })
                             .map(|l| l.uid.to_string())
                             .collect();
@@ -349,6 +572,7 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                         let uid: u32 = w[0].parse().unwrap_or(0);
                         let dest = w.get(1).cloned().unwrap_or_default();
                         let src = selected.unwrap();
+                        let seq = boxes.tick();
                         if !boxes.iter().any(|b| b.name == dest) {
                             done = format!("{tag} NO no such folder\r\n");
                         } else if !boxes[src].letters.iter().any(|l| l.uid == uid) {
@@ -366,12 +590,14 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                             };
                             let new_uid = next_uid(&boxes);
                             let at = boxes.iter().position(|b| b.name == dest).unwrap();
-                            boxes[at].letters.push(Letter {
+                            boxes[at].push(Letter {
                                 uid: new_uid,
-                                flags: letter.flags,
-                                raw: letter.raw,
+                                modseq: seq,
+                                ..letter
                             });
-                            done = format!("{tag} OK [COPYUID 7 {uid} {new_uid}] moved\r\n");
+                            let validity = boxes[at].validity;
+                            done =
+                                format!("{tag} OK [COPYUID {validity} {uid} {new_uid}] moved\r\n");
                         }
                     }
                     "EXPUNGE" => {
@@ -379,12 +605,12 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                         let uids = set(words(args).first().map(String::as_str).unwrap_or(""));
                         let mut seqs = Vec::new();
                         for (i, letter) in b.letters.iter().enumerate() {
-                            if uids.contains(&letter.uid) && letter.flags.contains(&"\\Deleted") {
+                            if within(&uids, letter.uid) && letter.has("\\Deleted") {
                                 seqs.push(i + 1);
                             }
                         }
                         b.letters
-                            .retain(|l| !(uids.contains(&l.uid) && l.flags.contains(&"\\Deleted")));
+                            .retain(|l| !(within(&uids, l.uid) && l.has("\\Deleted")));
                         for seq in seqs.iter().rev() {
                             reply.extend(format!("* {seq} EXPUNGE\r\n").bytes());
                         }
@@ -397,11 +623,37 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                 if boxes.iter().any(|b| b.name == name) {
                     done = format!("{tag} NO exists\r\n");
                 } else {
-                    boxes.push(Mailbox {
-                        name,
-                        attributes: "\\HasNoChildren",
-                        letters: Vec::new(),
-                    });
+                    boxes.push(Mailbox::new(&name, "\\HasNoChildren", Vec::new()));
+                }
+            }
+            "RENAME" => {
+                let w = words(args);
+                let (from, to) = (w[0].clone(), w[1].clone());
+                if !boxes.iter().any(|b| b.name == from) {
+                    done = format!("{tag} NO no such folder\r\n");
+                } else {
+                    let under = format!("{from}/");
+                    for b in boxes.iter_mut() {
+                        if b.name == from {
+                            b.name = to.clone();
+                        } else if let Some(rest) = b.name.strip_prefix(&under) {
+                            b.name = format!("{to}/{rest}");
+                        }
+                    }
+                    // Gmail renames the label on every message it is on.
+                    if mode == Mode::Gmail {
+                        let seq = boxes.tick();
+                        for b in boxes.iter_mut() {
+                            for l in &mut b.letters {
+                                for label in &mut l.labels {
+                                    if *label == from {
+                                        *label = to.clone();
+                                        l.modseq = seq;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             "APPEND" => {
@@ -415,17 +667,13 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                 let mut tail = [0u8; 2];
                 let _ = lines.get_mut().read_exact(&mut tail);
                 let new_uid = next_uid(&boxes);
-                let flags: Vec<&'static str> = if args.contains("\\Seen") {
-                    vec!["\\Seen"]
+                let flags: &[&str] = if args.contains("\\Seen") {
+                    &["\\Seen"]
                 } else {
-                    Vec::new()
+                    &[]
                 };
                 match boxes.iter_mut().find(|b| b.name == name) {
-                    Some(b) => b.letters.push(Letter {
-                        uid: new_uid,
-                        flags,
-                        raw: body,
-                    }),
+                    Some(b) => b.push(Letter::new(new_uid, flags, body)),
                     None => done = format!("{tag} NO no such folder\r\n"),
                 }
                 if !done.starts_with(&format!("{tag} NO")) {
@@ -458,7 +706,12 @@ fn serve(tcp: TcpStream, shared: Boxes) {
                 continue;
             }
             "CAPABILITY" => {
-                reply.extend(b"* CAPABILITY IMAP4rev1 MOVE UIDPLUS\r\n");
+                let more = match mode {
+                    Mode::Folders => "",
+                    Mode::Keywords => " ENABLE CONDSTORE",
+                    Mode::Gmail => " ENABLE CONDSTORE X-GM-EXT-1",
+                };
+                reply.extend(format!("* CAPABILITY IMAP4rev1 MOVE UIDPLUS{more}\r\n").bytes());
             }
             "NOOP" => {}
             _ => done = format!("{tag} BAD unknown\r\n"),
@@ -473,9 +726,14 @@ fn serve(tcp: TcpStream, shared: Boxes) {
 
 /// A server on this machine, and an account on it.
 fn server() -> (Account, Boxes) {
+    serve_boxes(boxes())
+}
+
+/// A server on this machine with the mail `boxes` holds, and an account
+/// on it.
+fn serve_boxes(boxes: Boxes) -> (Account, Boxes) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let boxes = boxes();
     let shared = boxes.clone();
     std::thread::spawn(move || {
         for tcp in listener.incoming().flatten() {
@@ -614,6 +872,124 @@ fn unencrypted_accounts_are_for_this_machine_only() {
             .unwrap()
             .is_empty()
     );
+}
+
+// ---- what the map reads of a server ----
+
+/// A message in `folder` of the fake server, with `flags`, from a list.
+fn add_listed(boxes: &Boxes, folder: &str, flags: &[&str], subject: &str) -> u32 {
+    let mut fake = boxes.lock().unwrap();
+    let uid = next_uid(&fake);
+    let b = fake.iter_mut().find(|b| b.name == folder).unwrap();
+    b.push(Letter::new(
+        uid,
+        flags,
+        raw(
+            "GitHub <notifications@github.example>",
+            subject,
+            "Content-Type: text/plain; charset=utf-8\r\n\
+             List-Id: letterbox <letterbox.YPARK.github.example>\r\n",
+            "Merged into main.\r\n",
+        ),
+    ));
+    uid
+}
+
+#[test]
+fn a_keyword_server_says_its_folders_state_and_what_changed() {
+    let (account, boxes) = serve_boxes(boxes_in(Mode::Keywords));
+    let pr = add_listed(
+        &boxes,
+        "INBOX",
+        &["\\Seen", "Grant", "$Junk"],
+        "PR #38 merged",
+    );
+    let mut imap = Imap::new(account);
+    assert_eq!(imap.kind().unwrap(), crate::store::Kind::Keywords);
+    let status = imap.status("INBOX").unwrap();
+    assert_eq!(
+        (status.messages, status.validity, status.next),
+        (4, 7, pr + 1)
+    );
+    let since = status.modseq.expect("CONDSTORE");
+    assert_eq!(imap.uids("INBOX").unwrap(), [11, 12, 14, pr]);
+
+    let got = imap.fetch_index("INBOX", &[12, pr]).unwrap();
+    assert_eq!(got.iter().map(|i| i.uid).collect::<Vec<_>>(), [12, pr]);
+    let listed = got.iter().find(|i| i.uid == pr).unwrap();
+    assert!(listed.flags.seen);
+    assert_eq!(
+        listed.labels,
+        ["Grant"],
+        "keywords, but a mail program's own"
+    );
+    let record = crate::index::Record::of("me@127.0.0.1", "INBOX", 7, listed, 0);
+    assert_eq!(record.list, "letterbox.ypark.github.example");
+    assert_eq!(record.subject, "PR #38 merged");
+    assert_eq!(record.key.id, "id:<PR38merged@example>");
+
+    // A keyword given elsewhere is told by what changed since.
+    assert!(imap.changed("INBOX", Some(since), &[]).unwrap().is_empty());
+    {
+        let mut fake = boxes.lock().unwrap();
+        let seq = fake.tick();
+        let l = &mut fake[0].letters[1];
+        l.flags.push("Lab".into());
+        l.modseq = seq;
+    }
+    let changed = imap.changed("INBOX", Some(since), &[]).unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(
+        (changed[0].uid, changed[0].labels.clone()),
+        (12, vec!["Lab".to_string()])
+    );
+    assert!(changed[0].flags.flagged);
+    let said = boxes.lock().unwrap().said.join("\n");
+    assert!(said.contains("ENABLE CONDSTORE"), "{said}");
+    assert!(said.contains("CHANGEDSINCE"), "{said}");
+}
+
+#[test]
+fn a_server_of_folders_alone_is_read_by_its_flags() {
+    let (account, _) = server();
+    let mut imap = Imap::new(account);
+    assert_eq!(imap.kind().unwrap(), crate::store::Kind::Folders);
+    let status = imap.status("INBOX").unwrap();
+    assert_eq!((status.validity, status.next, status.modseq), (7, 15, None));
+    // No mod-sequences: the flags of the messages named are read instead.
+    let changed = imap.changed("INBOX", Some(3), &[11, 14]).unwrap();
+    let seen: Vec<(u32, bool)> = changed.iter().map(|c| (c.uid, c.flags.seen)).collect();
+    assert_eq!(seen, [(11, true), (14, false)]);
+}
+
+#[test]
+fn gmail_is_read_by_its_ids_and_labels_in_all_mail() {
+    let (account, _) = serve_boxes(gmail_boxes());
+    let mut imap = Imap::new(account);
+    assert_eq!(imap.kind().unwrap(), crate::store::Kind::Gmail);
+    let folders = imap.folders().unwrap();
+    let all: Vec<&str> = folders
+        .iter()
+        .filter(|f| f.all)
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(all, ["[Gmail]/All Mail"]);
+    let got = imap.fetch_index("[Gmail]/All Mail", &[21, 22, 23]).unwrap();
+    assert_eq!(got.len(), 3);
+    let aims = &got[0];
+    assert_eq!((aims.gmail, aims.thread), (Some(9021), Some(9021)));
+    assert_eq!(aims.labels, ["\\Inbox", "Projects/Grant"]);
+    let record = crate::index::Record::of("me@127.0.0.1", "[Gmail]/All Mail", 7, aims, 0);
+    assert_eq!(record.key.id, "gm:9021");
+}
+
+#[test]
+fn a_set_of_uids_is_written_in_runs() {
+    assert_eq!(crate::imap::uid_set(&[7, 1, 2, 3, 9, 10, 4]), "1:4,7,9:10");
+    assert_eq!(crate::imap::uid_set(&[5]), "5");
+    let (flags, keywords) = crate::imap::flags_named(["\\Seen", "Grant", "$Forwarded", "NonJunk"]);
+    assert!(flags.seen && !flags.flagged);
+    assert_eq!(keywords, ["Grant"]);
 }
 
 // ---- mail ----
