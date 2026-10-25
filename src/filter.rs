@@ -73,15 +73,24 @@ pub const SURE: f32 = 0.9;
 /// How sure it is to be, at least, to throw new mail away on its own: at
 /// 95%, graded on real mail, it would have thrown away none of 161 kept.
 pub const AUTO: f32 = 0.95;
+/// How much of each weight is kept a decision: what was learnt long ago,
+/// and not since, fades, by half in some 7,000 decisions, and no weight
+/// grows without end. Graded on real mail, stronger fading only lost what
+/// it caught.
+pub const DECAY: f32 = 0.9999;
 /// How far each step goes, and how many a decision takes.
 const RATE: f32 = 0.5;
 const STEPS: usize = 3;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Filter {
-    /// Each token's weight, by its FNV-1a hash.
-    weights: HashMap<u64, f32>,
+    /// Each token's weight, by its FNV-1a hash, and the decision it was
+    /// last changed at: it has faded by `decay` each decision since.
+    weights: HashMap<u64, (f32, u32)>,
     bias: f32,
+    /// How many decisions were learnt, and how much of a weight each keeps.
+    step: u32,
+    decay: f32,
     /// How many it was taught were thrown away, and kept.
     pub thrown: u32,
     pub kept: u32,
@@ -202,6 +211,12 @@ fn from_of(tokens: &[(String, f32)]) -> String {
         .to_string()
 }
 
+impl Default for Filter {
+    fn default() -> Self {
+        Filter::with_decay(DECAY)
+    }
+}
+
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
@@ -239,11 +254,33 @@ impl Filter {
         t
     }
 
+    /// A filter whose weights keep `decay` of themselves a decision.
+    pub fn with_decay(decay: f32) -> Filter {
+        Filter {
+            weights: HashMap::new(),
+            bias: 0.0,
+            step: 0,
+            decay,
+            thrown: 0,
+            kept: 0,
+            taught: Vec::new(),
+        }
+    }
+
+    /// The weight of the token hashed `b`, as it has faded till now.
+    fn weight_of(&self, b: u64) -> f32 {
+        self.weights.get(&b).map_or(0.0, |&(w, at)| {
+            w * self.decay.powi(self.step.saturating_sub(at) as i32)
+        })
+    }
+
+    /// The weight of `token`, as it has faded till now.
+    pub fn weight(&self, token: &str) -> f32 {
+        self.weight_of(fnv(token.as_bytes()))
+    }
+
     fn margin(&self, x: &[(u64, f32)]) -> f32 {
-        self.bias
-            + x.iter()
-                .map(|(b, v)| self.weights.get(b).copied().unwrap_or(0.0) * v)
-                .sum::<f32>()
+        self.bias + x.iter().map(|(b, v)| self.weight_of(*b) * v).sum::<f32>()
     }
 
     /// How likely mail read as `tokens` is to be thrown away.
@@ -269,11 +306,13 @@ impl Filter {
             thrown / kept
         }
         .clamp(0.2, 5.0);
+        self.step += 1;
         for _ in 0..STEPS {
             let g = (sigmoid(self.margin(&x)) - y) * weight * RATE;
             self.bias -= g * 0.1;
             for (b, v) in &x {
-                *self.weights.entry(*b).or_default() -= g * v;
+                let w = self.weight_of(*b) - g * v;
+                self.weights.insert(*b, (w, self.step));
             }
         }
         if t.thrown {
@@ -293,7 +332,12 @@ impl Filter {
     /// before it was learnt, by what was learnt before it alone, once that
     /// was enough to say anything.
     pub fn check(taught: &[Taught]) -> Vec<Said> {
-        let mut f = Filter::default();
+        Self::check_with(taught, DECAY)
+    }
+
+    /// As `check`, its weights keeping `decay` of themselves a decision.
+    pub fn check_with(taught: &[Taught], decay: f32) -> Vec<Said> {
+        let mut f = Filter::with_decay(decay);
         let mut said = Vec::new();
         for t in taught.iter().filter(|t| !t.auto) {
             if f.ready() {
@@ -316,7 +360,7 @@ impl Filter {
         let mut weighed: Vec<(&str, f32)> = tokens
             .iter()
             .zip(features(tokens))
-            .map(|((t, _), (b, v))| (t.as_str(), self.weights.get(&b).copied().unwrap_or(0.0) * v))
+            .map(|((t, _), (b, v))| (t.as_str(), self.weight_of(b) * v))
             .filter(|(_, c)| *c > 0.0)
             .collect();
         weighed.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));

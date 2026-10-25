@@ -7645,7 +7645,7 @@ fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
     assert_eq!(index.seed(seeds.clone()).unwrap(), n);
     // Again: nothing more.
     assert_eq!(index.seed(seeds).unwrap(), 0);
-    let said = crate::check(&index);
+    let said = crate::check(&index, crate::filter::DECAY);
     assert!(said.contains(&format!("{n} decisions")), "{said}");
     assert!(said.contains("read from the Trash"), "{said}");
     // Forgotten: only your own decisions are left.
@@ -8192,4 +8192,82 @@ fn filter_debrief_says_it_on_the_command_line() {
     assert!(said.contains("thrown away on its own: 1"), "{said}");
     assert!(said.contains("Last chance on the offer"), "{said}");
     assert!(said.contains("60 of your decisions"), "{said}");
+}
+
+// ---- what was learnt long ago fades ----
+
+fn decided(r: &index::Record, thrown: bool) -> crate::filter::Taught {
+    crate::filter::Taught {
+        key: r.key.clone(),
+        thrown,
+        tokens: crate::filter::Filter::tokens(r, &Default::default()),
+        message_id: r.message_id.clone(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_weight_grows_without_end() {
+    let deal = sent_by("x", "deals@shop.example", "Sale");
+    let note = sent_by("y", "ada@analytical.example", "Engine");
+    let weight = |decay: f32, n: usize| {
+        let mut f = crate::filter::Filter::with_decay(decay);
+        for _ in 0..n {
+            f.learn(decided(&deal, true));
+            f.learn(decided(&note, false));
+        }
+        f.weight("from:deals@shop.example")
+    };
+    // Unbounded, it goes on growing; bounded, it settles, in as many
+    // decisions as a weight takes to fade.
+    let d = crate::filter::DECAY;
+    let n = (1.0 / (1.0 - d)) as usize;
+    let (bounded, unbounded) = (
+        weight(d, 4 * n) - weight(d, 2 * n),
+        weight(1.0, 4 * n) - weight(1.0, 2 * n),
+    );
+    assert!(bounded.abs() < unbounded / 4.0, "{bounded} {unbounded}");
+    assert!(weight(d, 4 * n) > 0.0);
+}
+
+#[test]
+fn a_sender_not_heard_of_in_a_long_time_weighs_less() {
+    let deal = sent_by("x", "deals@shop.example", "Sale");
+    let note = sent_by("y", "ada@analytical.example", "Engine");
+    let after = |decay: f32| {
+        let mut f = crate::filter::Filter::with_decay(decay);
+        for _ in 0..30 {
+            f.learn(decided(&deal, true));
+            f.learn(decided(&note, false));
+        }
+        let early = f.weight("from:deals@shop.example");
+        // Many decisions since, none of them the shop's.
+        let n = (1.0 / (1.0 - crate::filter::DECAY)) as usize;
+        for k in 0..n {
+            f.learn(decided(
+                &sent_by(
+                    &format!("t{k}"),
+                    &format!("a{k}@x{k}.example"),
+                    &format!("w{k}"),
+                ),
+                true,
+            ));
+            f.learn(decided(
+                &sent_by(
+                    &format!("k{k}"),
+                    &format!("b{k}@y{k}.example"),
+                    &format!("v{k}"),
+                ),
+                false,
+            ));
+        }
+        f.weight("from:deals@shop.example") / early
+    };
+    assert!((after(1.0) - 1.0).abs() < 1e-6, "kept as it was, unfaded");
+    assert!(
+        after(crate::filter::DECAY) < 0.5,
+        "{}",
+        after(crate::filter::DECAY)
+    );
+    assert!(after(crate::filter::DECAY) > 0.0);
 }

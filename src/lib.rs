@@ -214,7 +214,11 @@ enum FilterAction {
     /// How it would have done: each decision said before it was learnt,
     /// from those before it alone; what it caught, and what you kept that
     /// it would have thrown away
-    Check,
+    Check {
+        /// How much of each weight is kept a decision, to try another
+        #[arg(long, hide = true)]
+        decay: Option<f32>,
+    },
     /// Learn from mail already in each account's Trash, thrown away
     /// unread, as thrown away, and filed under your labels, as kept, the
     /// newest of each; then check
@@ -577,10 +581,10 @@ fn debrief_text(index: &index::Index, since: i64) -> String {
 }
 
 /// How what was learnt would have done, as `letterbox filter check` says it.
-fn check(index: &index::Index) -> String {
+fn check(index: &index::Index, decay: f32) -> String {
     use std::fmt::Write;
     let taught = &index.filter.taught;
-    let said = filter::Filter::check(taught);
+    let said = filter::Filter::check_with(taught, decay);
     let mut out = String::new();
     let seeded = taught.iter().filter(|t| t.seeded).count();
     let _ = writeln!(
@@ -1020,7 +1024,11 @@ fn command(args: &Args) -> anyhow::Result<()> {
                     "{thrown} in the Trash and {kept} under your labels read; {learnt} not learnt before, learnt\n"
                 );
             }
-            print!("{}", check(&index));
+            let decay = match action {
+                FilterAction::Check { decay } => decay.unwrap_or(filter::DECAY),
+                _ => filter::DECAY,
+            };
+            print!("{}", check(&index, decay));
             Ok(())
         }
         Some(Command::Map {
