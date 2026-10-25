@@ -125,6 +125,8 @@ pub enum Answer {
     Mapping(String),
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
+    /// The map made again from the index; not a store's answer.
+    Drawn(Box<crate::map::Snapshot>),
 }
 
 pub struct Added {

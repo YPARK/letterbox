@@ -9,6 +9,7 @@ use crate::edit::{self, Done};
 use crate::index::{Index, sync};
 use crate::keymap::{self, Act};
 use crate::mail::{self, Attachment, Folder, Message, Role, Summary};
+use crate::map::{self, Focused, Map, Mode};
 use crate::oauth;
 use crate::secret::Keeper;
 use crate::setup;
@@ -71,6 +72,8 @@ pub struct Account {
     /// Its address, once the store has said it: the ledger's name for it,
     /// and what a message is sent from.
     pub email: String,
+    /// What its store is known by in the index.
+    pub ident: String,
     pub folders: Vec<Folder>,
     /// The folder `d` moves mail to, when the server marks none as Trash.
     /// Taken from the account when it joins, and kept in the accounts file.
@@ -90,6 +93,12 @@ pub enum Row {
     Account(usize),
     Folder(usize, usize),
     Add,
+    /// The map's heading, the map's every cluster, each cluster by its
+    /// number, and the messages that fit nowhere.
+    MapHead,
+    Map,
+    Cluster(u32),
+    Loners,
 }
 
 /// The fields of the form an account is added with, in their order; where
@@ -275,6 +284,10 @@ const TOGETHER: [Role; 3] = [Role::Inbox, Role::Sent, Role::Drafts];
 pub enum View {
     Folder(usize, String),
     All(Role),
+    /// The map's clusters, every one, or one; or what fits nowhere.
+    Map,
+    Cluster(u32),
+    Loners,
 }
 
 /// A folder's messages, as many as are listed, newest first as its server
@@ -319,6 +332,9 @@ fn cut(parts: &[Part]) -> Option<i64> {
 pub struct Listing {
     pub view: View,
     pub(crate) parts: Vec<Part>,
+    /// What the map lists, as its snapshot has it, in its order: not asked
+    /// of the servers, which keep no clusters.
+    pub(crate) fixed: Option<Vec<Listed>>,
 }
 
 impl Listing {
@@ -342,7 +358,7 @@ impl Listing {
     pub fn account(&self) -> Option<usize> {
         match self.view {
             View::Folder(a, _) => Some(a),
-            View::All(_) => None,
+            _ => None,
         }
     }
 
@@ -452,6 +468,10 @@ pub enum Target {
     Button(Button),
     /// A key's hint at the foot: clicked, as if it were pressed.
     Key(KeyEvent),
+    /// The map, where its messages are; and a cluster's anchor on it, by
+    /// the cluster's number.
+    Map,
+    Anchor(u32),
     /// An attachment or link in the list of them, by its place.
     Item(usize),
 }
@@ -746,6 +766,8 @@ pub struct App {
     syncs: Vec<Option<(Sender<sync::Ask>, Arc<AtomicBool>)>>,
     /// How far the map's sync has got, as it last said.
     pub mapping: String,
+    /// The map, as it is looked at.
+    pub map: Map,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -784,6 +806,9 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
         Ok(())
     })();
     give_back();
+    if app.map.mode == Mode::Map {
+        app.looked_now();
+    }
     let written = app.index.lock().unwrap_or_else(|e| e.into_inner()).flush();
     result.and(written)
 }
@@ -922,6 +947,7 @@ impl App {
             map_off,
             syncs: Vec::new(),
             mapping: String::new(),
+            map: Map::default(),
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -942,6 +968,7 @@ impl App {
     fn join(&mut self, name: String, store: Box<dyn Store>) -> usize {
         let a = self.accounts.len();
         let trash = store.trash().map(str::to_string);
+        let ident = store.ident();
         let twin = store.twin().filter(|_| self.map_off.is_none());
         let asks = worker::spawn(a, store, self.replies_to.clone());
         self.syncs.push(
@@ -950,6 +977,7 @@ impl App {
         self.accounts.push(Account {
             name,
             email: String::new(),
+            ident,
             folders: Vec::new(),
             trash,
             state: State::Connecting,
@@ -993,6 +1021,7 @@ impl App {
             self.take_reply(reply);
             any = true;
         }
+        self.map_due();
         any
     }
 
@@ -1005,6 +1034,7 @@ impl App {
             if let Some((_, due)) = self.due.take() {
                 self.run_due(due);
             }
+            self.map_due();
             if self.pending == 0 {
                 return;
             }
@@ -1035,7 +1065,8 @@ impl App {
 
     fn run_due(&mut self, due: Due) {
         match due {
-            Due::Folder => self.open_folder(),
+            Due::Folder => self.open_row(false),
+            Due::Message if self.map.mode == Mode::Map => self.read_dot(),
             Due::Message => self.read_picked(),
         }
     }
@@ -1066,6 +1097,9 @@ impl App {
         self.pending = self.pending.saturating_sub(1);
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
+        }
+        if let Answer::Drawn(snapshot) = reply.answer {
+            return self.drawn_map(*snapshot);
         }
         if let Answer::Fetched(got) = reply.answer {
             match got {
@@ -1147,6 +1181,7 @@ impl App {
             | Answer::Address(_)
             | Answer::Fetched(_)
             | Answer::Mapping(_)
+            | Answer::Drawn(_)
             | Answer::Realm { .. } => {}
             Answer::Mapped(passed) => {
                 self.mapping = match passed {
@@ -1357,6 +1392,15 @@ impl App {
         match self.listing.as_ref().map(|l| &l.view) {
             Some(View::All(role)) => format!("{}, all accounts", role.name()),
             Some(View::Folder(..)) => self.folder().map(|f| f.name.clone()).unwrap_or_default(),
+            Some(View::Map) => "Map, every cluster".to_string(),
+            Some(View::Cluster(id)) => self
+                .map
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.group(*id))
+                .map(|g| g.name())
+                .unwrap_or_else(|| "a cluster".to_string()),
+            Some(View::Loners) => "Fits nowhere".to_string(),
             None => String::new(),
         }
     }
@@ -1365,7 +1409,7 @@ impl App {
     pub fn folder(&self) -> Option<&Folder> {
         match &self.listing.as_ref()?.view {
             View::Folder(a, path) => self.folder_of(*a, path),
-            View::All(_) => None,
+            _ => None,
         }
     }
 
@@ -1427,15 +1471,18 @@ impl App {
             .and_then(|l| l.part_mut(account, folder))
         {
             l.messages.iter_mut().for_each(&mut set);
-            std::iter::once(&mut self.shown)
-                .chain(self.found.as_mut())
-                .flatten()
-                .filter(|m| m.account == account && m.folder == folder)
-                .for_each(|m| set(&mut m.summary));
         }
+        let fixed = self.listing.as_mut().and_then(|l| l.fixed.as_mut());
+        std::iter::once(&mut self.shown)
+            .chain(self.found.as_mut())
+            .chain(fixed)
+            .flatten()
+            .filter(|m| m.account == account && m.folder == folder)
+            .for_each(|m| set(&mut m.summary));
         if let Some((messages, _)) = self.listed.get_mut(&(account, folder.to_string())) {
             messages.iter_mut().for_each(&mut set);
         }
+        self.index_flag(account, folder, uid, flag, on);
         if changed
             && flag == Flag::Seen
             && let Some(f) = self.folder_mut(account, folder)
@@ -1461,6 +1508,17 @@ impl App {
             self.rows.push(Row::Account(a));
             self.rows
                 .extend((0..self.accounts[a].folders.len()).map(|i| Row::Folder(a, i)));
+        }
+        if let Some(s) = &self.map.snapshot
+            && !s.groups.is_empty()
+        {
+            self.rows.push(Row::MapHead);
+            self.rows.push(Row::Map);
+            self.rows
+                .extend(s.groups.iter().map(|g| Row::Cluster(g.id)));
+            if s.clustering.loner.iter().any(|&l| l) {
+                self.rows.push(Row::Loners);
+            }
         }
         if self.editable {
             self.rows.push(Row::Add);
@@ -1770,6 +1828,9 @@ impl App {
                 View::Folder(a, folder.path.clone())
             }
             Some(&Row::All(role)) => View::All(role),
+            Some(&Row::Map) => View::Map,
+            Some(&Row::Cluster(id)) => View::Cluster(id),
+            Some(&Row::Loners) => View::Loners,
             _ => return,
         };
         if self.listing.as_ref().is_some_and(|l| l.view == view) {
@@ -1784,6 +1845,7 @@ impl App {
         self.listing = Some(Listing {
             view: view.clone(),
             parts: Vec::new(),
+            fixed: None,
         });
         self.query.clear();
         self.found = None;
@@ -1796,11 +1858,106 @@ impl App {
         let folders = match view {
             View::Folder(a, path) => vec![(a, path)],
             View::All(role) => self.folders_of(role),
+            View::Map | View::Cluster(_) | View::Loners => {
+                self.list_map();
+                Vec::new()
+            }
         };
         for (a, path) in folders {
             self.list_part(a, path);
         }
         self.narrow();
+    }
+
+    /// Open what is picked in the sidebar. In the map, a cluster narrows
+    /// it, and a folder is listed in place of it, if `go` is; else as
+    /// `open_folder` does.
+    fn open_row(&mut self, go: bool) {
+        if self.map.mode == Mode::Map {
+            match self.rows.get(self.row).copied() {
+                Some(Row::Map) => return self.map.focused = Focused::All,
+                Some(Row::Cluster(id)) => return self.map.focused = Focused::Cluster(id),
+                Some(Row::Loners) => return self.map.focused = Focused::Loners,
+                Some(Row::Folder(..) | Row::All(_)) if go => {
+                    self.looked_now();
+                    self.map.mode = Mode::List;
+                }
+                _ => return,
+            }
+        }
+        self.open_folder();
+    }
+
+    /// What the map lists, if it is listed, as its snapshot now has it:
+    /// every cluster, its unread first, each under its anchor; one; or what
+    /// fits nowhere.
+    fn list_map(&mut self) {
+        let Some(view) = self.listing.as_ref().map(|l| l.view.clone()) else {
+            return;
+        };
+        let Some(s) = self.map.snapshot.clone() else {
+            if let Some(l) = &mut self.listing {
+                l.fixed = Some(Vec::new());
+            }
+            return;
+        };
+        let members: Vec<usize> = match view {
+            View::Map => s
+                .groups
+                .iter()
+                .flat_map(|g| {
+                    let mut m = g.members.clone();
+                    m.sort_by_key(|&i| (s.dots[i].flags.seen, std::cmp::Reverse(s.dots[i].date)));
+                    m
+                })
+                .collect(),
+            View::Cluster(id) => s.group(id).map(|g| g.members.clone()).unwrap_or_default(),
+            View::Loners => s.loners(),
+            _ => return,
+        };
+        let mut members = members;
+        if !matches!(view, View::Map) {
+            members.sort_by_key(|&i| std::cmp::Reverse(s.dots[i].date));
+        }
+        let listed: Vec<Listed> = members
+            .into_iter()
+            .filter_map(|i| self.listed_dot(&s.dots[i]))
+            .collect();
+        if let Some(l) = &mut self.listing {
+            l.fixed = Some(listed);
+        }
+    }
+
+    /// The account of the map's message, by its place, and the folder it is
+    /// in: the Inbox, if it is there.
+    fn place_of(&self, dot: &map::Dot) -> Option<(usize, String, u32)> {
+        let a = self
+            .live()
+            .find(|&a| self.accounts[a].ident == dot.key.account)?;
+        let place = dot
+            .places
+            .iter()
+            .find(|p| self.inbox(a) == p.folder)
+            .or_else(|| dot.places.first())?;
+        Some((a, place.folder.clone(), place.uid))
+    }
+
+    /// The map's message as the list has it.
+    fn listed_dot(&self, dot: &map::Dot) -> Option<Listed> {
+        let (a, folder, uid) = self.place_of(dot)?;
+        let summary = Summary {
+            uid,
+            from: dot.from.clone(),
+            address: dot.address.clone(),
+            to: String::new(),
+            subject: dot.subject.clone(),
+            date: dot.date,
+            flags: dot.flags,
+            preview: dot.preview.clone(),
+            size: dot.size,
+            message_id: dot.message_id.clone(),
+        };
+        Some(Listed::new(a, &folder, summary))
     }
 
     /// List one account's folder in what is listed, as it was if it was
@@ -1917,6 +2074,22 @@ impl App {
             .collect();
         self.shown = match (&self.found, &self.listing) {
             (Some(found), _) if !words.is_empty() => found.clone(),
+            (
+                _,
+                Some(Listing {
+                    fixed: Some(fixed), ..
+                }),
+            ) => fixed
+                .iter()
+                .filter(|m| {
+                    words.is_empty() || {
+                        let text = format!("{} {} {} {}", m.from, m.address, m.subject, m.preview)
+                            .to_lowercase();
+                        words.iter().all(|w| text.contains(w.as_str()))
+                    }
+                })
+                .cloned()
+                .collect(),
             (_, Some(l)) => merged(&l.parts)
                 .into_iter()
                 .filter(|(_, m)| {
@@ -2080,6 +2253,9 @@ impl App {
 
     /// Do what a key in the table does, where the focus is.
     fn act(&mut self, act: Act) {
+        if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
+            return;
+        }
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
             Act::Quit => self.quit = true,
@@ -2119,7 +2295,7 @@ impl App {
             }
             Act::Right => match self.focus {
                 Focus::Side => {
-                    self.open_folder();
+                    self.open_row(true);
                     self.focus = Focus::List;
                 }
                 _ => {
@@ -2133,7 +2309,7 @@ impl App {
                 Focus::Side if self.rows.get(self.row) == Some(&Row::Add) => self.open_form(),
                 Focus::Side => {
                     self.due = None;
-                    self.open_folder();
+                    self.open_row(true);
                     self.focus = Focus::List;
                 }
                 _ => {
@@ -2162,7 +2338,43 @@ impl App {
             Act::PreviousMessage => self.next(-1),
             Act::Seen => self.toggle(Flag::Seen),
             Act::Flag => self.toggle(Flag::Flagged),
-            Act::ReplyHint => {
+            Act::ShowRead if self.map.mode == Mode::Map => {
+                self.map.hide_read = !self.map.hide_read;
+                self.status = if self.map.hide_read {
+                    "read mail hidden: r shows it".to_string()
+                } else {
+                    "read mail shown".to_string()
+                };
+            }
+            Act::MapView => self.show_map(),
+            Act::ListView => self.show_list(),
+            Act::PreviousCluster => self.map.cycle(-1),
+            Act::NextCluster => self.map.cycle(1),
+            Act::Lens => {
+                self.map.lens = match self.map.lens {
+                    crate::index::Lens::Both => crate::index::Lens::Words,
+                    crate::index::Lens::Words => crate::index::Lens::People,
+                    crate::index::Lens::People => crate::index::Lens::Both,
+                };
+                self.status = format!("the map laid out by {}", self.map.lens.name());
+            }
+            Act::Since => {
+                self.map.since = self.map.since.next();
+                self.status = format!("the map of {}", self.map.since.name());
+            }
+            Act::Colours => {
+                self.map.colour = self.map.colour.next();
+                self.status = self.map.colour.explain().to_string();
+            }
+            Act::NewOnly => {
+                self.map.new_only = !self.map.new_only;
+                self.status = if self.map.new_only {
+                    "areas with nothing new dimmed".to_string()
+                } else {
+                    "every area as bright as it is".to_string()
+                };
+            }
+            Act::ShowRead => {
                 let say = |act| keymap::keys_for(act).join(" or ");
                 self.status = format!(
                     "reply is {}, to all {}; {} looks for new mail",
@@ -2347,7 +2559,15 @@ impl App {
                         break;
                     }
                     at = next;
-                    if matches!(self.rows[at], Row::All(_) | Row::Folder(..) | Row::Add) {
+                    if matches!(
+                        self.rows[at],
+                        Row::All(_)
+                            | Row::Folder(..)
+                            | Row::Add
+                            | Row::Map
+                            | Row::Cluster(_)
+                            | Row::Loners
+                    ) {
                         self.row = at;
                         break;
                     }
@@ -2428,7 +2648,12 @@ impl App {
             .find(|(r, _)| r.contains(Position::new(m.column, m.row)))
             .map(|&(_, t)| t);
         let by = match m.kind {
-            MouseEventKind::Down(MouseButton::Left) => return self.click(at),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if at == Some(Target::Map) && !self.dialog.is_open() {
+                    return self.map_click(m.column, m.row);
+                }
+                return self.click(at);
+            }
             MouseEventKind::ScrollDown => 1,
             MouseEventKind::ScrollUp => -1,
             _ => return,
@@ -2465,13 +2690,17 @@ impl App {
             }
             Some(Target::Row(i)) => {
                 self.focus = Focus::Side;
-                if matches!(self.rows.get(i), Some(Row::Folder(..) | Row::All(_))) {
+                if matches!(
+                    self.rows.get(i),
+                    Some(Row::Folder(..) | Row::All(_) | Row::Map | Row::Cluster(_) | Row::Loners)
+                ) {
                     self.row = i;
-                    self.open_folder();
+                    self.open_row(true);
                     self.focus = Focus::List;
                 }
             }
             Some(Target::List) => self.focus = Focus::List,
+            Some(Target::Anchor(id)) => self.anchor_click(id),
             Some(Target::Message(i)) => {
                 self.focus = Focus::List;
                 self.list.select(Some(i));
@@ -3091,6 +3320,330 @@ impl App {
         self.compose.as_mut().expect("open").sending = true;
         self.status = "sending…".to_string();
         self.ask(account, Ask::Send { raw, answer });
+    }
+}
+
+// ---- the map ----
+
+impl App {
+    /// Do what a key does in the map, with the focus on it; whether it
+    /// was the map's to do.
+    fn map_act(&mut self, act: Act) -> bool {
+        match act {
+            Act::Down => self.map_step(0, 1),
+            Act::Up => self.map_step(0, -1),
+            Act::Left => self.map_step(-1, 0),
+            Act::Right => self.map_step(1, 0),
+            Act::Open => self.read_dot(),
+            Act::Seen => self.dot_flag(Flag::Seen),
+            Act::Flag => self.dot_flag(Flag::Flagged),
+            Act::Trash => self.delete_dot(),
+            Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,
+            Act::Back
+            | Act::Top
+            | Act::End
+            | Act::PageDown
+            | Act::PageUp
+            | Act::ScreenDown
+            | Act::ScreenUp
+            | Act::NextMessage
+            | Act::PreviousMessage => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// Move the map's cursor that way, and read what it picks once moving
+    /// pauses, where the message read is beside the map.
+    fn map_step(&mut self, dx: i32, dy: i32) {
+        self.map.step(dx, dy);
+        if self.side_by_side {
+            self.due = Some((Instant::now(), Due::Message));
+        }
+    }
+
+    /// Show the map in the middle pane, mail new since it was last looked
+    /// at marked.
+    fn show_map(&mut self) {
+        if let Some(why) = &self.map_off {
+            self.status = format!("no map: {why}");
+            return;
+        }
+        if self.map.mode != Mode::Map {
+            let looked = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .keep
+                .looked;
+            self.map.looked = (looked != 0).then_some(looked);
+        }
+        self.map.mode = Mode::Map;
+        self.searching = false;
+        self.focus = Focus::List;
+        self.map.pick_first(jiff::Timestamp::now().as_second());
+        self.map_due();
+    }
+
+    /// Show the list again; the map was looked at until now.
+    fn show_list(&mut self) {
+        if self.map.mode == Mode::Map {
+            self.looked_now();
+        }
+        self.map.mode = Mode::List;
+        if self.focus == Focus::Reader && !self.side_by_side {
+            self.focus = Focus::List;
+        }
+        if matches!(
+            self.rows.get(self.row),
+            Some(Row::Map | Row::Cluster(_) | Row::Loners)
+        ) {
+            self.open_folder();
+        }
+    }
+
+    /// Write down that the map was looked at now: what comes after is new.
+    fn looked_now(&mut self) {
+        let at = jiff::Timestamp::now().as_second();
+        let kept = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(vec![crate::index::Kept::Looked { at }]);
+        if let Err(e) = kept {
+            self.status = format!("the map cannot keep when it was looked at: {e:#}");
+        }
+        self.map.looked = None;
+    }
+
+    /// The message picked on the map.
+    fn dot(&self) -> Option<map::Dot> {
+        let s = self.map.snapshot.as_ref()?;
+        Some(s.dots[self.map.picked()?].clone())
+    }
+
+    /// Read the message picked on the map.
+    fn read_dot(&mut self) {
+        let Some(dot) = self.dot() else {
+            self.status = "no message picked: the arrows or hjkl pick one".to_string();
+            return;
+        };
+        let Some((a, folder, uid)) = self.place_of(&dot) else {
+            self.status = "that message is on no account here".to_string();
+            return;
+        };
+        self.due = None;
+        self.scroll = 0;
+        let mark = self.mark_read && !dot.flags.seen;
+        let body = match self.read.get(&(a, folder.clone(), uid)) {
+            Some(m) => {
+                if mark {
+                    self.marked(a, &folder, uid, Flag::Seen, true);
+                    self.ask(
+                        a,
+                        Ask::Set {
+                            folder: folder.clone(),
+                            uid,
+                            flag: Flag::Seen,
+                            on: true,
+                        },
+                    );
+                }
+                Body::Ready(m)
+            }
+            None => {
+                self.ask(
+                    a,
+                    Ask::Open {
+                        folder: folder.clone(),
+                        uid,
+                        mark,
+                    },
+                );
+                Body::Loading
+            }
+        };
+        self.reading = Some(Reading {
+            account: a,
+            folder,
+            uid,
+            body,
+        });
+        if !self.side_by_side {
+            self.focus = Focus::Reader;
+        }
+    }
+
+    /// Mark the message picked on the map, or not, as `flag` says.
+    fn dot_flag(&mut self, flag: Flag) {
+        let Some(dot) = self.dot() else {
+            return;
+        };
+        let Some((a, folder, uid)) = self.place_of(&dot) else {
+            return;
+        };
+        let on = match flag {
+            Flag::Seen => !dot.flags.seen,
+            Flag::Flagged => !dot.flags.flagged,
+            Flag::Answered => !dot.flags.answered,
+        };
+        self.marked(a, &folder, uid, flag, on);
+        self.ask(
+            a,
+            Ask::Set {
+                folder,
+                uid,
+                flag,
+                on,
+            },
+        );
+    }
+
+    /// Move the message picked on the map to Trash.
+    fn delete_dot(&mut self) {
+        let Some(dot) = self.dot() else {
+            return;
+        };
+        let Some(listed) = self.listed_dot(&dot) else {
+            return;
+        };
+        let (a, folder, summary) = (listed.account, listed.folder, listed.summary);
+        match self.trash_of(a) {
+            Some(trash) => self.move_to_trash(a, folder, summary.uid, summary.message_id, trash),
+            None => self.ask_which_trash(a, folder, summary),
+        }
+    }
+
+    /// Show a message marked, or not, on the map too: in the index, as its
+    /// server will say at the next pass.
+    fn index_flag(&mut self, account: usize, folder: &str, uid: u32, flag: Flag, on: bool) {
+        let Some(ident) = self.accounts.get(account).map(|a| a.ident.clone()) else {
+            return;
+        };
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        let found = index
+            .records
+            .values()
+            .find(|r| r.key.account == ident && r.place(folder).is_some_and(|p| p.uid == uid))
+            .map(|r| (r.key.clone(), r.flags));
+        if let Some((key, mut flags)) = found {
+            match flag {
+                Flag::Seen => flags.seen = on,
+                Flag::Flagged => flags.flagged = on,
+                Flag::Answered => flags.answered = on,
+            }
+            let _ = index.cache(vec![crate::index::Cached::Flags { key, flags }]);
+        }
+    }
+
+    /// Make the map's snapshot again, off this thread, if the index has
+    /// changed since, or the map is to be laid out and never was.
+    fn map_due(&mut self) {
+        if self.map.computing || self.map_off.is_some() {
+            return;
+        }
+        let layout = self.map.mode == Mode::Map;
+        let shared = self.index.clone();
+        let index = shared.lock().unwrap_or_else(|e| e.into_inner());
+        let stale = match &self.map.snapshot {
+            None => layout || !index.records.is_empty(),
+            Some(s) => {
+                s.version != index.version || s.lens != self.map.lens || (layout && s.at.is_none())
+            }
+        };
+        if !stale {
+            return;
+        }
+        let input = map::input(&index, self.map.lens, self.map.snapshot.as_deref(), layout);
+        drop(index);
+        self.map.computing = true;
+        self.pending += 1;
+        let replies = self.replies_to.clone();
+        std::thread::spawn(move || {
+            let snapshot = map::compute(input);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Drawn(Box::new(snapshot)),
+            });
+        });
+    }
+
+    /// Take the map's new snapshot: keep a layout made for it, keep the
+    /// message picked if it is still there, and list again what the map
+    /// lists.
+    fn drawn_map(&mut self, snapshot: map::Snapshot) {
+        self.map.computing = false;
+        if let Some(fresh) = &snapshot.fresh {
+            let kept = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .keep(vec![crate::index::Kept::Layout {
+                    lens: snapshot.lens,
+                    at: fresh.clone(),
+                }]);
+            if let Err(e) = kept {
+                self.status = format!("the map cannot keep its layout: {e:#}");
+            }
+        }
+        if self
+            .map
+            .cursor
+            .as_ref()
+            .is_some_and(|k| snapshot.find(k).is_none())
+        {
+            self.map.cursor = None;
+        }
+        if let Focused::Cluster(id) = self.map.focused
+            && snapshot.group(id).is_none()
+        {
+            self.map.focused = Focused::All;
+        }
+        self.map.snapshot = Some(Arc::new(snapshot));
+        if self.map.mode == Mode::Map {
+            self.map.pick_first(jiff::Timestamp::now().as_second());
+        }
+        self.rebuild();
+        if self
+            .listing
+            .as_ref()
+            .is_some_and(|l| matches!(l.view, View::Map | View::Cluster(_) | View::Loners))
+        {
+            self.list_map();
+            self.narrow();
+        }
+        self.map_due();
+    }
+
+    /// Pick what is drawn in the map's cell at `column`, `row`: its
+    /// message, or, clicked again, the next of those in it.
+    fn map_click(&mut self, column: u16, row: u16) {
+        self.focus = Focus::List;
+        let Some(members) = self.map.drawn.get(&(column, row)).cloned() else {
+            return;
+        };
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let next = match self.map.clicked {
+            Some((cell, at)) if cell == (column, row) => (at + 1) % members.len(),
+            _ => 0,
+        };
+        self.map.clicked = Some(((column, row), next));
+        self.map.cursor = Some(s.dots[members[next]].key.clone());
+        if self.side_by_side {
+            self.read_dot();
+        }
+    }
+
+    /// Narrow the map to the cluster of the anchor clicked; again, to all.
+    fn anchor_click(&mut self, id: u32) {
+        self.focus = Focus::List;
+        self.map.focused = if self.map.focused == Focused::Cluster(id) {
+            Focused::All
+        } else {
+            Focused::Cluster(id)
+        };
     }
 }
 

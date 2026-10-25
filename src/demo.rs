@@ -564,6 +564,14 @@ impl Demo {
         }
     }
 
+    /// The demo known by `ident` in the index, as a second account of it
+    /// is in tests.
+    #[cfg(test)]
+    pub fn called(mut self, ident: &str) -> Self {
+        self.ident = ident.to_string();
+        self
+    }
+
     fn mail(&self) -> MutexGuard<'_, Mail> {
         self.mail.lock().unwrap_or_else(|e| e.into_inner())
     }

@@ -118,4 +118,70 @@ impl Theme {
             },
         }
     }
+
+    /// The page's colour, as a colour: `dark`'s, the terminal's own, as
+    /// the near-black it is taken to be.
+    pub fn ground(&self) -> Color {
+        match self.page {
+            Color::Reset => {
+                let (r, g, b) = TERMINAL_DARK;
+                Color::Rgb(r, g, b)
+            }
+            c => c,
+        }
+    }
+
+    fn is_dark(&self) -> bool {
+        self.page == Color::Reset
+    }
+
+    /// A hue on the map, in degrees, as a colour that reads on the page:
+    /// each the same lightness and strength in OKLCH, so that no hue
+    /// stands out but by itself; lighter on the dark page than the light.
+    pub fn hue(&self, degrees: f32) -> Color {
+        let (l, c) = if self.is_dark() {
+            (0.80, 0.11)
+        } else {
+            (0.50, 0.12)
+        };
+        oklch(l, c, degrees)
+    }
+}
+
+/// `a` and `b` mixed, `t` of the way from `a` to `b`.
+pub fn mix(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let t = t.clamp(0.0, 1.0);
+            let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+            Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
+        }
+        _ if t < 0.5 => a,
+        _ => b,
+    }
+}
+
+/// A colour in OKLCH, Björn Ottosson's, as sRGB: lightness `l`, chroma `c`,
+/// hue `h` in degrees.
+fn oklch(l: f32, c: f32, h: f32) -> Color {
+    let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let (l3, m3, s3) = (l_.powi(3), m_.powi(3), s_.powi(3));
+    let linear = [
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    ];
+    let encode = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        let v = if x <= 0.003_130_8 {
+            12.92 * x
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
+        (v * 255.0).round() as u8
+    };
+    Color::Rgb(encode(linear[0]), encode(linear[1]), encode(linear[2]))
 }

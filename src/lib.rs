@@ -10,13 +10,13 @@ mod edit;
 // Labels are written by the map, which follows.
 #[allow(dead_code)]
 mod imap;
-// What the map is to read is written before the map that reads it.
 #[allow(dead_code)]
 mod index;
 mod keymap;
 mod mail;
+mod map;
 mod mcp;
-// Drawn on the map, which follows.
+// Filing and laying out again, which use the rest, follow.
 #[allow(dead_code)]
 mod model;
 mod net;

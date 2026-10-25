@@ -45,8 +45,21 @@ pub enum Act {
     Remove,
     Help,
     Quit,
-    /// `r`, which replies in other mail programs: says which keys do.
-    ReplyHint,
+    /// `r`: in the map, read mail shown or hidden; elsewhere, as it replies
+    /// in other mail programs, says which keys do.
+    ShowRead,
+    /// The map, or the list, in the middle pane.
+    MapView,
+    ListView,
+    PreviousCluster,
+    NextCluster,
+    /// The map laid out by another lens, back as far as another time, or
+    /// coloured another way.
+    Lens,
+    Since,
+    Colours,
+    /// The areas with nothing new dimmed, or not.
+    NewOnly,
 }
 
 /// Where the foot's hints are for.
@@ -59,6 +72,8 @@ pub enum Pane {
     Writing,
     /// Asking which folder is Trash.
     Picking,
+    /// The map, in the middle pane.
+    Map,
 }
 
 pub struct Binding {
@@ -78,22 +93,27 @@ pub struct Binding {
 }
 
 use Act::*;
-use Pane::{List, Picking, Reader, Side, Writing};
+use Pane::{List, Map, Picking, Reader, Side, Writing};
 
 pub const KEYS: &[Binding] = &[
     Binding {
         keys: &[("enter", Open)],
         name: "enter",
         hint: "⏎",
-        foot: &[(Side, "open"), (List, "read"), (Picking, "this folder")],
+        foot: &[
+            (Side, "open"),
+            (List, "read"),
+            (Picking, "this folder"),
+            (Map, "read"),
+        ],
         help: "open the folder, or read the message",
     },
     Binding {
         keys: &[("j", Down), ("down", Down), ("k", Up), ("up", Up)],
         name: "j k",
         hint: "j/k",
-        foot: &[(Side, "move"), (Picking, "move")],
-        help: "move; in a message, scroll; the arrows too",
+        foot: &[(Side, "move"), (Picking, "move"), (Map, "move")],
+        help: "move; in a message, scroll; in the map, to the nearest message that way, as h and l; the arrows too",
     },
     Binding {
         keys: &[
@@ -107,7 +127,7 @@ pub const KEYS: &[Binding] = &[
         name: "h l tab",
         hint: "",
         foot: &[],
-        help: "move between folders, messages and the message read",
+        help: "move between folders, messages and the message read; tab and S-tab in the map",
     },
     Binding {
         keys: &[
@@ -139,7 +159,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("d", Trash)],
         name: "d",
         hint: "d",
-        foot: &[(List, "trash"), (Reader, "trash")],
+        foot: &[(List, "trash"), (Reader, "trash"), (Map, "trash")],
         help: "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
     },
     Binding {
@@ -181,14 +201,18 @@ pub const KEYS: &[Binding] = &[
         keys: &[("u", Seen)],
         name: "u",
         hint: "u",
-        foot: &[(List, "read/unread"), (Reader, "unread")],
+        foot: &[
+            (List, "read/unread"),
+            (Reader, "unread"),
+            (Map, "read/unread"),
+        ],
         help: "mark read, or unread",
     },
     Binding {
         keys: &[("s", Flag)],
         name: "s",
         hint: "s",
-        foot: &[(List, "flag"), (Reader, "flag")],
+        foot: &[(List, "flag"), (Reader, "flag"), (Map, "flag")],
         help: "flag, or unflag",
     },
     Binding {
@@ -247,12 +271,62 @@ pub const KEYS: &[Binding] = &[
         foot: &[(Side, "new mail"), (List, "new mail")],
         help: "look for new mail now; it is looked for every two minutes",
     },
+    // The map.
     Binding {
-        keys: &[("r", ReplyHint)],
+        keys: &[("M-g", MapView)],
+        name: "M-g",
+        hint: "M-g",
+        foot: &[(Side, "map"), (List, "map")],
+        help: "the map: every account's mail laid out by what it is about and who it is from",
+    },
+    Binding {
+        keys: &[("M-l", ListView)],
+        name: "M-l",
+        hint: "M-l",
+        foot: &[(Map, "list")],
+        help: "back to the list, of what the sidebar picks: a folder, a label, a cluster, or the map's every cluster",
+    },
+    Binding {
+        keys: &[("[", PreviousCluster), ("]", NextCluster)],
+        name: "[ ]",
+        hint: "[/]",
+        foot: &[(Map, "cluster")],
+        help: "in the map, narrow to the cluster before, or after",
+    },
+    Binding {
+        keys: &[("w", Lens)],
+        name: "w",
+        hint: "w",
+        foot: &[(Map, "lens")],
+        help: "in the map, lay it out by words and people, by words alone, or by people alone",
+    },
+    Binding {
+        keys: &[("t", Since)],
+        name: "t",
+        hint: "t",
+        foot: &[(Map, "since")],
+        help: "in the map, all of it, this week's, or today's",
+    },
+    Binding {
+        keys: &[("C", Colours)],
+        name: "C",
+        hint: "C",
+        foot: &[(Map, "colour")],
+        help: "in the map, colour by what it is about, by how near the message picked, or by its state",
+    },
+    Binding {
+        keys: &[("r", ShowRead)],
         name: "r",
-        hint: "",
-        foot: &[],
-        help: "",
+        hint: "r",
+        foot: &[(Map, "read")],
+        help: "in the map, show or hide read mail; elsewhere, say which keys reply",
+    },
+    Binding {
+        keys: &[("!", NewOnly)],
+        name: "!",
+        hint: "!",
+        foot: &[(Map, "new")],
+        help: "in the map, dim the areas with nothing new: new is come since the map was last looked at, and still in the Inbox",
     },
     // The message being written: edit's keys.
     Binding {
@@ -308,14 +382,24 @@ pub const KEYS: &[Binding] = &[
         keys: &[("?", Help)],
         name: "?",
         hint: "?",
-        foot: &[(Side, "help"), (List, "help"), (Reader, "help")],
+        foot: &[
+            (Side, "help"),
+            (List, "help"),
+            (Reader, "help"),
+            (Map, "help"),
+        ],
         help: "all the keys",
     },
     Binding {
         keys: &[("q", Quit)],
         name: "q",
         hint: "q",
-        foot: &[(Side, "quit"), (List, "quit"), (Reader, "quit")],
+        foot: &[
+            (Side, "quit"),
+            (List, "quit"),
+            (Reader, "quit"),
+            (Map, "quit"),
+        ],
         help: "quit",
     },
 ];

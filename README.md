@@ -132,6 +132,14 @@ letterbox search grant report --account Work
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed |
 | `D` | remove the account picked in the sidebar, or the one listed |
+| `M-g` | the map: every account's mail laid out by what it is about and who it is from |
+| `M-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
+| `[` / `]` | in the map, narrow to the cluster before, or after |
+| `w` | in the map, lay it out by words and people, words alone, or people alone |
+| `t` | in the map, all of it, this week's, or today's |
+| `C` | in the map, colour by what it is about, by how near the message picked, or by its state |
+| `r` | in the map, show or hide read mail; elsewhere, say which keys reply |
+| `!` | in the map, dim the areas with nothing new |
 | `?` | all the keys |
 | `q` | quit |
 

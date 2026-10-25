@@ -55,6 +55,18 @@ pub fn panes(width: u16, focus: Focus) -> [u16; 3] {
     }
 }
 
+/// The panes' widths with the map in the middle: as `panes`, but the map
+/// wider than a list, as wide as the message read where there is room.
+pub fn map_panes(width: u16, focus: Focus) -> [u16; 3] {
+    match panes(width, focus) {
+        [side, list, read] if list > 0 && read > 0 => {
+            let map = ((list + read) / 2).max(list);
+            [side, map, list + read - map]
+        }
+        other => other,
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let t = app.theme;
     app.targets.clear();
@@ -76,6 +88,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         } else {
             [0, 0, main.width]
         }
+    } else if app.map.mode == crate::map::Mode::Map {
+        map_panes(main.width, app.focus)
     } else {
         panes(main.width, app.focus)
     };
@@ -91,7 +105,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         sidebar(f, app, side);
     }
     if list_w > 0 {
-        messages(f, app, list);
+        if app.map.mode == crate::map::Mode::Map {
+            map_pane(f, app, list);
+        } else {
+            messages(f, app, list);
+        }
     }
     if read_w > 0 {
         if app.compose.is_some() {
@@ -714,6 +732,7 @@ fn search(f: &mut Frame, app: &mut App, area: Rect) {
             let unseen = match l.view {
                 View::All(role) => app.unseen_of(role),
                 View::Folder(..) => app.folder().and_then(|f| f.unseen),
+                _ => Some(app.shown.iter().filter(|m| !m.flags.seen).count() as u32),
             };
             let unseen = unseen
                 .filter(|&n| n > 0)
@@ -827,6 +846,63 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled("Add account", Style::new().fg(t.dim)),
                 ]),
             ]),
+            Row::MapHead => {
+                let mut spans = vec![Span::styled(
+                    " MAP",
+                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
+                )];
+                if app.map.computing {
+                    spans.push(Span::styled(" drawing…", Style::new().fg(t.faint)));
+                }
+                ListItem::new(vec![Line::raw(""), Line::from(spans)])
+            }
+            Row::Map => {
+                let unread = app
+                    .map
+                    .snapshot
+                    .as_ref()
+                    .map_or(0, |s| s.groups.iter().map(|g| g.unread).sum());
+                map_row(
+                    t,
+                    width,
+                    Span::styled("▦ ", Style::new().fg(t.faint)),
+                    "Every cluster",
+                    unread,
+                    matches!(listed, Some(View::Map)),
+                )
+            }
+            Row::Cluster(id) => match app.map.snapshot.as_ref().and_then(|s| s.group(id)) {
+                Some(g) => map_row(
+                    t,
+                    width,
+                    Span::styled(
+                        if g.label.is_some() { "◆ " } else { "◇ " },
+                        Style::new().fg(t.hue(g.hue)),
+                    ),
+                    &g.name(),
+                    g.unread,
+                    matches!(listed, Some(View::Cluster(x)) if *x == id)
+                        || app.map.mode == crate::map::Mode::Map
+                            && app.map.focused == crate::map::Focused::Cluster(id),
+                ),
+                None => ListItem::new(Line::raw("")),
+            },
+            Row::Loners => {
+                let n = app.map.snapshot.as_ref().map_or(0, |s| {
+                    s.loners()
+                        .iter()
+                        .filter(|&&i| !s.dots[i].flags.seen)
+                        .count()
+                });
+                map_row(
+                    t,
+                    width,
+                    Span::styled("○ ", Style::new().fg(t.faint)),
+                    "Fits nowhere",
+                    n,
+                    matches!(listed, Some(View::Loners)),
+                )
+            }
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(app.row));
@@ -847,7 +923,7 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|r| {
-            if matches!(r, Row::Everyone | Row::Account(_) | Row::Add) {
+            if matches!(r, Row::Everyone | Row::Account(_) | Row::Add | Row::MapHead) {
                 2
             } else {
                 1
@@ -857,6 +933,38 @@ fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     for (i, row) in rows(area, state.offset(), &heights) {
         app.targets.push((row, Target::Row(i)));
     }
+}
+
+/// A row of the map's in the sidebar: its icon, its name, and how many of
+/// its messages are not read.
+fn map_row(
+    t: Theme,
+    width: usize,
+    icon: Span<'static>,
+    name: &str,
+    unread: usize,
+    open: bool,
+) -> ListItem<'static> {
+    let count = if unread > 0 {
+        unread.to_string()
+    } else {
+        String::new()
+    };
+    let room = width.saturating_sub(2 + 2 + count.len() + 2);
+    let name = clip(name, room);
+    let pad = room.saturating_sub(name.width());
+    let style = if open {
+        Style::new().fg(t.title).bold()
+    } else {
+        Style::new().fg(t.soft)
+    };
+    ListItem::new(Line::from(vec![
+        Span::raw("  "),
+        icon,
+        Span::styled(name, style),
+        Span::raw(" ".repeat(pad + 1)),
+        Span::styled(count, Style::new().fg(t.dim).bold()),
+    ]))
 }
 
 /// A folder's row in the sidebar: indented `depth` steps, its role's icon,
@@ -1017,6 +1125,318 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// The map, in the list's place: a legend above, each message a cell, the
+/// clusters' anchors, the message picked named beside it, and what the
+/// colour says below.
+fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
+    use crate::map::{Colour, Focused};
+    let t = app.theme;
+    f.render_widget(Block::new().style(Style::new().bg(t.page)), area);
+    app.targets.push((area, Target::List));
+    app.map.cells.clear();
+    app.map.drawn.clear();
+    app.map.anchors.clear();
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let dim = Style::new().fg(t.dim);
+    let foot_h = u16::from(area.height >= 4);
+    let [legend, canvas, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(foot_h),
+    ])
+    .areas(area);
+    let say = |f: &mut Frame, what: &str| {
+        f.render_widget(
+            Paragraph::new(vec![Line::raw(""), Line::styled(format!("  {what}"), dim)])
+                .wrap(ratatui::widgets::Wrap { trim: false }),
+            canvas,
+        );
+    };
+    let now = Timestamp::now().as_second();
+    let Some(s) = app.map.snapshot.clone() else {
+        f.render_widget(
+            Paragraph::new(Span::styled(" Map", dim.add_modifier(Modifier::BOLD))),
+            legend,
+        );
+        let why = match &app.map_off {
+            Some(why) => format!("No map: {why}."),
+            None if !app.mapping.is_empty() => app.mapping.clone(),
+            None => "mapping…".to_string(),
+        };
+        return say(f, &why);
+    };
+    let shown = app.map.shown(now);
+    let new: usize = shown
+        .iter()
+        .filter(|&&i| app.map.is_new(&s.dots[i], now))
+        .count();
+    let unread = shown.iter().filter(|&&i| !s.dots[i].flags.seen).count();
+    let mut head = vec![Span::styled(" Map", dim.add_modifier(Modifier::BOLD))];
+    let mut what = format!(
+        " · {} · {} · {} messages",
+        s.lens.name(),
+        app.map.since.name(),
+        shown.len()
+    );
+    if unread > 0 {
+        what.push_str(&format!(", {unread} unread"));
+    }
+    if new > 0 {
+        what.push_str(&format!(", {new} new"));
+    }
+    match app.map.focused {
+        Focused::Cluster(id) => {
+            if let Some(g) = s.group(id) {
+                what.push_str(&format!(" · in {}", g.name()));
+            }
+        }
+        Focused::Loners => what.push_str(" · fitting nowhere"),
+        Focused::All => {}
+    }
+    head.push(Span::styled(what, dim));
+    let key = "   ● unread  • read  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
+    let used: usize = head.iter().map(|h| h.content.width()).sum();
+    if used + key.width() <= legend.width as usize {
+        head.push(Span::styled(key, Style::new().fg(t.faint)));
+    }
+    f.render_widget(Paragraph::new(Line::from(head)), legend);
+    let explained = match s.faithfulness {
+        Some(faith) => format!(
+            " {} · {:.0}% faithful",
+            app.map.colour.explain(),
+            faith * 100.0
+        ),
+        None => format!(" {}", app.map.colour.explain()),
+    };
+    if foot_h > 0 {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                clip(&explained, foot.width as usize),
+                Style::new().fg(t.faint),
+            )),
+            foot,
+        );
+    }
+    let Some(at) = &s.at else {
+        return say(f, "laying the map out…");
+    };
+    if shown.is_empty() {
+        return say(
+            f,
+            "Nothing to map here: r shows read mail, t goes further back.",
+        );
+    }
+    if canvas.height == 0 || canvas.width < 3 {
+        return;
+    }
+    app.targets.push((canvas, Target::Map));
+    // Where each message goes: the bounds of what is shown, laid onto the
+    // canvas, a column clear at each side.
+    let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for &i in &shown {
+        x0 = x0.min(at[i][0]);
+        x1 = x1.max(at[i][0]);
+        y0 = y0.min(at[i][1]);
+        y1 = y1.max(at[i][1]);
+    }
+    let (w, h) = (canvas.width.saturating_sub(2).max(1), canvas.height.max(1));
+    let cell = |p: [f32; 2]| -> (u16, u16) {
+        let fx = if x1 > x0 {
+            (p[0] - x0) / (x1 - x0)
+        } else {
+            0.5
+        };
+        let fy = if y1 > y0 {
+            (p[1] - y0) / (y1 - y0)
+        } else {
+            0.5
+        };
+        let cx = (fx * f32::from(w - 1)).round() as u16;
+        let cy = (fy * f32::from(h - 1)).round() as u16;
+        (canvas.x + 1 + cx.min(w - 1), canvas.y + cy.min(h - 1))
+    };
+    for &i in &shown {
+        let c = cell(at[i]);
+        app.map.cells.insert(i, c);
+        app.map.drawn.entry(c).or_default().push(i);
+    }
+    let picked = app.map.picked();
+    // What has anything new, by cluster: the rest dimmed, when asked.
+    let lively: std::collections::BTreeSet<usize> = shown
+        .iter()
+        .filter(|&&i| app.map.is_new(&s.dots[i], now))
+        .filter_map(|&i| s.clustering.of.get(i).copied())
+        .collect();
+    let ground = t.ground();
+    let buf = f.buffer_mut();
+    for (&(x, y), members) in &app.map.drawn {
+        let first = picked.filter(|p| members.contains(p)).unwrap_or(members[0]);
+        let d = &s.dots[first];
+        let glyph = if members.len() > 1 {
+            char::from_digit(members.len().min(9) as u32, 10).unwrap_or('9')
+        } else if d.flags.flagged {
+            '⚑'
+        } else if d.mine {
+            '▪'
+        } else if !d.flags.seen {
+            '●'
+        } else {
+            '•'
+        };
+        let mut colour = match app.map.colour {
+            Colour::Angle => t.hue(s.hues[first]),
+            Colour::Cursor => match picked {
+                Some(p) => {
+                    let deg = crate::model::degrees(&s.model.vectors[first], &s.model.vectors[p]);
+                    crate::theme::mix(t.accent, t.rule, deg / 90.0)
+                }
+                None => t.dim,
+            },
+            Colour::State if !d.flags.seen => t.accent,
+            Colour::State if d.flags.flagged => t.flag,
+            Colour::State => t.dim,
+        };
+        let in_focus = members.iter().any(|&i| app.map.in_focus(i));
+        let quiet = app.map.new_only
+            && !members
+                .iter()
+                .any(|i| s.clustering.of.get(*i).is_some_and(|c| lively.contains(c)));
+        if !in_focus || quiet {
+            colour = t.rule;
+        } else if members
+            .iter()
+            .all(|&i| crate::map::Map::is_old(&s.dots[i], now))
+        {
+            colour = t.faint;
+        }
+        let new_here = in_focus && members.iter().any(|&i| app.map.is_new(&s.dots[i], now));
+        let mut style = if new_here {
+            Style::new().fg(ground).bg(colour)
+        } else {
+            Style::new().fg(colour).bg(t.page)
+        };
+        if picked.is_some_and(|p| members.contains(&p)) {
+            style = Style::new().fg(t.title).bg(t.focus).bold();
+        }
+        buf[(x, y)].set_char(glyph).set_style(style);
+    }
+    // Each cluster's anchor, at the middle of what of it is drawn: a label's
+    // in its hue, one not yet a label tinted, with its words.
+    let mut taken: Vec<(u16, u16, u16)> = Vec::new();
+    for g in &s.groups {
+        let cells: Vec<(u16, u16)> = g
+            .members
+            .iter()
+            .filter_map(|i| app.map.cells.get(i).copied())
+            .collect();
+        if cells.is_empty() {
+            continue;
+        }
+        let n = cells.len() as f32;
+        let mx = cells.iter().map(|c| f32::from(c.0)).sum::<f32>() / n;
+        let my = cells.iter().map(|c| f32::from(c.1)).sum::<f32>() / n;
+        let name = clip(&g.name(), 22);
+        let width = (3 + 1 + name.width()) as u16;
+        let left = (mx.round() as u16)
+            .saturating_sub(1)
+            .max(canvas.x)
+            .min(canvas.right().saturating_sub(width.min(canvas.width)));
+        let mut row = None;
+        for dy in [0i32, 1, -1, 2, -2, 3, -3] {
+            let y = my.round() as i32 + dy;
+            if y < i32::from(canvas.y) || y >= i32::from(canvas.bottom()) {
+                continue;
+            }
+            let y = y as u16;
+            let clear = taken
+                .iter()
+                .all(|&(tx, ty, tw)| ty != y || left + width <= tx || tx + tw <= left);
+            if clear {
+                row = Some(y);
+                break;
+            }
+        }
+        let Some(y) = row else {
+            continue;
+        };
+        taken.push((left, y, width));
+        let dimmed = !matches!(app.map.focused, Focused::All | Focused::Cluster(_))
+            || matches!(app.map.focused, Focused::Cluster(id) if id != g.id);
+        let (chip, chip_style, name_style) = match &g.label {
+            Some(_) => (
+                " ◆ ",
+                Style::new().fg(ground).bg(t.hue(g.hue)).bold(),
+                Style::new().fg(t.title).bg(t.page).bold(),
+            ),
+            None => (
+                " ◇ ",
+                Style::new().fg(t.hue(g.hue)).bg(t.row),
+                Style::new().fg(t.soft).bg(t.page),
+            ),
+        };
+        let name_style = if dimmed {
+            Style::new().fg(t.dim).bg(t.page)
+        } else {
+            name_style
+        };
+        let line = Line::from(vec![
+            Span::styled(chip, chip_style),
+            Span::styled(format!(" {name}"), name_style),
+        ]);
+        let spot = Rect {
+            x: left,
+            y,
+            width: width.min(canvas.right().saturating_sub(left)),
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(line), spot);
+        app.map.anchors.push((spot.x, spot.y, spot.width, g.id));
+        app.targets.push((
+            Rect {
+                width: 3.min(spot.width),
+                ..spot
+            },
+            Target::Anchor(g.id),
+        ));
+    }
+    // The message picked, named beside it: its sender and its subject.
+    if let Some(p) = picked
+        && let Some(&(x, y)) = app.map.cells.get(&p)
+    {
+        let d = &s.dots[p];
+        let from = if d.from.is_empty() {
+            &d.address
+        } else {
+            &d.from
+        };
+        let said = format!(" {from} — {} ", d.subject);
+        let room_right = canvas.right().saturating_sub(x + 1) as usize;
+        let room_left = x.saturating_sub(canvas.x) as usize;
+        let (said, left) = if said.width() <= room_right || room_right >= room_left {
+            let said = clip(&said, room_right);
+            (said, x + 1)
+        } else {
+            let said = clip(&said, room_left);
+            let w = said.width() as u16;
+            (said, x.saturating_sub(w))
+        };
+        let w = said.width() as u16;
+        if w > 0 {
+            f.render_widget(
+                Paragraph::new(Span::styled(said, Style::new().fg(t.title).bg(t.page))),
+                Rect {
+                    x: left,
+                    y,
+                    width: w,
+                    height: 1,
+                },
+            );
+        }
+    }
+}
+
 /// What an empty list says: how to set up an account, that the account is
 /// being reached or could not be, or that there is nothing to show.
 fn empty(f: &mut Frame, app: &App, area: Rect) {
@@ -1138,7 +1558,23 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
             if !drawn {
                 app.drawn = Some((m.clone(), width, t, message(m, width, &t)));
             }
-            &app.drawn.as_ref().expect("drawn above").3
+            let base = &app.drawn.as_ref().expect("drawn above").3;
+            match mapped(app, width) {
+                Some((head, tail)) => {
+                    // The map's rows after the headers, before the rule.
+                    let rule = base
+                        .iter()
+                        .position(|l| l.spans.first().is_some_and(|s| s.content.starts_with('─')))
+                        .unwrap_or(base.len());
+                    let mut all = base[..rule].to_vec();
+                    all.extend(head);
+                    all.extend(base[rule..].iter().cloned());
+                    all.extend(tail);
+                    said = all;
+                    &said
+                }
+                None => base,
+            }
         }
     };
     // A message longer than the pane gives its last line to saying how far
@@ -1189,6 +1625,94 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
             },
         );
     }
+}
+
+/// What the map says of the message read: its labels and where it is, to
+/// go with its headers; and the messages nearest it by angle, to go after
+/// its text. None when the map has it not.
+fn mapped(app: &App, width: usize) -> Option<(Vec<Line<'static>>, Vec<Line<'static>>)> {
+    let r = app.reading.as_ref()?;
+    let s = app.map.snapshot.as_ref()?;
+    let ident = &app.accounts.get(r.account)?.ident;
+    let i = s.dots.iter().position(|d| {
+        d.key.account == *ident
+            && d.places
+                .iter()
+                .any(|p| p.folder == r.folder && p.uid == r.uid)
+    })?;
+    let t = app.theme;
+    let dim = Style::new().fg(t.dim);
+    let d = &s.dots[i];
+    let soft = Style::new().fg(t.soft);
+    let mut head = Vec::new();
+    // A field as the headers are: its name, and its value wrapped under
+    // itself, past the names' column, after an icon if it has one.
+    let mut field = |name: &str, icon: Option<Span<'static>>, value: &str| {
+        let room = width.saturating_sub(LABEL + if icon.is_some() { 2 } else { 0 });
+        for (k, l) in wrap(value, room).into_iter().enumerate() {
+            let mut spans = vec![Span::styled(
+                format!("{:<LABEL$}", if k == 0 { name } else { "" }),
+                dim,
+            )];
+            match (&icon, k) {
+                (Some(icon), 0) => spans.push(icon.clone()),
+                (Some(_), _) => spans.push(Span::raw("  ")),
+                _ => {}
+            }
+            spans.push(Span::styled(l, soft));
+            head.push(Line::from(spans));
+        }
+    };
+    if !d.labels.is_empty() {
+        field("Labels", None, &d.labels.join(", "));
+    }
+    let mut here = match s.group_of(i) {
+        _ if s.clustering.loner[i] => "fits nowhere".to_string(),
+        Some(g) => format!(
+            "{}, with {} others",
+            g.name(),
+            g.members.len().saturating_sub(1)
+        ),
+        None => String::new(),
+    };
+    if d.twin {
+        here.push_str("; in another account too");
+    }
+    let icon = s.group_of(i).filter(|_| !s.clustering.loner[i]).map(|g| {
+        Span::styled(
+            if g.label.is_some() { "◆ " } else { "◇ " },
+            Style::new().fg(t.hue(g.hue)),
+        )
+    });
+    field("Here", icon, &here);
+    let now = Zoned::now();
+    let mut tail = vec![
+        Line::raw(""),
+        Line::styled("─".repeat(width), Style::new().fg(t.rule)),
+        Line::styled("Near it, by angle", Style::new().fg(t.title).bold()),
+    ];
+    for (j, deg) in s.model.nearest(i, 5) {
+        let n = &s.dots[j];
+        let date = n.date.map(|x| short_date(x, &now)).unwrap_or_default();
+        let from = if n.from.is_empty() {
+            &n.address
+        } else {
+            &n.from
+        };
+        let what = format!("{from} — {} · {date}", n.subject);
+        for (k, l) in wrap(&what, width.saturating_sub(6)).into_iter().enumerate() {
+            let degrees = if k == 0 {
+                format!("{deg:>3.0}°  ")
+            } else {
+                " ".repeat(6)
+            };
+            tail.push(Line::from(vec![
+                Span::styled(degrees, dim),
+                Span::styled(l, soft),
+            ]));
+        }
+    }
+    Some((head, tail))
 }
 
 /// A message as it is read: its subject, who it is from and to, when, its
@@ -1347,6 +1871,7 @@ fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
         _ if app.compose.is_some() => Pane::Writing,
         Focus::Side => Pane::Side,
+        Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,
         Focus::List => Pane::List,
         Focus::Reader => Pane::Reader,
     };

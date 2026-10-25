@@ -2787,7 +2787,7 @@ fn a_body_that_is_not_ascii_is_quoted_when_the_server_cannot_take_it() {
 /// The demo twice, as the accounts Home and Work; Work's inbox has a
 /// message newer than any of Home's.
 fn two_accounts() -> App {
-    let mut work = Demo::new();
+    let mut work = Demo::new().called("work");
     work.append(
         "INBOX",
         b"From: Grace Hopper <grace@example.com>\r\nTo: you@example.com\r\n\
@@ -2798,7 +2798,10 @@ fn two_accounts() -> App {
     .unwrap();
     let mut app = App::new(
         vec![
-            ("Home".to_string(), Box::new(Demo::new()) as Box<dyn Store>),
+            (
+                "Home".to_string(),
+                Box::new(Demo::new().called("home")) as Box<dyn Store>,
+            ),
             ("Work".to_string(), Box::new(work) as Box<dyn Store>),
         ],
         PathBuf::from("/nowhere/accounts.toml"),
@@ -4624,4 +4627,267 @@ fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
             "{p:?} {q:?}"
         );
     }
+}
+
+// ---- the map, on the screen ----
+
+/// The demo, its map shown.
+fn demo_map() -> App {
+    let mut app = demo();
+    press(&mut app, &["<m-g>"]);
+    app
+}
+
+/// The subject of the message picked on the map.
+fn picked_subject(app: &App) -> String {
+    let s = app.map.snapshot.as_ref().unwrap();
+    s.dots[app.map.picked().expect("one picked")]
+        .subject
+        .clone()
+}
+
+#[test]
+fn the_map_lays_out_every_message_with_its_clusters() {
+    let mut app = demo_map();
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    let s = app.map.snapshot.clone().expect("drawn");
+    assert_eq!(s.dots.len(), INBOX + 20 + 4 + 4);
+    assert!(s.at.is_some(), "laid out");
+    // The layout is kept, to be the same next time.
+    assert_eq!(
+        app.index.lock().unwrap().keep.layouts[&Lens::Both].len(),
+        s.dots.len()
+    );
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("Map · words and people"), "{screen}");
+    assert!(screen.contains("◆  Grant"), "{screen}");
+    assert!(
+        screen.contains(" MAP") && screen.contains("Every cluster"),
+        "{screen}"
+    );
+    assert!(screen.contains("colour is what it is about"), "{screen}");
+    // The newest new message is picked, named beside it, and read beside
+    // the map once the cursor rests.
+    assert_eq!(
+        picked_subject(&app),
+        "Notes on the engine, and a table of Bernoulli numbers"
+    );
+    assert!(
+        screen.contains("Ada Lovelace — Notes on the engine"),
+        "{screen}"
+    );
+    let foot = screen.lines().last().unwrap();
+    assert!(
+        foot.contains("M-l list") && foot.contains("w lens"),
+        "{foot}"
+    );
+}
+
+#[test]
+fn the_cursor_moves_to_the_nearest_message_that_way_and_reads_it() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 150, 45);
+    let first = picked_subject(&app);
+    let (x0, _) = app.map.cells[&app.map.picked().unwrap()];
+    press(&mut app, &["l"]);
+    let (x1, _) = app.map.cells[&app.map.picked().unwrap()];
+    assert!(x1 >= x0, "right: {x0} to {x1}");
+    assert_ne!(picked_subject(&app), first);
+    // Read beside the map, once the cursor rests.
+    let read = app.message().map(|m| m.subject.clone());
+    assert_eq!(read, Some(picked_subject(&app)));
+    press(&mut app, &["h"]);
+    let (x2, _) = app.map.cells[&app.map.picked().unwrap()];
+    assert!(x2 <= x1, "left: {x1} to {x2}");
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(
+        screen.contains("Here") && screen.contains("Near it, by angle"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_map_is_narrowed_to_a_cluster_and_listed() {
+    let mut app = demo_map();
+    press(&mut app, &["]"]);
+    let crate::map::Focused::Cluster(id) = app.map.focused else {
+        panic!("not narrowed: {:?}", app.map.focused);
+    };
+    let group = app
+        .map
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .group(id)
+        .unwrap()
+        .clone();
+    assert!(group.members.contains(&app.map.picked().unwrap()));
+    press(&mut app, &["<esc>"]);
+    assert_eq!(app.map.focused, crate::map::Focused::All);
+    // The Grant cluster in the sidebar: in the map it narrows it, in the
+    // list it lists it.
+    let grant = app
+        .rows
+        .iter()
+        .position(|r| match r {
+            app::Row::Cluster(id) => {
+                app.map
+                    .snapshot
+                    .as_ref()
+                    .unwrap()
+                    .group(*id)
+                    .unwrap()
+                    .label
+                    .as_deref()
+                    == Some("Grant")
+            }
+            _ => false,
+        })
+        .expect("Grant in the sidebar");
+    click_at(&mut app, app::Target::Row(grant));
+    assert!(matches!(app.map.focused, crate::map::Focused::Cluster(_)));
+    press(&mut app, &["<m-l>"]);
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    assert_eq!(app.folder_name(), "Grant");
+    let subjects: Vec<&str> = app.shown.iter().map(|m| m.subject.as_str()).collect();
+    assert!(subjects.contains(&"Aims page, third pass"), "{subjects:?}");
+    // Read from the list, it is read on its own account and folder.
+    let aims = app
+        .shown
+        .iter()
+        .position(|m| m.subject == "Aims page, third pass")
+        .unwrap();
+    app.list.select(Some(aims));
+    press(&mut app, &["<enter>"]);
+    assert_eq!(app.message().unwrap().subject, "Aims page, third pass");
+    press(&mut app, &["<m-g>"]);
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+}
+
+#[test]
+fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
+    let mut app = demo_map();
+    let all = app.map.shown(jiff::Timestamp::now().as_second()).len();
+    press(&mut app, &["w"]);
+    assert_eq!(app.map.lens, Lens::Words);
+    assert_eq!(app.map.snapshot.as_ref().unwrap().lens, Lens::Words);
+    assert!(
+        app.index
+            .lock()
+            .unwrap()
+            .keep
+            .layouts
+            .contains_key(&Lens::Words)
+    );
+    press(&mut app, &["w", "w"]);
+    assert_eq!(app.map.lens, Lens::Both);
+    press(&mut app, &["t"]);
+    let now = jiff::Timestamp::now().as_second();
+    let week = app.map.shown(now).len();
+    assert!(week < all, "{week} of {all}");
+    press(&mut app, &["t", "t"]);
+    press(&mut app, &["r"]);
+    let unread = app.map.shown(now).len();
+    assert_eq!(unread, UNREAD as usize);
+    press(&mut app, &["r", "C"]);
+    assert_eq!(app.map.colour, crate::map::Colour::Cursor);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("how near the message picked"), "{screen}");
+    press(&mut app, &["C", "!"]);
+    assert!(app.map.new_only);
+}
+
+#[test]
+fn a_click_on_the_map_picks_and_a_click_on_an_anchor_narrows() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 120, 40);
+    // A cell of several messages: each click picks the next of them.
+    let (&(x, y), members) = app
+        .map
+        .drawn
+        .iter()
+        .find(|(_, m)| m.len() > 1)
+        .or_else(|| app.map.drawn.iter().next())
+        .map(|(c, m)| (c, m.clone()))
+        .unwrap();
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.map.picked(), Some(members[0]));
+    if members.len() > 1 {
+        let _ = app::screen(&mut app, 120, 40);
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
+        app.settle(Duration::from_secs(5));
+        assert_eq!(app.map.picked(), Some(members[1]));
+    }
+    let _ = app::screen(&mut app, 120, 40);
+    let &(_, id) = app
+        .targets
+        .iter()
+        .filter_map(|(r, t)| match t {
+            app::Target::Anchor(id) => Some((r, *id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .first()
+        .unwrap();
+    click_at(&mut app, app::Target::Anchor(id));
+    assert_eq!(app.map.focused, crate::map::Focused::Cluster(id));
+}
+
+#[test]
+fn the_map_fits_any_screen_light_or_dark() {
+    use crate::theme::{Name, Theme};
+    for name in [Name::Light, Name::Dark] {
+        for width in [16, 33, 69, 70, 119, 120, 160] {
+            for height in [6, 9, 24, 48] {
+                let mut app = demo_map();
+                app.theme = Theme::of(name);
+                let screen = app::screen(&mut app, width, height);
+                assert_eq!(screen.lines().count(), height as usize);
+                let _ = app::screen_svg(&mut app, width, height);
+            }
+        }
+    }
+    let mut app = demo_map();
+    let narrow = app::screen(&mut app, 60, 24);
+    assert!(
+        narrow.contains("Map ·") && !narrow.contains("DEMO"),
+        "{narrow}"
+    );
+}
+
+#[test]
+fn a_message_in_two_accounts_is_two_dots_marked_twins() {
+    let mut app = two_accounts();
+    press(&mut app, &["<m-g>"]);
+    let s = app.map.snapshot.clone().unwrap();
+    assert_eq!(s.dots.len(), 2 * (INBOX + 20 + 4 + 4) + 1);
+    let photo: Vec<&crate::map::Dot> = s.dots.iter().filter(|d| d.subject == "Photo 51").collect();
+    assert_eq!(photo.len(), 2);
+    assert!(photo.iter().all(|d| d.twin));
+    assert!(
+        !s.dots
+            .iter()
+            .find(|d| d.subject == "Newest of all")
+            .unwrap()
+            .twin
+    );
+}
+
+#[test]
+fn the_map_says_why_it_is_not_there() {
+    let mut app = App::with_index(
+        vec![("Demo".to_string(), Box::new(Demo::new()) as Box<dyn Store>)],
+        PathBuf::from("/nowhere/accounts.toml"),
+        Err("the map's key would be kept in the vault, which is locked".to_string()),
+    );
+    app.ledger = scratch_ledger();
+    app.settle(Duration::from_secs(5));
+    press(&mut app, &["<m-g>"]);
+    assert!(
+        app.status.contains("vault, which is locked"),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.map.mode, crate::map::Mode::List);
 }
