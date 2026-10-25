@@ -416,7 +416,7 @@ impl Index {
         let t = crate::filter::Taught {
             key: key.clone(),
             thrown,
-            tokens: crate::filter::Filter::tokens(r),
+            tokens: crate::filter::Filter::tokens(r, &self.known()),
             message_id: r.message_id.clone(),
             seeded: false,
         };
@@ -430,6 +430,19 @@ impl Index {
             taught.push(t)?;
         }
         Ok(())
+    }
+
+    /// What is known beside each message: whom you wrote to, read from the
+    /// mail you sent.
+    pub fn known(&self) -> crate::filter::Known {
+        let written = self
+            .records
+            .values()
+            .filter(|r| self.system(&r.key).sent)
+            .flat_map(|r| r.to.iter().chain(&r.cc))
+            .map(|a| a.to_lowercase())
+            .collect();
+        crate::filter::Known { written }
     }
 
     /// A message of `account` put back from the Trash, by its `Message-ID`:
@@ -499,6 +512,7 @@ impl Index {
     /// The mail you kept, filed under a label and out of the Inbox, as
     /// seeds: the newest `limit`, each with when it was sent.
     pub fn kept_seeds(&self, limit: usize) -> Vec<(i64, crate::filter::Taught)> {
+        let known = self.known();
         let mut kept: Vec<(i64, crate::filter::Taught)> = self
             .records
             .values()
@@ -512,7 +526,7 @@ impl Index {
                     crate::filter::Taught {
                         key: r.key.clone(),
                         thrown: false,
-                        tokens: crate::filter::Filter::tokens(r),
+                        tokens: crate::filter::Filter::tokens(r, &known),
                         message_id: r.message_id.clone(),
                         seeded: true,
                     },

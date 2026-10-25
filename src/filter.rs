@@ -10,7 +10,7 @@
 use crate::index::record::fnv;
 use crate::index::{Key, Lens, Record};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A decision, as written down: the message, whether it was thrown away,
 /// and what was read of it then, as it may be gone by the next start.
@@ -27,6 +27,27 @@ pub struct Taught {
     /// label, not decided as you went.
     #[serde(default)]
     pub seeded: bool,
+}
+
+/// What is known beside a message, that tells mail you want: whom you
+/// have written to, by the mail you sent.
+#[derive(Clone, Debug, Default)]
+pub struct Known {
+    /// Each address you sent mail to, or copied, in lower case.
+    pub written: HashSet<String>,
+}
+
+/// Whether `address` is one that takes no answer: `noreply`, `do-not-reply`,
+/// `notifications` and the like.
+fn takes_no_answer(address: &str) -> bool {
+    let local = address
+        .rsplit_once('@')
+        .map_or(address, |(l, _)| l)
+        .to_lowercase()
+        .replace(['-', '_', '.'], "");
+    ["noreply", "donotreply", "notification", "mailerdaemon"]
+        .iter()
+        .any(|w| local.contains(w))
 }
 
 /// How many of each it is to have been taught before it says anything.
@@ -117,9 +138,20 @@ fn features(tokens: &[(String, f32)]) -> Vec<(u64, f32)> {
 
 impl Filter {
     /// What it reads of `r`: its tokens, as the map reads them by words and
-    /// people.
-    pub fn tokens(r: &Record) -> Vec<(String, f32)> {
-        crate::model::tokens(r, false, Lens::Both)
+    /// people; and whether you wrote to its sender, whether its sender takes
+    /// no answer, and whether it was sent to many.
+    pub fn tokens(r: &Record, known: &Known) -> Vec<(String, f32)> {
+        let mut t = crate::model::tokens(r, false, Lens::Both);
+        if known.written.contains(&r.address.to_lowercase()) {
+            t.push(("wrote".to_string(), 2.5));
+        }
+        if takes_no_answer(&r.address) {
+            t.push(("noreply".to_string(), 1.5));
+        }
+        if r.bulk {
+            t.push(("bulk".to_string(), 1.5));
+        }
+        t
     }
 
     fn margin(&self, x: &[(u64, f32)]) -> f32 {
@@ -189,11 +221,11 @@ impl Filter {
 
     /// How likely `r` is to be thrown away, if it has been taught enough
     /// to say, and is sure enough.
-    pub fn would_throw(&self, r: &Record) -> Option<f32> {
+    pub fn would_throw(&self, r: &Record, known: &Known) -> Option<f32> {
         if !self.ready() {
             return None;
         }
-        let p = self.odds(&Self::tokens(r));
+        let p = self.odds(&Self::tokens(r, known));
         (p >= SURE).then_some(p)
     }
 }

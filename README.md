@@ -310,7 +310,10 @@ is trashed, teaches it that mail like it is thrown away; each you file,
 archive, answer, flag, keep in the Inbox looked through, or put back from
 the Trash, that it is not. Like is by who sent it, from where, by which
 list, and its words, never its subject alone, so that a sender you always
-throw away is known by a subject never seen. Once it has been taught twenty
+throw away is known by a subject never seen; and by whether you ever wrote
+to its sender, as your sent mail says, whether its sender takes no answer
+(`noreply` and the like), and whether it was sent to many, saying how to
+unsubscribe from it, so that even a sender never seen is told apart. Once it has been taught twenty
 of each, a message in the Inbox it is sure of, 90% or more, comes to be
 looked through with `[?] discard 92%` suggested; nothing is thrown away
 unless you choose it and `$` does it.
@@ -331,7 +334,8 @@ have thrown away, sure to 70%, 80%, 90% and 95%, and names the ones kept,
 which matter most. `filter learn` reads, on each account's server, the
 newest 500 messages (`--limit`) of its Trash that were never read, as
 thrown away, and the newest 500 filed under your labels, as kept, oldest
-first; each only once. Mail read and then thrown away was dealt with, not
+first, what you filed read again from its server first, as the index
+now reads a message; each only once. Mail read and then thrown away was dealt with, not
 unwanted, so it is left out: learnt from, it took meetings and colleagues'
 mail for what you throw away. `filter forget` takes back what was learnt
 from either, and your own decisions are all that is left.

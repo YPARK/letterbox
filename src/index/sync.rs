@@ -87,6 +87,54 @@ pub fn mapped(folders: &[Folder], kind: Kind) -> Vec<&Folder> {
     out
 }
 
+/// Read the messages `keys` of this store's account again, as the index
+/// now reads a message, where each is and its labels kept. How many were.
+pub fn refresh(
+    store: &mut dyn Store,
+    index: &Mutex<Index>,
+    keys: &[Key],
+    now: i64,
+) -> anyhow::Result<usize> {
+    let account = store.ident();
+    let mut by_folder: BTreeMap<String, Vec<(u32, Record)>> = BTreeMap::new();
+    {
+        let index = lock(index);
+        for key in keys.iter().filter(|k| k.account == account) {
+            let Some(r) = index.records.get(key) else {
+                continue;
+            };
+            if let Some(p) = r.places.first() {
+                by_folder
+                    .entry(p.folder.clone())
+                    .or_default()
+                    .push((p.uid, r.clone()));
+            }
+        }
+    }
+    let mut events = Vec::new();
+    for (folder, old) in by_folder {
+        let uids: Vec<u32> = old.iter().map(|(u, _)| *u).collect();
+        for chunk in uids.chunks(100) {
+            for got in store.fetch_index(&folder, chunk)? {
+                let Some((_, was)) = old.iter().find(|(u, _)| *u == got.uid) else {
+                    continue;
+                };
+                let mut r = Record::of(&account, &folder, 0, &got, now);
+                if r.key != was.key {
+                    continue;
+                }
+                // Its places as they were, each folder's validity with it.
+                r.places = was.places.clone();
+                r.server = was.server.clone();
+                events.push(Cached::Upsert(Box::new(r)));
+            }
+        }
+    }
+    let n = events.len();
+    apply(index, events)?;
+    Ok(n)
+}
+
 fn lock(index: &Mutex<Index>) -> std::sync::MutexGuard<'_, Index> {
     index.lock().unwrap_or_else(|e| e.into_inner())
 }

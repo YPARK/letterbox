@@ -7252,7 +7252,7 @@ fn taught(n: usize) -> crate::filter::Filter {
             f.learn(crate::filter::Taught {
                 key: r.key.clone(),
                 thrown,
-                tokens: crate::filter::Filter::tokens(&r),
+                tokens: crate::filter::Filter::tokens(&r, &Default::default()),
                 message_id: r.message_id.clone(),
                 seeded: false,
             });
@@ -7267,28 +7267,46 @@ fn what_you_throw_away_is_learnt_by_who_sent_it_not_its_subject() {
     let few = taught(crate::filter::READY as usize - 1);
     assert!(!few.ready());
     let new_deal = sent_by("x", "deals@shop.example", "A brand new offer, never seen");
-    assert_eq!(few.would_throw(&new_deal), None);
+    assert_eq!(few.would_throw(&new_deal, &Default::default()), None);
     // Enough: the shop's new mail, of a subject never seen, leans to thrown
     // away, its words never seen weighing nothing; once taught more, sure
     // enough to say so. Ada's would not be.
     let f = taught(40);
     assert!(f.ready());
-    assert!(f.odds(&crate::filter::Filter::tokens(&new_deal)) > 0.8);
+    assert!(
+        f.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        )) > 0.8
+    );
     let f = taught(100);
-    let p = f.would_throw(&new_deal).expect("thrown away");
+    let p = f
+        .would_throw(&new_deal, &Default::default())
+        .expect("thrown away");
     assert!(p >= crate::filter::SURE, "{p}");
     let from_ada = sent_by(
         "y",
         "ada@analytical.example",
         "A brand new offer, never seen",
     );
-    assert_eq!(f.would_throw(&from_ada), None);
-    assert!(f.odds(&crate::filter::Filter::tokens(&from_ada)) < 0.5);
+    assert_eq!(f.would_throw(&from_ada, &Default::default()), None);
+    assert!(
+        f.odds(&crate::filter::Filter::tokens(
+            &from_ada,
+            &Default::default()
+        )) < 0.5
+    );
     // The same taught in the same order: the same odds.
     let again = taught(100);
     assert_eq!(
-        f.odds(&crate::filter::Filter::tokens(&new_deal)),
-        again.odds(&crate::filter::Filter::tokens(&new_deal))
+        f.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        )),
+        again.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        ))
     );
 }
 
@@ -7314,13 +7332,17 @@ fn what_was_learnt_is_written_down_and_learnt_again_as_it_starts() {
         // One not indexed teaches nothing.
         index.teach(&record("gone", "Gone").key, true).unwrap();
         assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
-        odds = index.filter.odds(&crate::filter::Filter::tokens(&deal));
+        odds = index
+            .filter
+            .odds(&crate::filter::Filter::tokens(&deal, &Default::default()));
         index.flush().unwrap();
     }
     let index = Index::open_with(dir.path(), &id);
     assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
     assert_eq!(
-        index.filter.odds(&crate::filter::Filter::tokens(&deal)),
+        index
+            .filter
+            .odds(&crate::filter::Filter::tokens(&deal, &Default::default())),
         odds
     );
     // Its key, by where it is.
@@ -7514,7 +7536,7 @@ fn the_filter_is_graded_on_each_decision_before_it_is_learnt() {
     f.learn(crate::filter::Taught {
         key: kept.key.clone(),
         thrown: false,
-        tokens: crate::filter::Filter::tokens(&kept),
+        tokens: crate::filter::Filter::tokens(&kept, &Default::default()),
         message_id: String::new(),
         seeded: false,
     });
@@ -7604,7 +7626,7 @@ fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
         store.relocate("INBOX", m.uid, "Trash", "").unwrap();
     }
     let now = jiff::Timestamp::now().as_second();
-    let thrown = crate::trash_seeds(&mut store, 10, now).unwrap();
+    let thrown = crate::trash_seeds(&mut store, &Default::default(), 10, now).unwrap();
     assert_eq!(thrown.len(), 1, "{thrown:?}");
     assert!(thrown[0].1.thrown && thrown[0].1.seeded);
     assert_eq!(thrown[0].1.message_id, unread.message_id);
@@ -7628,4 +7650,244 @@ fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
     assert_eq!(index.unseed().unwrap(), n);
     assert!(index.filter.taught.is_empty());
     assert_eq!((index.filter.thrown, index.filter.kept), (0, 0));
+}
+
+// ---- what else tells mail thrown away from mail kept ----
+
+/// A message from `from` about `subject`, with `headers` beside its own.
+fn with_headers(id: &str, from: &str, subject: &str, headers: &str) -> index::Record {
+    let raw = format!(
+        "From: {from}\r\nTo: me@example.com\r\nSubject: {subject}\r\n\
+         Message-ID: <{id}@example.com>\r\n{headers}\r\nHello.\r\n"
+    );
+    let indexed = index::record::Indexed {
+        uid: 1,
+        size: 100,
+        raw: raw.into_bytes(),
+        ..Default::default()
+    };
+    index::Record::of("a@b.c", "INBOX", 7, &indexed, 1_000)
+}
+
+#[test]
+fn mail_sent_to_many_is_known_by_its_headers() {
+    let plain = with_headers("p", "ada@analytical.example", "Notes", "");
+    assert!(!plain.bulk);
+    let unsubscribe = with_headers(
+        "u",
+        "deals@shop.example",
+        "Sale",
+        "List-Unsubscribe: <mailto:out@shop.example>\r\n",
+    );
+    assert!(unsubscribe.bulk);
+    let precedence = with_headers("b", "news@shop.example", "News", "Precedence: bulk\r\n");
+    assert!(precedence.bulk);
+    // Asked of every server.
+    let items = crate::imap::indexed_items(false);
+    assert!(items.contains("LIST-UNSUBSCRIBE") && items.contains("PRECEDENCE"));
+}
+
+#[test]
+fn the_filter_reads_whether_you_wrote_to_them_and_whether_it_was_sent_to_many() {
+    let mut known = crate::filter::Known::default();
+    known.written.insert("ada@analytical.example".to_string());
+    let tokens = |r: &index::Record| -> Vec<String> {
+        crate::filter::Filter::tokens(r, &known)
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    };
+    let ada = with_headers("a", "Ada <ada@analytical.example>", "Notes", "");
+    assert!(
+        tokens(&ada).contains(&"wrote".to_string()),
+        "{:?}",
+        tokens(&ada)
+    );
+    let deal = with_headers(
+        "d",
+        "Shop <no-reply@shop.example>",
+        "Sale",
+        "List-Unsubscribe: <mailto:out@shop.example>\r\n",
+    );
+    let t = tokens(&deal);
+    assert!(!t.contains(&"wrote".to_string()), "{t:?}");
+    assert!(t.contains(&"noreply".to_string()), "{t:?}");
+    assert!(t.contains(&"bulk".to_string()), "{t:?}");
+    for address in [
+        "noreply@x.org",
+        "do-not-reply@x.org",
+        "donotreply@x.org",
+        "notifications@x.org",
+    ] {
+        let r = with_headers("n", address, "Hi", "");
+        assert!(tokens(&r).contains(&"noreply".to_string()), "{address}");
+    }
+}
+
+#[test]
+fn whom_you_wrote_to_is_read_from_the_mail_you_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = Index::open_with(dir.path(), &identity());
+    let mut sent = with_headers("s", "me@example.com", "Re: Notes", "");
+    sent.to = vec!["Ada@Analytical.example".to_string()];
+    sent.cc = vec!["grace@navy.example".to_string()];
+    sent.places[0].folder = "Sent".into();
+    index
+        .cache(vec![
+            Cached::Folder {
+                account: "a@b.c".into(),
+                folder: "Sent".into(),
+                state: index::record::FolderState {
+                    role: Some(crate::mail::Role::Sent),
+                    ..Default::default()
+                },
+            },
+            Cached::Upsert(Box::new(sent)),
+        ])
+        .unwrap();
+    let known = index.known();
+    assert!(known.written.contains("ada@analytical.example"));
+    assert!(known.written.contains("grace@navy.example"));
+    // What is taught is read so.
+    let ada = with_headers("a", "ada@analytical.example", "Notes", "");
+    index
+        .cache(vec![Cached::Upsert(Box::new(ada.clone()))])
+        .unwrap();
+    index.teach(&ada.key, false).unwrap();
+    let taught = index.filter.taught.last().unwrap();
+    assert!(taught.tokens.iter().any(|(t, _)| t == "wrote"));
+}
+
+#[test]
+fn a_sender_never_seen_is_judged_by_whether_you_wrote_to_them_and_how_it_was_sent() {
+    let mut known = crate::filter::Known::default();
+    let mut f = crate::filter::Filter::default();
+    for k in 0..30 {
+        let colleague = format!("colleague{k}@uni.example");
+        known.written.insert(colleague.clone());
+        for (r, thrown) in [
+            (
+                with_headers(
+                    &format!("s{k}"),
+                    &format!("no-reply@shop{k}.example"),
+                    &format!("Offer {k}"),
+                    "List-Unsubscribe: <mailto:out@x>\r\n",
+                ),
+                true,
+            ),
+            (
+                with_headers(&format!("c{k}"), &colleague, &format!("Draft {k}"), ""),
+                false,
+            ),
+        ] {
+            f.learn(crate::filter::Taught {
+                key: r.key.clone(),
+                thrown,
+                tokens: crate::filter::Filter::tokens(&r, &known),
+                message_id: r.message_id.clone(),
+                seeded: false,
+            });
+        }
+    }
+    // Each sender new, each subject new: only how it came tells them apart.
+    let shop = with_headers(
+        "x",
+        "no-reply@never.example",
+        "Something else entirely",
+        "List-Unsubscribe: <mailto:out@x>\r\n",
+    );
+    known.written.insert("new@uni.example".into());
+    let friend = with_headers("y", "new@uni.example", "Something else entirely", "");
+    let odds = |r: &index::Record| f.odds(&crate::filter::Filter::tokens(r, &known));
+    assert!(odds(&shop) > 0.8, "{}", odds(&shop));
+    assert!(odds(&friend) < 0.2, "{}", odds(&friend));
+}
+
+#[test]
+fn the_demos_robots_send_to_many_and_what_was_read_before_is_read_again() {
+    let mut store = Demo::new();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    let ci: Vec<index::Record> = shared
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .filter(|r| r.list == "ci.runner.example")
+        .cloned()
+        .collect();
+    assert!(
+        !ci.is_empty() && ci.iter().all(|r| r.bulk),
+        "the CI's mail is bulk"
+    );
+    // Read before the index asked whether it was: read again, its places,
+    // labels and when it was first seen kept.
+    let mut stale = ci[0].clone();
+    stale.bulk = false;
+    shared
+        .lock()
+        .unwrap()
+        .cache(vec![Cached::Upsert(Box::new(stale.clone()))])
+        .unwrap();
+    let n = index::sync::refresh(&mut store, &shared, &[stale.key.clone()], now).unwrap();
+    assert_eq!(n, 1);
+    let index = shared.lock().unwrap();
+    let again = &index.records[&stale.key];
+    assert!(again.bulk);
+    assert_eq!(again.first_seen, ci[0].first_seen);
+    assert_eq!(again.places, stale.places);
+}
+
+#[test]
+fn filter_learn_reads_what_you_kept_again_so_it_is_read_as_new_mail_is() {
+    let mut store = Demo::new();
+    // The CI's mail, filed under Projects.
+    let ci = store
+        .page("INBOX", 0, 40)
+        .unwrap()
+        .summaries
+        .into_iter()
+        .find(|m| m.from == "CI")
+        .unwrap();
+    store.relocate("INBOX", ci.uid, "Projects", "").unwrap();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    let mut index = shared.into_inner().unwrap();
+    // Each bulk message filed under a label, read as the index once read it.
+    let stale: Vec<index::Record> = index
+        .kept_seeds(1000)
+        .into_iter()
+        .filter_map(|(_, t)| index.records.get(&t.key).cloned())
+        .filter(|r| r.bulk)
+        .map(|mut r| {
+            r.bulk = false;
+            r
+        })
+        .collect();
+    assert!(!stale.is_empty(), "the CI's mail, filed");
+    index
+        .cache(
+            stale
+                .iter()
+                .cloned()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let mut stores: Vec<(String, Box<dyn Store>)> = vec![("Demo".into(), Box::new(store))];
+    let (_, kept, learnt) = crate::learn(&mut index, &mut stores, 1000, now).unwrap();
+    assert!(kept > 0 && learnt > 0);
+    for r in &stale {
+        let t = index
+            .filter
+            .taught
+            .iter()
+            .find(|t| t.key == r.key)
+            .expect("learnt");
+        assert!(t.tokens.iter().any(|(w, _)| w == "bulk"), "{}", r.subject);
+    }
 }

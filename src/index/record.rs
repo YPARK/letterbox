@@ -126,6 +126,10 @@ pub struct Record {
     /// The first words of its text, no more than `PREVIEW` bytes.
     #[serde(default)]
     pub preview: String,
+    /// Whether it was sent to many: it says how to unsubscribe from it, or
+    /// that it is bulk, a list's or junk.
+    #[serde(default)]
+    pub bulk: bool,
     pub flags: Flags,
     /// When the index first saw it, in seconds since 1970.
     pub first_seen: i64,
@@ -173,6 +177,10 @@ impl Record {
         let list = mail::field(&indexed.raw, "List-Id")
             .map(|l| list_id(&l))
             .unwrap_or_default();
+        let bulk = mail::field(&indexed.raw, "List-Unsubscribe").is_some()
+            || mail::field(&indexed.raw, "Precedence").is_some_and(|p| {
+                matches!(p.trim().to_lowercase().as_str(), "bulk" | "list" | "junk")
+            });
         let key = Key::of(
             account,
             indexed.gmail,
@@ -201,6 +209,7 @@ impl Record {
             date: s.date,
             size: indexed.size,
             preview: cut(&mail::preview(&text, PREVIEW), PREVIEW),
+            bulk,
             flags: indexed.flags,
             first_seen: now,
         }

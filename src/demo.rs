@@ -447,6 +447,7 @@ fn labs() -> Vec<(&'static str, Kept)> {
             }
             if let Some(list) = list_id(l.from, l.subject) {
                 head.push_str(&format!("List-Id: {list}\r\n"));
+                head.push_str("List-Unsubscribe: <mailto:unsubscribe@lists.example>\r\n");
             }
             let (name, _, signs) = person(l.from);
             let body = if signs {

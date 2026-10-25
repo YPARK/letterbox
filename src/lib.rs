@@ -434,11 +434,48 @@ fn open_index(args: &Args) -> anyhow::Result<index::Index> {
     .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+/// Learn from what each of `stores` has in its Trash, never read, and from
+/// what you filed under your labels, read again first as the index now
+/// reads a message; how many were thrown away, kept, and not learnt before.
+fn learn(
+    index: &mut index::Index,
+    stores: &mut [(String, Box<dyn Store>)],
+    limit: usize,
+    now: i64,
+) -> anyhow::Result<(usize, usize, usize)> {
+    let keys: Vec<index::Key> = index
+        .kept_seeds(limit)
+        .into_iter()
+        .map(|(_, t)| t.key)
+        .collect();
+    let shared = std::sync::Mutex::new(std::mem::replace(index, index::Index::memory()));
+    let mut thrown = Vec::new();
+    for (name, store) in stores.iter_mut() {
+        if let Err(e) = index::sync::refresh(store.as_mut(), &shared, &keys, now) {
+            eprintln!("{name}: what you filed cannot be read again: {e:#}");
+        }
+        let known = shared.lock().unwrap_or_else(|e| e.into_inner()).known();
+        match trash_seeds(store.as_mut(), &known, limit, now) {
+            Ok(found) => thrown.extend(found),
+            Err(e) => eprintln!("{name}: its Trash cannot be read: {e:#}"),
+        }
+    }
+    *index = shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut seeds = index.kept_seeds(limit);
+    let (kept, n_thrown) = (seeds.len(), thrown.len());
+    seeds.extend(thrown);
+    // Oldest first, as if decided as they came.
+    seeds.sort_by_key(|(at, t)| (*at, t.key.clone()));
+    let learnt = index.seed(seeds.into_iter().map(|(_, t)| t).collect())?;
+    Ok((n_thrown, kept, learnt))
+}
+
 /// The newest `limit` messages of the account's Trash never read, as thrown
 /// away, each with when it was sent. Mail read and then thrown away was
 /// dealt with, not unwanted: it is left out.
 fn trash_seeds(
     store: &mut dyn Store,
+    known: &filter::Known,
     limit: usize,
     now: i64,
 ) -> anyhow::Result<Vec<(i64, filter::Taught)>> {
@@ -469,7 +506,7 @@ fn trash_seeds(
                 filter::Taught {
                     key: r.key.clone(),
                     thrown: true,
-                    tokens: filter::Filter::tokens(&r),
+                    tokens: filter::Filter::tokens(&r, known),
                     message_id: r.message_id.clone(),
                     seeded: true,
                 },
@@ -880,22 +917,8 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 println!("{n} read from the Trash and your labels, forgotten\n");
             }
             if let FilterAction::Learn { limit } = action {
-                let mut seeds = index.kept_seeds(*limit);
-                let kept = seeds.len();
-                let mut thrown = 0;
                 let now = jiff::Timestamp::now().as_second();
-                for (name, mut store) in stores(args)? {
-                    match trash_seeds(store.as_mut(), *limit, now) {
-                        Ok(found) => {
-                            thrown += found.len();
-                            seeds.extend(found);
-                        }
-                        Err(e) => eprintln!("{name}: its Trash cannot be read: {e:#}"),
-                    }
-                }
-                // Oldest first, as if decided as they came.
-                seeds.sort_by_key(|(at, t)| (*at, t.key.clone()));
-                let learnt = index.seed(seeds.into_iter().map(|(_, t)| t).collect())?;
+                let (thrown, kept, learnt) = learn(&mut index, &mut stores(args)?, *limit, now)?;
                 index.flush()?;
                 println!(
                     "{thrown} in the Trash and {kept} under your labels read; {learnt} not learnt before, learnt\n"

@@ -320,11 +320,12 @@ pub fn input(
             (r.clone(), index.labels(&r.key), mine, index.system(&r.key))
         })
         .collect();
+    let known = index.known();
     let thrown = index
         .records
         .values()
         .filter(|r| index.system(&r.key).inbox)
-        .filter_map(|r| Some((r.key.clone(), index.filter.would_throw(r)?)))
+        .filter_map(|r| Some((r.key.clone(), index.filter.would_throw(r, &known)?)))
         .collect();
     let looked = index
         .filter
