@@ -2720,17 +2720,19 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .and_then(|r| r.picked.as_ref())
         .and_then(|k| s.find(k));
-    let (filed, discarded, kept) =
-        rows.iter()
-            .fold((0, 0, 0), |(a, b, c), &i| match app.choice(i) {
-                Choice::Move(_) => (a + 1, b, c),
-                Choice::Discard => (a, b + 1, c),
-                Choice::Keep => (a, b, c + 1),
-            });
+    let (filed, discarded, kept, _) = app.review_counts();
+    let before = rows.iter().filter(|&&i| s.dots[i].looked).count();
     // Its heading: how many, what will be done, and the button that does it.
     let x = area.x + 1;
     let width = area.width.saturating_sub(2);
-    let head = format!(" Inbox · {} to look through ", rows.len());
+    let head = if before > 0 {
+        format!(
+            " Inbox · {} to look through · {before} kept before ",
+            rows.len() - before
+        )
+    } else {
+        format!(" Inbox · {} to look through ", rows.len())
+    };
     let button = " Apply  $ ";
     let buf = f.buffer_mut();
     buf.set_stringn(
@@ -2756,7 +2758,12 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
     }
-    let counts = format!(" {filed} to file · {discarded} to discard · {kept} to keep");
+    // Only those chosen are done; the rest are left as they are.
+    let counts = if filed + discarded + kept == 0 {
+        " none chosen: look through as many as you like; $ does only those".to_string()
+    } else {
+        format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left")
+    };
     buf.set_stringn(
         x,
         area.y + 1,
@@ -2831,7 +2838,9 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let mark = if d.flags.seen { "  " } else { "● " };
         let said = format!("{mark}{} — {}", clip(from, 22), d.subject);
         let room_said = usize::from(width).saturating_sub(date.width() + 2);
-        let style = if d.flags.seen {
+        let style = if d.looked {
+            Style::new().fg(t.dim).bg(ground)
+        } else if d.flags.seen {
             Style::new().fg(t.soft).bg(ground)
         } else {
             Style::new().fg(t.title).bg(ground).bold()
@@ -2845,10 +2854,12 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         );
         app.targets
             .push((Rect::new(x, y, width, 1), Target::ReviewRow(row)));
-        // What may be done with it, what will be done lit.
-        let chosen = app.choice(i);
+        // What may be done with it: what was chosen lit, else what is
+        // suggested in its colour.
+        let chosen = app.chosen(i);
         let suggested = crate::app::App::suggested(&s, i);
-        let label = match &chosen {
+        let shown = chosen.clone().unwrap_or_else(|| suggested.clone());
+        let label = match &shown {
             Choice::Move(l) => Some(l.clone()),
             _ => s.suggestion(i).map(str::to_string),
         };
@@ -2858,34 +2869,36 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
                     Some(l) => format!("→ {}", clip(l, 18)),
                     None => "move to…".to_string(),
                 },
-                matches!(chosen, Choice::Move(_)),
+                matches!(chosen, Some(Choice::Move(_))),
                 t.accent,
                 t.on_accent,
-                matches!(suggested, Choice::Move(_)),
+                chosen.is_none() && matches!(suggested, Choice::Move(_)),
             ),
             (
                 "keep".to_string(),
-                chosen == Choice::Keep,
+                chosen == Some(Choice::Keep),
                 t.title,
                 t.page,
-                suggested == Choice::Keep,
+                chosen.is_none() && suggested == Choice::Keep,
             ),
             (
                 match s.dots[i].thrown {
                     Some(p) => format!("discard {:.0}%", p * 100.0),
                     None => "discard".to_string(),
                 },
-                chosen == Choice::Discard,
+                chosen == Some(Choice::Discard),
                 t.error,
                 t.on_accent,
-                suggested == Choice::Discard,
+                chosen.is_none() && suggested == Choice::Discard,
             ),
             ("new…".to_string(), false, t.accent, t.on_accent, false),
         ];
         let mut cx = x + 2;
-        for (k, (what, on, bg, fg, _)) in options.iter().enumerate() {
+        for (k, (what, on, bg, fg, hint)) in options.iter().enumerate() {
             let chip = if *on {
                 format!(" ✓ {what} ")
+            } else if *hint {
+                format!(" [?] {what} ")
             } else {
                 format!(" [ ] {what} ")
             };
@@ -2895,6 +2908,8 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             }
             let style = if *on {
                 Style::new().fg(*fg).bg(*bg).bold()
+            } else if *hint {
+                Style::new().fg(*bg).bg(ground)
             } else {
                 Style::new().fg(t.dim).bg(ground)
             };

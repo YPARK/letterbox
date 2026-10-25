@@ -1821,7 +1821,7 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
     let _ = app::screen(&mut app, 60, 12);
     assert!(matches!(app.dialog, app::Dialog::Help(3)));
     // The wheel does not run it off its end.
-    for _ in 0..100 {
+    for _ in 0..1000 {
         app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
     }
     let end = app::screen(&mut app, 60, 12);
@@ -1840,12 +1840,17 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
 
 // ---- the vault ----
 
+/// Held by each test that points `$LETTERBOX_VAULT` somewhere, so that
+/// none reads another's, or the vault of whoever runs them.
+static VAULT_AT: Mutex<()> = Mutex::new(());
+
 #[test]
 fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
     let (account, _) = server();
     let dir = tempfile::tempdir().unwrap();
     let vault_at = dir.path().join("data/vault.age");
-    // SAFETY: tests that read it are this one alone.
+    // SAFETY: tests that read it hold VAULT_AT.
     unsafe { std::env::set_var("LETTERBOX_VAULT", &vault_at) };
     crate::vault::lock();
     let path = dir.path().join("accounts.toml");
@@ -2395,7 +2400,11 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
 
 #[test]
 fn an_agent_is_told_a_vaults_account_is_not_for_it() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
+    // A vault of its own, never made: not one beside a key file.
+    // SAFETY: tests that read it hold VAULT_AT.
+    unsafe { std::env::set_var("LETTERBOX_VAULT", dir.path().join("vault.age")) };
     let path = dir.path().join("accounts.toml");
     std::fs::write(
         &path,
@@ -2412,6 +2421,7 @@ fn an_agent_is_told_a_vaults_account_is_not_for_it() {
             .unwrap()
             .contains("keep it in the keyring")
     );
+    unsafe { std::env::remove_var("LETTERBOX_VAULT") };
 }
 
 #[test]
@@ -6906,7 +6916,15 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("Inbox · 33 to look through"), "{screen}");
     assert!(screen.contains("Apply  $"), "{screen}");
-    assert!(screen.contains("✓ keep"), "{screen}");
+    // Nothing chosen until it is: what is suggested only hinted at, and $
+    // has nothing to do.
+    assert!(!screen.contains('✓'), "{screen}");
+    assert!(screen.contains("[?] "), "{screen}");
+    assert!(screen.contains("none chosen"), "{screen}");
+    assert!(rows.iter().all(|&i| app.chosen(i).is_none()));
+    press(&mut app, &["$"]);
+    assert!(app.status.contains("nothing chosen"), "{}", app.status);
+    assert!(!app.review.as_ref().unwrap().asking);
     let s = app.map.snapshot.clone().unwrap();
     // The one picked is picked on the map too.
     assert_eq!(app.map.picked(), Some(rows[0]));
@@ -6916,9 +6934,13 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     assert_eq!(app.map.picked(), Some(rows[1]));
     press(&mut app, &["k", "<space>"]);
     assert_eq!(app.choice(rows[0]), app::Choice::Keep);
-    // ← and → go round what may be done.
+    // ← and → go round what may be done, and round to none chosen.
     press(&mut app, &["k", "<right>"]);
     assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    press(&mut app, &["<right>"]);
+    assert_eq!(app.chosen(rows[0]), None);
+    press(&mut app, &["<left>"]);
+    assert_eq!(app.chosen(rows[0]), Some(app::Choice::Discard));
     // One suggested to go somewhere: y files it there.
     let going = rows
         .iter()
@@ -6960,13 +6982,24 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
         dot_labels(&app, &s.dots[rows[nowhere]].subject).1,
         "still in the Inbox"
     );
-    // $ asks; n leaves it; $ and y do it all.
+    // $ asks, saying how many are left; n leaves it; $ and y do those
+    // chosen, and only those.
     app.focus = app::Focus::Reader;
     press(&mut app, &["$"]);
     assert!(app.status.contains("(y or n)"), "{}", app.status);
+    assert!(app.status.contains("left as they are"), "{}", app.status);
     press(&mut app, &["n"]);
     assert!(app.review.as_ref().unwrap().chosen.len() >= 2);
+    let untouched: Vec<String> = rows
+        .iter()
+        .filter(|&&i| app.chosen(i).is_none())
+        .map(|&i| s.dots[i].subject.clone())
+        .collect();
+    assert!(!untouched.is_empty());
     press(&mut app, &["$", "y"]);
+    for subject in &untouched {
+        assert!(dot_labels(&app, subject).1, "{subject} left in the Inbox");
+    }
     let (labels, inbox) = dot_labels(&app, &s.dots[rows[going]].subject);
     assert!(labels.contains(&label) && !inbox, "{labels:?}");
     let (labels, inbox) = dot_labels(&app, &s.dots[rows[nowhere]].subject);
@@ -7295,8 +7328,33 @@ fn trashing_teaches_and_the_inbox_looked_through_says_what_would_be_thrown_away(
         "{:?}",
         s.dots[failed].thrown
     );
+    // Suggested, not chosen: hinted at, and nothing thrown away by $.
     assert_eq!(app.choice(failed), app::Choice::Discard);
+    assert_eq!(app.chosen(failed), None);
     let screen = app::screen(&mut app, 170, 60);
-    assert!(screen.contains("✓ discard "), "{screen}");
+    assert!(screen.contains("[?] discard "), "{screen}");
     assert!(screen.contains('%'), "{screen}");
+}
+
+#[test]
+fn only_those_chosen_are_done_and_those_kept_come_last_next_time() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    let first = s.dots[rows[0]].key.clone();
+    // Kept, the first; the rest not looked at.
+    press(&mut app, &["<space>", "$", "y"]);
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+    assert_eq!(app.index.lock().unwrap().filter.kept, 1);
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 170, 40);
+    app.settle(Duration::from_secs(5));
+    // Still in the Inbox, all of them; the one kept after the rest.
+    let rows = app.review_rows();
+    assert_eq!(rows.len(), INBOX);
+    let s = app.map.snapshot.clone().unwrap();
+    assert_eq!(s.dots[*rows.last().unwrap()].key, first);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("1 kept before"), "{screen}");
 }

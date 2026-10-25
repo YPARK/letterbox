@@ -397,14 +397,14 @@ pub const KEYS: &[Binding] = &[
         name: "i",
         hint: "i",
         foot: &[(Map, "review"), (Reviewing, "close")],
-        help: "the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
+        help: "the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
     },
     Binding {
         keys: &[("$", Apply)],
         name: "$",
         hint: "$",
         foot: &[(Reviewing, "apply")],
-        help: "in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded",
+        help: "in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are",
     },
     Binding {
         keys: &[(",", View)],

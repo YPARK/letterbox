@@ -584,14 +584,15 @@ pub struct Files {
 /// scrolled so far; the form to add an account; the message's files and
 /// links; which folder is Trash; whether to remove an account; what to
 /// call one, as typed so far.
-/// The Inbox looked through beside the map, each message given what to do
-/// with it: what is suggested, unless another was chosen; all of it done at
-/// once, when asked.
+/// The Inbox looked through beside the map, each message shown what is
+/// suggested for it: what was chosen for those looked at done at once,
+/// when asked, and the rest left as they are.
 #[derive(Default)]
 pub struct Review {
     /// The message picked in it.
     pub picked: Option<crate::index::Key>,
-    /// What was chosen for each message, where it is not what is suggested.
+    /// What was chosen for each message looked at; those not in it are
+    /// left as they are.
     pub chosen: std::collections::BTreeMap<crate::index::Key, Choice>,
     /// The first message shown.
     pub top: usize,
@@ -5100,7 +5101,8 @@ impl App {
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
     /// The messages in an Inbox, to look through: newest first, by their
-    /// place in the map; none sent from here.
+    /// place in the map, those kept before after the rest; none sent from
+    /// here.
     pub fn review_rows(&self) -> Vec<usize> {
         let Some(s) = &self.map.snapshot else {
             return Vec::new();
@@ -5110,7 +5112,10 @@ impl App {
             .collect();
         rows.sort_by_key(|&i| {
             let d = &s.dots[i];
-            std::cmp::Reverse((d.date.unwrap_or(d.arrived), i))
+            (
+                d.looked,
+                std::cmp::Reverse((d.date.unwrap_or(d.arrived), i)),
+            )
         });
         rows
     }
@@ -5126,17 +5131,19 @@ impl App {
             .map_or(Choice::Keep, |l| Choice::Move(l.to_string()))
     }
 
-    /// What is to be done with the message `i` of the map: what was chosen,
-    /// else what is suggested.
+    /// What was chosen for the message `i` of the map, if it was looked at.
+    pub fn chosen(&self, i: usize) -> Option<Choice> {
+        let s = self.map.snapshot.as_ref()?;
+        self.review.as_ref()?.chosen.get(&s.dots[i].key).cloned()
+    }
+
+    /// What is shown for the message `i` of the map: what was chosen, else
+    /// what is suggested.
     pub fn choice(&self, i: usize) -> Choice {
         let Some(s) = &self.map.snapshot else {
             return Choice::Keep;
         };
-        self.review
-            .as_ref()
-            .and_then(|r| r.chosen.get(&s.dots[i].key))
-            .cloned()
-            .unwrap_or_else(|| Self::suggested(s, i))
+        self.chosen(i).unwrap_or_else(|| Self::suggested(s, i))
     }
 
     /// Open the Inbox to look through beside the map; or close it, what was
@@ -5163,7 +5170,7 @@ impl App {
         self.focus = Focus::Reader;
         self.pick_review(first);
         self.status =
-            "the Inbox, to look through: m move, space keep, d discard, y as suggested, $ does it"
+            "the Inbox, to look through as far as you like: m move, space keep, d discard, y as suggested; $ does those chosen"
                 .to_string();
     }
 
@@ -5199,22 +5206,25 @@ impl App {
         self.pick_review(Some(rows[at.clamp(0, rows.len() as isize - 1) as usize]));
     }
 
-    /// Choose `c` for the message `i`; then, `on`, go on to the next.
-    fn choose(&mut self, i: usize, c: Choice, on: bool) {
-        let Some(s) = self.map.snapshot.clone() else {
+    /// Choose `c` for the message `i`, or, none, leave it as it is; then,
+    /// `on`, go on to the next.
+    fn decide(&mut self, i: usize, c: Option<Choice>, on: bool) {
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
             return;
         };
-        let key = s.dots[i].key.clone();
         if let Some(r) = &mut self.review {
-            if c == Self::suggested(&s, i) {
-                r.chosen.remove(&key);
-            } else {
-                r.chosen.insert(key, c);
-            }
+            match c {
+                Some(c) => r.chosen.insert(key, c),
+                None => r.chosen.remove(&key),
+            };
         }
         if on {
             self.review_step(1);
         }
+    }
+
+    fn choose(&mut self, i: usize, c: Choice, on: bool) {
+        self.decide(i, Some(c), on);
     }
 
     /// Drop down the labels the message `i` may be moved to.
@@ -5400,13 +5410,15 @@ impl App {
                         .and_then(|s| s.suggestion(i))
                         .map(str::to_string),
                 };
-                let mut all: Vec<Choice> = label.into_iter().map(Choice::Move).collect();
-                all.extend([Choice::Keep, Choice::Discard]);
-                let now = self.choice(i);
+                // Round them, and round to none chosen.
+                let mut all: Vec<Option<Choice>> = vec![None];
+                all.extend(label.into_iter().map(|l| Some(Choice::Move(l))));
+                all.extend([Some(Choice::Keep), Some(Choice::Discard)]);
+                let now = self.chosen(i);
                 let at = all.iter().position(|c| *c == now).unwrap_or(0) as isize;
                 let by = if act == Act::Right { 1 } else { -1 };
                 let next = all[(at + by).rem_euclid(all.len() as isize) as usize].clone();
-                self.choose(i, next, false);
+                self.decide(i, next, false);
             }
             (Act::Move, Some(i)) => self.open_menu(i),
             (Act::NewLabel, Some(i)) => self.choose_new(i),
@@ -5433,8 +5445,8 @@ impl App {
             (Act::Seen, Some(_)) => self.dot_flag(Flag::Seen),
             (Act::Flag, Some(_)) => self.dot_flag(Flag::Flagged),
             (Act::Archive, _) => {
-                self.status =
-                    "here, m moves it, space keeps it, d discards it; $ does it all".to_string()
+                self.status = "here, m moves it, space keeps it, d discards it; $ does those chosen"
+                    .to_string()
             }
             (
                 Act::Left
@@ -5452,36 +5464,40 @@ impl App {
         true
     }
 
-    /// How many of the Inbox looked through are to be filed, discarded and
-    /// kept.
-    fn review_counts(&self) -> (usize, usize, usize) {
-        let (mut filed, mut discarded, mut kept) = (0, 0, 0);
+    /// How many of the Inbox looked through are chosen to be filed,
+    /// discarded and kept, and how many are left as they are.
+    pub fn review_counts(&self) -> (usize, usize, usize, usize) {
+        let (mut filed, mut discarded, mut kept, mut left) = (0, 0, 0, 0);
         for i in self.review_rows() {
-            match self.choice(i) {
-                Choice::Move(_) => filed += 1,
-                Choice::Discard => discarded += 1,
-                Choice::Keep => kept += 1,
+            match self.chosen(i) {
+                Some(Choice::Move(_)) => filed += 1,
+                Some(Choice::Discard) => discarded += 1,
+                Some(Choice::Keep) => kept += 1,
+                None => left += 1,
             }
         }
-        (filed, discarded, kept)
+        (filed, discarded, kept, left)
     }
 
     /// Ask whether to do what was chosen in the Inbox looked through.
     fn ask_apply(&mut self) {
-        let (filed, discarded, kept) = self.review_counts();
-        if filed + discarded == 0 {
-            self.status = "nothing to do: each is kept in the Inbox".to_string();
+        let (filed, discarded, kept, left) = self.review_counts();
+        if filed + discarded + kept == 0 {
+            self.status =
+                "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
             return;
         }
         if let Some(r) = &mut self.review {
             r.asking = true;
         }
-        self.status =
-            format!("File {filed}, discard {discarded}, keep {kept} in the Inbox? (y or n)");
+        self.status = format!(
+            "File {filed}, discard {discarded}, keep {kept}; the other {left} left as they are? (y or n)"
+        );
     }
 
     /// Do what was chosen in the Inbox looked through: each to be moved
-    /// filed under its label, each to be discarded moved to the Trash.
+    /// filed under its label, each to be discarded moved to the Trash, each
+    /// kept learnt as kept; those not looked at left as they are.
     fn apply_review(&mut self) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
@@ -5492,16 +5508,13 @@ impl App {
         let mut kept = Vec::new();
         for i in self.review_rows() {
             let key = s.dots[i].key.clone();
-            let chosen = self
-                .review
-                .as_ref()
-                .is_some_and(|r| r.chosen.contains_key(&key));
-            match self.choice(i) {
-                Choice::Move(label) => moves.entry(label).or_default().push(key),
-                Choice::Discard => discard.push(key),
-                // Kept by choice, not as it was: learnt as not thrown away.
-                Choice::Keep if chosen => kept.push(key),
-                Choice::Keep => {}
+            match self.chosen(i) {
+                Some(Choice::Move(label)) => moves.entry(label).or_default().push(key),
+                Some(Choice::Discard) => discard.push(key),
+                // Kept by choice: learnt as not thrown away, and after the
+                // rest when looked through again.
+                Some(Choice::Keep) => kept.push(key),
+                None => {}
             }
         }
         self.teach(&kept, false);
@@ -5511,11 +5524,15 @@ impl App {
         }
         self.review_kept.clear();
         let filed: usize = moves.values().map(Vec::len).sum();
+        let kept_n = kept.len();
         for (label, keys) in moves {
             self.file_keys(keys, &label);
         }
         self.map.suggesting = None;
         let mut said = format!("{filed} filed");
+        if kept_n > 0 {
+            said = format!("{said} · {kept_n} kept");
+        }
         if !discard.is_empty() {
             self.map.region = Some(map::Region {
                 keys: discard,
@@ -5550,10 +5567,15 @@ impl App {
         };
         self.focus = Focus::Reader;
         self.pick_review(Some(i));
+        // A click on what was chosen leaves it as it is again.
+        let toggle = |app: &mut Self, c: Choice| {
+            let c = (app.chosen(i) != Some(c.clone())).then_some(c);
+            app.decide(i, c, false);
+        };
         match which {
             0 => self.open_menu(i),
-            1 => self.choose(i, Choice::Keep, false),
-            2 => self.choose(i, Choice::Discard, false),
+            1 => toggle(self, Choice::Keep),
+            2 => toggle(self, Choice::Discard),
             _ => self.choose_new(i),
         }
     }

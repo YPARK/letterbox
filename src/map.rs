@@ -134,6 +134,8 @@ pub struct Dot {
     /// How likely it is to be thrown away, as learnt from what you threw
     /// away, if it is in an Inbox and that is sure enough to say.
     pub thrown: Option<f32>,
+    /// Whether it was kept, as chosen, filed or flagged: looked at before.
+    pub looked: bool,
 }
 
 /// A cluster as the map and the sidebar show it.
@@ -275,6 +277,8 @@ pub struct Input {
     /// How likely each message in an Inbox is to be thrown away, where it
     /// is sure enough to say.
     thrown: BTreeMap<Key, f32>,
+    /// The messages taught as kept: looked at before.
+    looked: std::collections::BTreeSet<Key>,
 }
 
 /// A message as it is drawn from: its record, its labels, whether it has
@@ -322,6 +326,13 @@ pub fn input(
         .filter(|r| index.system(&r.key).inbox)
         .filter_map(|r| Some((r.key.clone(), index.filter.would_throw(r)?)))
         .collect();
+    let looked = index
+        .filter
+        .taught
+        .iter()
+        .filter(|t| !t.thrown)
+        .map(|t| t.key.clone())
+        .collect();
     let last = last.filter(|s| s.lens == lens);
     let before = last
         .map(|s| {
@@ -353,6 +364,7 @@ pub fn input(
         }),
         corpus,
         thrown,
+        looked,
     }
 }
 
@@ -478,6 +490,7 @@ pub fn compute(input: Input) -> Snapshot {
             let (r, labels, mine, system, twin) =
                 records[i].take().expect("each record a dot once");
             let thrown = input.thrown.get(&r.key).copied();
+            let looked = input.looked.contains(&r.key);
             Dot {
                 key: r.key,
                 from: r.from,
@@ -496,6 +509,7 @@ pub fn compute(input: Input) -> Snapshot {
                 places: r.places,
                 twin,
                 thrown,
+                looked,
             }
         })
         .collect();
