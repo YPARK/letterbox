@@ -827,6 +827,9 @@ pub struct App {
     pub panes_right: u16,
     /// How wide the message read was last drawn.
     pub read_width: u16,
+    /// Where it is written down how the mail was looked at, the list or
+    /// the map, to open as it was left; none to keep nothing.
+    pub look_file: Option<PathBuf>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -874,6 +877,7 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
     if app.map.mode == Mode::Map {
         app.looked_now();
     }
+    app.remember_look();
     let written = app.index.lock().unwrap_or_else(|e| e.into_inner()).flush();
     result.and(written)
 }
@@ -1028,6 +1032,7 @@ impl App {
             resizing: false,
             panes_right: 0,
             read_width: 0,
+            look_file: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -3781,7 +3786,18 @@ impl App {
                 return true;
             }
             Act::ZoomAll => {
-                self.map.zoom = None;
+                self.map.zoom_all();
+                return true;
+            }
+            // From farther than all of it, a cluster's node is opened.
+            Act::Open if self.map.clusters => {
+                let id = self
+                    .map
+                    .picked()
+                    .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
+                if let Some(id) = id {
+                    self.map.open_node(id);
+                }
                 return true;
             }
             Act::NextMessage | Act::PreviousMessage if !self.query.is_empty() => {
@@ -3914,7 +3930,11 @@ impl App {
     /// Move the map's cursor that way, and read what it picks once moving
     /// pauses, where the message read is beside the map.
     fn map_step(&mut self, dx: i32, dy: i32) {
-        self.map.step(dx, dy);
+        if self.map.clusters {
+            self.map.step_node(dx, dy);
+        } else {
+            self.map.step(dx, dy);
+        }
         if self.side_by_side {
             self.due = Some((Instant::now(), Due::Message));
         }
@@ -3946,6 +3966,38 @@ impl App {
             }
         }
         self.show_map();
+    }
+
+    /// Open as the mail was last looked at: the map, from as far as its
+    /// clusters if they were shown, else the list.
+    pub fn recall_look(&mut self) {
+        let Some(said) = self
+            .look_file
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        else {
+            return;
+        };
+        let mut words = said.split_whitespace();
+        if words.next() != Some("map") || self.map_off.is_some() || self.map_later {
+            return;
+        }
+        self.show_map();
+        self.map.clusters = words.next() == Some("clusters");
+    }
+
+    /// Write down how the mail is looked at, to open so again.
+    pub fn remember_look(&self) {
+        let Some(path) = &self.look_file else {
+            return;
+        };
+        let look = match self.map.mode {
+            Mode::Map if self.map.clusters => "map clusters",
+            Mode::Map => "map",
+            Mode::List => "list",
+        };
+        // Only how it was left; nothing lost if it cannot be kept.
+        let _ = std::fs::write(path, format!("{look}\n"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked
@@ -4798,6 +4850,9 @@ impl App {
         self.focus = Focus::List;
         if self.map.moving.is_some() {
             return self.move_onto(id);
+        }
+        if self.map.clusters {
+            return self.map.open_node(id);
         }
         self.map.focused = if self.map.focused == Focused::Cluster(id) {
             Focused::All

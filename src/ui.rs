@@ -1662,7 +1662,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         app.map.since.name(),
         shown.len()
     );
-    if app.map.scale() > 1.0 {
+    if app.map.clusters {
+        what = format!(" · its clusters{what}");
+    } else if app.map.scale() > 1.0 {
         what = format!(" · ×{:.1} nearer{what}", app.map.scale());
     }
     if unread > 0 {
@@ -1681,7 +1683,11 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Focused::All => {}
     }
     head.push(Span::styled(what, dim));
-    let key = "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster";
+    let key = if app.map.clusters {
+        "   ⬤ as big as how many it holds, bright with unread  ◆ label  ◇ cluster"
+    } else {
+        "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster"
+    };
     let used: usize = head.iter().map(|h| h.content.width()).sum();
     if used + key.width() <= legend.width as usize {
         head.push(Span::styled(key, Style::new().fg(t.faint)));
@@ -1782,6 +1788,10 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             app.map.cells.insert(i, c);
             app.map.drawn.entry(c).or_default().push(i);
         }
+    }
+    if app.map.clusters {
+        app.map.drawn.clear();
+        return cluster_nodes(f, app, &s, &shown, canvas, now);
     }
     // What has anything new, by cluster: the rest dimmed, when asked.
     let lively: std::collections::BTreeSet<usize> = shown
@@ -2052,6 +2062,254 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 },
             );
         }
+    }
+}
+
+/// The map from farther than all of it: each cluster one round node, its
+/// area as big as how many of its messages are shown, in its hue, bright
+/// with mail unread, its name and how many beside it. Drawn in half cells,
+/// whose halves are about as tall as a cell is wide, so that round is round.
+fn cluster_nodes(
+    f: &mut Frame,
+    app: &mut App,
+    s: &crate::map::Snapshot,
+    shown: &[usize],
+    canvas: Rect,
+    now: i64,
+) {
+    use crate::map::Focused;
+    let t = app.theme;
+    let query = app.query.clone();
+    let found = app.map.hits(&query).map(|h| h.matched.clone());
+    struct Node {
+        id: u32,
+        at: usize,
+        n: usize,
+        unread: usize,
+        new: usize,
+        hits: Option<usize>,
+        // Across in columns, down in half rows.
+        centre: [f32; 2],
+        r: f32,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    for (at, g) in s.groups.iter().enumerate() {
+        let members: Vec<usize> = g
+            .members
+            .iter()
+            .copied()
+            .filter(|i| shown.binary_search(i).is_ok())
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        let core: Vec<(i32, i32)> = g
+            .core
+            .iter()
+            .chain(&members)
+            .filter_map(|i| app.map.places.get(i).copied())
+            .take(g.core.len().max(1))
+            .collect();
+        let k = core.len().max(1) as f32;
+        let x = core.iter().map(|c| c.0 as f32).sum::<f32>() / k + 0.5;
+        let y = core.iter().map(|c| c.1 as f32).sum::<f32>() / k + 0.5;
+        nodes.push(Node {
+            id: g.id,
+            at,
+            n: members.len(),
+            unread: members.iter().filter(|&&i| !s.dots[i].flags.seen).count(),
+            new: members
+                .iter()
+                .filter(|&&i| app.map.is_new(&s.dots[i], now))
+                .count(),
+            hits: found
+                .as_ref()
+                .map(|m| members.iter().filter(|&&i| m[i]).count()),
+            centre: [x, 2.0 * y],
+            r: 0.0,
+        });
+    }
+    // The biggest a quarter of the map's height across, the rest by their
+    // area, none smaller than a cell.
+    let (x0, x1) = (f32::from(canvas.x), f32::from(canvas.right()));
+    let (y0, y1) = (2.0 * f32::from(canvas.y), 2.0 * f32::from(canvas.bottom()));
+    let most = nodes.iter().map(|n| n.n).max().unwrap_or(1) as f32;
+    let biggest = (f32::from(canvas.height) / 4.0)
+        .min(f32::from(canvas.width) / 8.0)
+        .max(1.0);
+    for n in &mut nodes {
+        n.r = (biggest * (n.n as f32 / most).sqrt()).max(1.0);
+    }
+    // Those that overlap pushed apart, the smaller the more, a column clear
+    // between them, and kept on the map.
+    for _ in 0..40 {
+        let mut moved = false;
+        for a in 0..nodes.len() {
+            for b in a + 1..nodes.len() {
+                let (pa, pb) = (nodes[a].centre, nodes[b].centre);
+                let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
+                let d = (dx * dx + dy * dy).sqrt();
+                let need = nodes[a].r + nodes[b].r + 1.0;
+                if d >= need {
+                    continue;
+                }
+                moved = true;
+                let (ux, uy) = if d > 1e-3 {
+                    (dx / d, dy / d)
+                } else {
+                    (1.0, 0.0)
+                };
+                let (ra, rb) = (nodes[a].r, nodes[b].r);
+                let (wa, wb) = (rb / (ra + rb), ra / (ra + rb));
+                let gap = need - d;
+                nodes[a].centre = [pa[0] - ux * gap * wa, pa[1] - uy * gap * wa];
+                nodes[b].centre = [pb[0] + ux * gap * wb, pb[1] + uy * gap * wb];
+            }
+        }
+        for n in &mut nodes {
+            let keep = |v: f32, lo: f32, hi: f32| {
+                if hi - lo > 2.0 * n.r {
+                    v.clamp(lo + n.r, hi - n.r)
+                } else {
+                    (lo + hi) / 2.0
+                }
+            };
+            n.centre = [keep(n.centre[0], x0, x1), keep(n.centre[1], y0, y1)];
+        }
+        if !moved {
+            break;
+        }
+    }
+    let picked = app.map.picked().and_then(|i| s.group_of(i)).map(|g| g.id);
+    app.map.nodes = nodes
+        .iter()
+        .map(|n| (n.id, [n.centre[0], n.centre[1] / 2.0], n.r))
+        .collect();
+    // The biggest first, so that the smaller lie on them and are seen.
+    nodes.sort_by(|a, b| b.n.cmp(&a.n).then(a.id.cmp(&b.id)));
+    let lit = |n: &Node| {
+        let in_focus =
+            matches!(app.map.focused, Focused::All) || app.map.focused == Focused::Cluster(n.id);
+        in_focus && n.hits != Some(0) && !(app.map.new_only && n.new == 0)
+    };
+    let buf = f.buffer_mut();
+    let mut runs: Vec<(Rect, u32)> = Vec::new();
+    for n in &nodes {
+        let g = &s.groups[n.at];
+        let colour = if !lit(n) {
+            t.rule
+        } else if n.unread == 0 {
+            crate::theme::mix(t.hue(g.hue), t.page, 0.5)
+        } else {
+            t.hue(g.hue)
+        };
+        let inside = |x: f32, y: f32| {
+            let (dx, dy) = (x - n.centre[0], y - n.centre[1]);
+            dx * dx + dy * dy <= n.r * n.r
+        };
+        let top = ((n.centre[1] - n.r) / 2.0).floor().max(f32::from(canvas.y)) as u16;
+        let bottom = ((n.centre[1] + n.r) / 2.0)
+            .ceil()
+            .min(f32::from(canvas.bottom())) as u16;
+        let left = (n.centre[0] - n.r).floor().max(x0) as u16;
+        let right = (n.centre[0] + n.r).ceil().min(x1) as u16;
+        for y in top..bottom {
+            let mut run: Option<(u16, u16)> = None;
+            for x in left..right {
+                let cx = f32::from(x) + 0.5;
+                let upper = inside(cx, 2.0 * f32::from(y) + 0.5);
+                let lower = inside(cx, 2.0 * f32::from(y) + 1.5);
+                let glyph = match (upper, lower) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => continue,
+                };
+                buf[(x, y)]
+                    .set_char(glyph)
+                    .set_style(Style::new().fg(colour).bg(t.page));
+                run = Some((run.map_or(x, |r| r.0), x));
+            }
+            if let Some((a, b)) = run {
+                runs.push((Rect::new(a, y, b - a + 1, 1), n.id));
+            }
+        }
+    }
+    for (r, id) in runs {
+        app.targets.push((r, Target::Anchor(id)));
+    }
+    // Each one's name and how many, beside it where there is room: to its
+    // right, else its left, else above or below it, else on it.
+    let mut taken: Vec<(u16, u16, u16)> = Vec::new();
+    for n in &nodes {
+        let g = &s.groups[n.at];
+        let mut said = format!(" {} {}", clip(&g.name(), 22), n.n);
+        match n.hits {
+            Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
+            _ if n.new > 0 => said.push_str(&format!(" · {} new", n.new)),
+            _ if n.unread > 0 => said.push_str(&format!(" · {} unread", n.unread)),
+            _ => {}
+        }
+        let chip = if g.label.is_some() { " ◆" } else { " ◇" };
+        let width = (chip.width() + said.width()) as u16;
+        let row = (n.centre[1] / 2.0).floor() as i32;
+        let (top, bottom) = (
+            ((n.centre[1] - n.r) / 2.0).floor() as i32 - 1,
+            ((n.centre[1] + n.r) / 2.0).ceil() as i32,
+        );
+        let right = (n.centre[0] + n.r).ceil() as i32 + 1;
+        let left = (n.centre[0] - n.r).floor() as i32 - i32::from(width) - 1;
+        let middle = n.centre[0] as i32 - i32::from(width / 2);
+        let within = |x: i32| {
+            x.clamp(
+                i32::from(canvas.x),
+                i32::from(canvas.right().saturating_sub(width)),
+            )
+        };
+        let clear = |x: u16, y: u16| {
+            taken
+                .iter()
+                .all(|&(tx, ty, tw)| ty != y || x + width <= tx || tx + tw <= x)
+        };
+        let spot = [
+            (right, row),
+            (left, row),
+            (within(middle), top),
+            (within(middle), bottom),
+            (within(middle), row),
+        ]
+        .into_iter()
+        .filter(|&(x, y)| {
+            x >= i32::from(canvas.x)
+                && x + i32::from(width) <= i32::from(canvas.right())
+                && y >= i32::from(canvas.y)
+                && y < i32::from(canvas.bottom())
+        })
+        .map(|(x, y)| (x as u16, y as u16))
+        .find(|&(x, y)| clear(x, y));
+        let Some((x, y)) = spot else {
+            continue;
+        };
+        taken.push((x, y, width));
+        let style = if picked == Some(n.id) {
+            Style::new().fg(t.title).bg(t.focus).bold()
+        } else if !lit(n) {
+            Style::new().fg(t.dim).bg(t.page)
+        } else if n.unread > 0 {
+            Style::new().fg(t.title).bg(t.page).bold()
+        } else {
+            Style::new().fg(t.soft).bg(t.page)
+        };
+        let chip_style = Style::new().fg(t.hue(g.hue)).bg(style.bg.unwrap_or(t.page));
+        let spot = Rect::new(x, y, width.min(canvas.right().saturating_sub(x)), 1);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(chip, chip_style),
+                Span::styled(said, style),
+            ])),
+            spot,
+        );
+        app.targets.push((spot, Target::Anchor(n.id)));
     }
 }
 

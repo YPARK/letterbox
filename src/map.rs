@@ -211,6 +211,26 @@ impl Snapshot {
         }
     }
 
+    /// The message of the group at `at` nearest its middle by angle.
+    pub fn central(&self, at: usize) -> Option<usize> {
+        let g = self.groups.get(at)?;
+        let v = &self.model.vectors;
+        let mut middle: model::Vector = [0.0; model::DIM];
+        for &i in &g.members {
+            for (m, x) in middle.iter_mut().zip(&v[i]) {
+                *m += x;
+            }
+        }
+        g.members
+            .iter()
+            .max_by(|&&a, &&b| {
+                model::dot(&v[a], &middle)
+                    .total_cmp(&model::dot(&v[b], &middle))
+                    .then(b.cmp(&a))
+            })
+            .copied()
+    }
+
     pub fn group(&self, id: u32) -> Option<&Group> {
         self.groups.iter().find(|g| g.id == id)
     }
@@ -658,6 +678,12 @@ pub struct Map {
     pub view: Option<View>,
     /// Where each message shown is, as a cell, on the screen or past it.
     pub places: BTreeMap<usize, (i32, i32)>,
+    /// Whether it is looked at from farther than all of it: each cluster
+    /// one node, as big as how many it holds.
+    pub clusters: bool,
+    /// The nodes drawn, while it is: their group's number, their middle,
+    /// across and down in cells, and their radius, in columns.
+    pub nodes: Vec<(u32, [f32; 2], f32)>,
 }
 
 /// How near the map is looked at: how many times nearer than all of it,
@@ -726,6 +752,15 @@ impl Map {
     /// Look nearer by `factor`, or farther, below one, keeping the point
     /// `fixed` of the map, as shares, where it is on the screen.
     fn zoom_by(&mut self, factor: f32, fixed: [f32; 2]) {
+        // Farther than all of it, the clusters; nearer from them, all of it.
+        if self.clusters {
+            self.clusters = factor < 1.0;
+            return;
+        }
+        if self.zoom.is_none() && factor < 1.0 {
+            self.clusters = true;
+            return;
+        }
         let z = self.zoom.unwrap_or(Zoom {
             scale: 1.0,
             centre: [0.5, 0.5],
@@ -740,6 +775,84 @@ impl Map {
             scale,
             centre: kept_in(centre, scale),
         });
+    }
+
+    /// All of the map, its messages, neither nearer nor farther.
+    pub fn zoom_all(&mut self) {
+        self.zoom = None;
+        self.clusters = false;
+    }
+
+    /// Open the cluster `id` from its node: the map narrowed to it, its
+    /// message nearest its middle picked, and looked at near enough to
+    /// have all of its largest part in sight.
+    pub fn open_node(&mut self, id: u32) {
+        let Some(s) = self.snapshot.clone() else {
+            return;
+        };
+        let Some(at) = s.groups.iter().position(|g| g.id == id) else {
+            return;
+        };
+        self.clusters = false;
+        self.focused = Focused::Cluster(id);
+        self.cursor = s.central(at).map(|i| s.dots[i].key.clone());
+        let (Some(v), Some(places)) = (self.view, s.at.as_ref()) else {
+            return;
+        };
+        let shares: Vec<[f32; 2]> = s.groups[at]
+            .core
+            .iter()
+            .filter_map(|&i| places.get(i).map(|&p| v.share(p)))
+            .collect();
+        let span = |a: usize| {
+            let lo = shares.iter().map(|p| p[a]).fold(f32::MAX, f32::min);
+            let hi = shares.iter().map(|p| p[a]).fold(f32::MIN, f32::max);
+            (lo, hi)
+        };
+        if shares.is_empty() {
+            return;
+        }
+        let ((x0, x1), (y0, y1)) = (span(0), span(1));
+        // A fifth again round it, so that its edge is not the screen's.
+        let wide = (x1 - x0).max(y1 - y0).max(1.0 / NEAREST) * 1.2;
+        let scale = (1.0 / wide).clamp(1.0, NEAREST);
+        self.zoom = (scale > 1.0).then(|| Zoom {
+            scale,
+            centre: kept_in([(x0 + x1) / 2.0, (y0 + y1) / 2.0], scale),
+        });
+    }
+
+    /// Pick the node nearest that way, `dx` across and `dy` down, from the
+    /// one the message picked is in: its message nearest its middle.
+    pub fn step_node(&mut self, dx: i32, dy: i32) {
+        let Some(s) = self.snapshot.clone() else {
+            return;
+        };
+        let here = self
+            .picked()
+            .and_then(|i| s.group_of(i))
+            .map(|g| g.id)
+            .and_then(|id| self.nodes.iter().find(|n| n.0 == id).copied());
+        let next = match here {
+            None => self.nodes.first().map(|n| n.0),
+            Some((id, [x0, y0], _)) => self
+                .nodes
+                .iter()
+                .filter(|n| n.0 != id)
+                .filter_map(|&(other, [x, y], _)| {
+                    // A cell is about twice as tall as it is wide.
+                    let (ex, ey) = (x - x0, 2.0 * (y - y0));
+                    let along = ex * dx as f32 + ey * dy as f32;
+                    let across = (ex * dy as f32 - ey * dx as f32).abs();
+                    (along > 0.0).then_some((along + 2.0 * across, other))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                .map(|(_, other)| other),
+        };
+        let at = next.and_then(|id| s.groups.iter().position(|g| g.id == id));
+        if let Some(i) = at.and_then(|at| s.central(at)) {
+            self.cursor = Some(s.dots[i].key.clone());
+        }
     }
 
     /// Zoom by `factor` at the cell `column`, `row` of the map, as the
@@ -1016,19 +1129,8 @@ impl Map {
             None if by > 0 => 0,
             None => (n - 1) as usize,
         };
-        let g = &s.groups[next];
-        self.focused = Focused::Cluster(g.id);
-        let centre = &s.clustering.clusters[next].centre;
-        let first = g
-            .members
-            .iter()
-            .max_by(|&&a, &&b| {
-                model::dot(&s.model.vectors[a], centre)
-                    .total_cmp(&model::dot(&s.model.vectors[b], centre))
-                    .then(b.cmp(&a))
-            })
-            .copied();
-        if let Some(i) = first {
+        self.focused = Focused::Cluster(s.groups[next].id);
+        if let Some(i) = s.central(next) {
             self.cursor = Some(s.dots[i].key.clone());
         }
     }

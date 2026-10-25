@@ -5634,6 +5634,137 @@ fn the_map_zooms_by_keys_and_wheel_and_follows_the_message_picked() {
     assert!(app.map.zoom.is_none());
 }
 
+/// How many of the group `id`'s messages the map shows.
+fn shown_of(app: &App, id: u32) -> usize {
+    let s = app.map.snapshot.as_ref().unwrap();
+    let shown = app.map.shown(jiff::Timestamp::now().as_second());
+    let g = s.group(id).unwrap();
+    g.members.iter().filter(|i| shown.contains(i)).count()
+}
+
+#[test]
+fn farther_than_all_of_it_each_cluster_is_one_node_as_big_as_how_many_it_holds() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 150, 45);
+    press(&mut app, &["Z"]);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(app.map.clusters);
+    assert!(screen.contains("its clusters"), "{screen}");
+    assert!(app.map.drawn.is_empty(), "no dots, only nodes");
+    let s = app.map.snapshot.clone().unwrap();
+    let with_mail = s.groups.iter().filter(|g| shown_of(&app, g.id) > 0).count();
+    assert_eq!(app.map.nodes.len(), with_mail, "one node each");
+    // As big as how many: the more, the wider.
+    let mut by_count: Vec<(usize, f32)> = app
+        .map
+        .nodes
+        .iter()
+        .map(|&(id, _, r)| (shown_of(&app, id), r))
+        .collect();
+    by_count.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    assert!(
+        by_count.windows(2).all(|w| w[0].1 <= w[1].1),
+        "{by_count:?}"
+    );
+    assert!(by_count.last().unwrap().1 > by_count[0].1, "{by_count:?}");
+    // Each named once, by its node, with how many it holds.
+    let biggest = s
+        .groups
+        .iter()
+        .max_by_key(|g| (shown_of(&app, g.id), std::cmp::Reverse(g.id)))
+        .unwrap();
+    let named = format!("{} {}", biggest.name(), shown_of(&app, biggest.id));
+    assert_eq!(screen.matches(&named).count(), 1, "{named}\n{screen}");
+    // The arrows go from node to node.
+    let group = |app: &App| {
+        let p = app.map.picked().unwrap();
+        app.map.snapshot.as_ref().unwrap().group_of(p).unwrap().id
+    };
+    let first = group(&app);
+    for key in ["l", "j", "h", "k"] {
+        press(&mut app, &[key]);
+        if group(&app) != first {
+            break;
+        }
+    }
+    let other = group(&app);
+    assert_ne!(other, first, "on to another node");
+    // ⏎ opens it: narrowed to it, its messages again, all of it in sight.
+    press(&mut app, &["<enter>"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(!app.map.clusters);
+    assert_eq!(app.map.focused, crate::map::Focused::Cluster(other));
+    let core = &s.group(other).unwrap().core;
+    let shown = app.map.shown(jiff::Timestamp::now().as_second());
+    assert!(
+        core.iter()
+            .filter(|i| shown.contains(i))
+            .all(|i| app.map.cells.contains_key(i)),
+        "all of it in sight"
+    );
+    // 0, all of it; z from its clusters, all of it again.
+    press(&mut app, &["0", "Z", "z"]);
+    assert!(!app.map.clusters);
+    assert!(app.map.zoom.is_none());
+}
+
+#[test]
+fn a_node_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 150, 45);
+    let v = app.map.view.unwrap();
+    let (x, y) = (v.x + v.w / 2, v.y + v.h / 2);
+    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
+    assert!(app.map.clusters, "farther than all of it");
+    let _ = app::screen(&mut app, 150, 45);
+    let (r, id) = app
+        .targets
+        .iter()
+        .rev()
+        .find_map(|&(r, t)| match t {
+            app::Target::Anchor(id) => Some((r, id)),
+            _ => None,
+        })
+        .unwrap();
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), r.x, r.y));
+    assert!(!app.map.clusters);
+    assert_eq!(app.map.focused, crate::map::Focused::Cluster(id));
+    let p = app.map.picked().unwrap();
+    assert!(app.map.snapshot.as_ref().unwrap().picked_by(id, p));
+    // Out to the clusters by the wheel, and in again: all of it.
+    press(&mut app, &["0"]);
+    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
+    assert!(app.map.clusters);
+    app.mouse(mouse(MouseEventKind::ScrollUp, x, y));
+    assert!(!app.map.clusters);
+    assert!(app.map.zoom.is_none());
+}
+
+#[test]
+fn letterbox_opens_as_it_was_left_the_list_or_the_map_and_its_clusters() {
+    let dir = tempfile::tempdir().unwrap();
+    let look = dir.path().join("look");
+    let mut app = demo_map();
+    press(&mut app, &["Z"]);
+    app.look_file = Some(look.clone());
+    app.remember_look();
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), "map clusters\n");
+    let mut again = demo();
+    again.look_file = Some(look.clone());
+    again.recall_look();
+    assert_eq!(again.map.mode, crate::map::Mode::Map);
+    assert!(again.map.clusters);
+    // Left at the list, the list.
+    press(&mut again, &["<m-l>"]);
+    again.remember_look();
+    let mut third = demo();
+    third.look_file = Some(look);
+    third.recall_look();
+    assert_eq!(third.map.mode, crate::map::Mode::List);
+    // None kept, none written: the tests' and the demo's.
+    assert!(demo().look_file.is_none());
+}
+
 /// The labels of the map's message with `subject`, and whether it is in
 /// the Inbox.
 fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {

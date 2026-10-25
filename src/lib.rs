@@ -519,6 +519,9 @@ fn command(args: &Args) -> anyhow::Result<()> {
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();
+            } else {
+                app.look_file = Some(args.config.with_file_name("look"));
+                app.recall_look();
             }
             app::run(&mut app)
         }
