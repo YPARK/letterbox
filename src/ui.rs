@@ -147,7 +147,92 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some((area, targets)) = popup {
         app.targets.push((area, Target::Popup));
         app.targets.extend(targets);
+        let spots = border_keys(f.buffer_mut(), area);
+        app.targets.extend(spots);
     }
+}
+
+/// What a click on a hint naming `keys` presses: a key, or two in turn.
+fn press(keys: &[KeyEvent]) -> Option<Target> {
+    match *keys {
+        [k] => Some(Target::Key(k)),
+        [a, b] => Some(Target::Chord(a, b)),
+        _ => None,
+    }
+}
+
+/// Where each key of the hint `label`, drawn from column `x` of row `y`,
+/// is clicked: the whole of `width` where the hint names one key or chord,
+/// else each key named where it is drawn.
+fn hint_spots(label: &str, x: u16, y: u16, width: u16) -> Targets {
+    let parts = keymap::pressed(label);
+    let whole = parts.len() == 1 && parts[0].1 == label.chars().count();
+    parts
+        .into_iter()
+        .filter_map(|(at, w, keys)| {
+            let rect = if whole {
+                Rect::new(x, y, width, 1)
+            } else {
+                Rect::new(x + at as u16, y, w as u16, 1)
+            };
+            Some((rect, press(&keys)?))
+        })
+        .collect()
+}
+
+/// `items`, each a key and what it does, as spans from column `x` of row
+/// `y`, each one clickable as its key.
+fn keyed(
+    t: &Theme,
+    items: &[(&str, &str)],
+    x: u16,
+    y: u16,
+    spots: &mut Targets,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut at = x;
+    for (key, what) in items {
+        let what = format!(" {what}   ");
+        let width = (key.width() + what.width()) as u16;
+        spots.extend(hint_spots(key, at, y, width));
+        spans.push(Span::styled(
+            key.to_string(),
+            Style::new().fg(t.soft).bold(),
+        ));
+        spans.push(Span::styled(what, Style::new().fg(t.dim)));
+        at += width;
+    }
+    spans
+}
+
+/// The keys a dialog's bottom border says, as it is drawn, each part
+/// between ` · ` clicked as the key it begins with.
+fn border_keys(buf: &mut ratatui::buffer::Buffer, area: Rect) -> Targets {
+    if area.height < 2 || area.width < 4 {
+        return Vec::new();
+    }
+    let y = area.bottom() - 1;
+    let cells: Vec<(u16, String)> = (area.x + 1..area.right() - 1)
+        .map(|x| (x, buf[(x, y)].symbol().to_string()))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+    let text: String = cells.iter().map(|(_, s)| s.as_str()).collect();
+    let Some(text) = text.strip_prefix(' ') else {
+        return Vec::new();
+    };
+    let text = text.trim_end_matches('─').trim_end();
+    let mut spots = Vec::new();
+    let mut at = 1;
+    for part in text.split(" · ") {
+        let width = part.chars().count();
+        if let Some(key) = part.split(' ').next()
+            && let Some((x, _)) = cells.get(at)
+        {
+            spots.extend(hint_spots(key, *x, y, width as u16));
+        }
+        at += width + 3;
+    }
+    spots
 }
 
 fn dialog<'a>(t: &Theme, title: &'a str, foot: &'a str) -> Block<'a> {
@@ -498,7 +583,7 @@ fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (Rect, Target
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, "View", "a key changes it · esc closes")),
+        Paragraph::new(lines).block(dialog(t, "View", "letters change it · esc closes")),
         area,
     );
     let room = width.saturating_sub(4);
@@ -787,6 +872,7 @@ fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
+    app.targets.push((area, Target::Popup));
     compose_pane(f, app, inner);
 }
 
@@ -830,25 +916,29 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         height: area.height - body.height - guide_h,
         ..area
     };
+    // Each key on it is clicked as it is pressed.
+    let mut spots: Targets = Vec::new();
     if guide_h > 0 {
-        let key = Style::new().fg(t.soft).bold();
         let say = Style::new().fg(t.dim);
-        let lines = vec![
-            Line::from(vec![
-                Span::styled("  C-c C-c", key),
-                Span::styled(" send   ", say),
-                Span::styled("C-c C-a", key),
-                Span::styled(" attach   ", say),
-                Span::styled("C-c C-k", key),
-                Span::styled(" discard   ", say),
-                Span::styled("C-g", key),
-                Span::styled(" stops, never losing it", say),
-            ]),
-            Line::styled(
-                "  C-c is Ctrl+c, so C-c C-c is Ctrl+c twice. The arrows move. F1: every key.",
-                say,
-            ),
-        ];
+        let mut first = vec![Span::raw("  ")];
+        first.extend(keyed(
+            &t,
+            &[
+                ("C-c C-c", "send"),
+                ("C-c C-a", "attach"),
+                ("C-c C-k", "discard"),
+                ("C-g", "stops, never losing it"),
+            ],
+            guide.x + 2,
+            guide.y,
+            &mut spots,
+        ));
+        let second = "  C-c is Ctrl+c, so C-c C-c is Ctrl+c twice. The arrows move. F1: every key.";
+        if let (Some(at), Some(f1)) = (second.find("F1"), keymap::key_named("F1")) {
+            let x = guide.x + second[..at].width() as u16;
+            spots.push((Rect::new(x, guide.y + 1, 14, 1), Target::Key(f1)));
+        }
+        let lines = vec![Line::from(first), Line::styled(second, say)];
         f.render_widget(Paragraph::new(lines).style(Style::new().bg(t.page)), guide);
     }
     let rows = (body.height as usize).max(1);
@@ -898,25 +988,45 @@ fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     );
     // Searching, the mode line says what is searched for, as Emacs's
     // echo area does.
-    let said = match compose.buffer.searching() {
-        _ if compose.asking => Span::styled(
-            format!("  {}", crate::app::KILL_ANYWAY),
-            Style::new().fg(t.title).bold(),
-        ),
-        Some(s) => Span::styled(format!("  {s}"), Style::new().fg(t.title).bold()),
-        None => Span::styled(
-            "  C-SPC mark   C-w cut   C-y yank   C-s search   F1 all keys",
-            Style::new().fg(t.dim),
-        ),
-    };
-    let mode_line = Line::from(vec![
-        Span::styled(" Compose ", Style::new().fg(t.side).bg(t.title).bold()),
-        said,
-    ]);
+    let label = " Compose ";
+    let mut spans = vec![Span::styled(
+        label,
+        Style::new().fg(t.side).bg(t.title).bold(),
+    )];
+    let x = mode.x + label.width() as u16 + 2;
+    spans.push(Span::raw("  "));
+    match compose.buffer.searching() {
+        _ if compose.asking => {
+            let asked = "Message modified; kill anyway? (y or n)   ";
+            spans.push(Span::styled(asked, Style::new().fg(t.title).bold()));
+            spans.extend(keyed(
+                &t,
+                &[("y", "discard it"), ("n", "go on writing")],
+                x + asked.width() as u16,
+                mode.y,
+                &mut spots,
+            ));
+        }
+        Some(s) => spans.push(Span::styled(s, Style::new().fg(t.title).bold())),
+        None => spans.extend(keyed(
+            &t,
+            &[
+                ("C-SPC", "mark"),
+                ("C-w", "cut"),
+                ("C-y", "yank"),
+                ("C-s", "search"),
+                ("F1", "all keys"),
+            ],
+            x,
+            mode.y,
+            &mut spots,
+        )),
+    }
     f.render_widget(
-        Paragraph::new(mode_line).style(Style::new().bg(t.side)),
+        Paragraph::new(Line::from(spans)).style(Style::new().bg(t.side)),
         mode,
     );
+    app.targets.extend(spots);
 }
 
 /// A line of the message being written: the cursor reversed, and the
@@ -2247,7 +2357,7 @@ pub(crate) fn size(bytes: usize) -> String {
 }
 
 /// Where a key's hint is at the foot: its line, how far along, how wide.
-type Spot = (usize, u16, u16, KeyEvent);
+type Spot = (usize, u16, u16, Target);
 
 /// The foot: what happened, at the right of the keys where there is room,
 /// else on a line of its own above them; the keys; and where each key's
@@ -2261,8 +2371,9 @@ fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
         let mut x = 0u16;
         for (k, what) in items {
             let w = (k.width() + what.width()) as u16;
-            if let Some(code) = keymap::key_named(k.trim()) {
-                spots.push((y, x, w, code));
+            // Where each of its keys is, from the column after its space.
+            for (rect, target) in hint_spots(k.trim(), x + 1, 0, w - 1) {
+                spots.push((y, rect.x, rect.width, target));
             }
             x += w;
             spans.push(Span::styled(k, Style::new().fg(t.soft).bold()));
@@ -2302,7 +2413,7 @@ fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spo
         Paragraph::new(lines).style(Style::new().bg(app.theme.side)),
         area,
     );
-    for (y, x, w, code) in spots {
+    for (y, x, w, target) in spots {
         let at = Rect {
             x: area.x + x,
             y: area.y + y as u16,
@@ -2310,7 +2421,7 @@ fn keys(f: &mut Frame, app: &mut App, area: Rect, lines: Vec<Line<'static>>, spo
             height: 1,
         };
         if at.y < area.bottom() {
-            app.targets.push((at, Target::Key(code)));
+            app.targets.push((at, target));
         }
     }
 }

@@ -468,6 +468,8 @@ pub enum Target {
     Button(Button),
     /// A key's hint at the foot: clicked, as if it were pressed.
     Key(KeyEvent),
+    /// Two keys pressed in turn, as `C-c C-c`, clicked.
+    Chord(KeyEvent, KeyEvent),
     /// The map, where its messages are; and a cluster's anchor on it, by
     /// the cluster's number.
     Map,
@@ -2551,8 +2553,12 @@ impl App {
     fn dialog_click(&mut self, at: Option<Target>) {
         match (&mut self.dialog, at) {
             (_, Some(Target::Popup)) => {}
-            // A key at the foot, pressed.
+            // A key at the foot, or on the dialog's border, pressed.
             (_, Some(Target::Key(key))) => self.dialog_key(key),
+            (_, Some(Target::Chord(a, b))) => {
+                self.dialog_key(a);
+                self.dialog_key(b);
+            }
             (Dialog::Closed, _) => {}
             // Away from help, or from renaming, closes it, the name left
             // as it is.
@@ -2761,16 +2767,22 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
-        // Writing, only the files being picked, or the help, are clicked.
-        if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
-            return;
-        }
         let at = self
             .targets
             .iter()
             .rev()
             .find(|(r, _)| r.contains(Position::new(m.column, m.row)))
             .map(|&(_, t)| t);
+        // Writing, its keys are clicked, and nothing behind it; the files
+        // being picked, or the help, as they are elsewhere.
+        if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
+            if m.kind == MouseEventKind::Down(MouseButton::Left)
+                && let Some(key @ (Target::Key(_) | Target::Chord(..))) = at
+            {
+                self.click(Some(key));
+            }
+            return;
+        }
         let by = match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if at == Some(Target::Map) && !self.dialog.is_open() {
@@ -2808,6 +2820,10 @@ impl App {
         self.searching = false;
         match at {
             Some(Target::Key(key)) => self.key(key),
+            Some(Target::Chord(a, b)) => {
+                self.key(a);
+                self.key(b);
+            }
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
             Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {

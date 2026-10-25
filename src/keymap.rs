@@ -519,6 +519,29 @@ pub fn help() -> impl Iterator<Item = (&'static str, &'static str)> {
         .map(|b| (b.name, b.help))
 }
 
+/// The keys a hint names, each part of it with where it begins in the
+/// hint and how wide it is, both in characters: `j/k` is two parts, a key
+/// each; `C-c C-c` one, two keys pressed in turn. A part that names no
+/// key, or more than two, is left out.
+pub fn pressed(hint: &str) -> Vec<(usize, usize, Vec<KeyEvent>)> {
+    let parts: Vec<&str> = if hint.len() > 1 && hint.contains('/') {
+        hint.split('/').collect()
+    } else {
+        vec![hint]
+    };
+    let mut at = 0;
+    let mut out = Vec::new();
+    for part in parts {
+        let width = part.chars().count();
+        let keys: Option<Vec<KeyEvent>> = part.split(' ').map(key_named).collect();
+        if let Some(keys) = keys.filter(|k| (1..=2).contains(&k.len())) {
+            out.push((at, width, keys));
+        }
+        at += width + 1;
+    }
+    out
+}
+
 pub type Chord = (KeyCode, KeyModifiers);
 
 /// A key as the table compares it. A letter with Ctrl, Alt or Super is in
@@ -582,6 +605,9 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
     } else {
         (name, none, false)
     };
+    if rest == "SPC" {
+        return Some(KeyEvent::new(KeyCode::Char(' '), with));
+    }
     let mut chars = rest.chars();
     match (chars.next(), chars.next()) {
         (Some(c), None) if upper => {

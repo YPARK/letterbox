@@ -3141,6 +3141,49 @@ fn writing_says_how_it_goes_and_f1_lists_every_key() {
 }
 
 #[test]
+fn every_key_shown_is_clicked_as_it_is_pressed() {
+    use crate::keymap::key_named;
+    let key = |name| app::Target::Key(key_named(name).unwrap());
+    let chord = |a, b| app::Target::Chord(key_named(a).unwrap(), key_named(b).unwrap());
+    let shown = |app: &mut App, target: app::Target| {
+        let _ = app::screen(app, 150, 40);
+        app.targets.iter().any(|(_, t)| *t == target)
+    };
+    let mut app = demo();
+    // j/k at the foot is two keys, each its own.
+    press(&mut app, &["h"]);
+    assert!(shown(&mut app, key("j")) && shown(&mut app, key("k")));
+    press(&mut app, &["l"]);
+    // Writing: the keys at the foot, under the message, and on its mode line.
+    press(&mut app, &["c"]);
+    assert!(shown(&mut app, key("F1")));
+    assert!(shown(&mut app, key("C-SPC")));
+    click_at(&mut app, chord("C-c", "C-a"));
+    assert!(matches!(app.dialog, app::Dialog::Attach(_)));
+    // On the picker's border: esc.
+    click_at(&mut app, key("esc"));
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    assert!(app.compose.is_some());
+    // Behind it, nothing is clicked.
+    let before = app.list.selected();
+    click_at(&mut app, app::Target::Popup);
+    assert_eq!(app.list.selected(), before);
+    // Changed, discarding asks; n and y are there to click.
+    press(&mut app, &["ada"]);
+    click_at(&mut app, chord("C-c", "C-k"));
+    assert!(app.compose.as_ref().unwrap().asking);
+    click_at(&mut app, key("n"));
+    assert!(app.compose.is_some());
+    click_at(&mut app, chord("C-c", "C-k"));
+    click_at(&mut app, key("y"));
+    assert!(app.compose.is_none(), "{}", app.status);
+    // The map's view menu: its rows, and esc on its border.
+    press(&mut app, &["<m-g>", ","]);
+    click_at(&mut app, key("esc"));
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+}
+
+#[test]
 fn a_forward_carries_the_files_of_what_it_forwards() {
     let mut app = demo();
     let turing = app
