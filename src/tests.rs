@@ -5698,6 +5698,9 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
     app.map.region = Some(crate::map::Region { keys: builds });
     press(&mut app, &["d"]);
     assert!(app.map.region.is_none());
+    // How it went, said once done: any key closes it.
+    assert!(matches!(app.dialog, app::Dialog::Applied(_)));
+    press(&mut app, &["x"]);
     let s = app.map.snapshot.clone().unwrap();
     assert!(
         s.dots
@@ -5765,7 +5768,11 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
     assert_eq!(app.map.mode, crate::map::Mode::List);
     let first = app.shown[0].summary.subject.clone();
     press(&mut app, &["e"]);
-    assert_eq!(app.status, "archived, out of the Inbox");
+    assert!(
+        app.status.starts_with("archived, out of the Inbox"),
+        "{}",
+        app.status
+    );
     assert!(app.shown.iter().all(|m| m.summary.subject != first));
 }
 
@@ -7568,8 +7575,9 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
             .all(|d| !d.system.inbox),
         "discarded"
     );
-    // i closes it.
-    press(&mut app, &["i"]);
+    // How it went, said; any key closes that, and i the rest.
+    assert!(matches!(app.dialog, app::Dialog::Applied(_)));
+    press(&mut app, &["x", "i"]);
     assert!(app.review.is_none());
 }
 
@@ -10353,4 +10361,144 @@ fn one_letterbox_writes_the_index_at_a_time() {
     drop(second);
     drop(first);
     assert!(Index::open_with(dir.path(), &id).writes());
+}
+
+// ---- What was asked of the servers, confirmed ----
+
+fn job(uid: u32, goal: crate::confirm::Goal) -> crate::confirm::Job {
+    crate::confirm::Job {
+        account: 0,
+        folder: "INBOX".to_string(),
+        uid,
+        key: None,
+        subject: format!("message {uid}"),
+        goal,
+        choice: None,
+        state: crate::confirm::State::Asked,
+    }
+}
+
+#[test]
+fn what_is_asked_of_a_server_is_confirmed_once_the_mail_is_seen_so() {
+    use crate::confirm::{Batch, Goal, State};
+    let mut batch = Batch::default();
+    batch.ask(job(1, Goal::Trashed));
+    batch.ask(job(2, Goal::Filed("Grant".into())));
+    batch.ask(job(3, Goal::Archived));
+    assert!(batch.busy());
+    assert_eq!(batch.said(), "applying: 0 of 3 confirmed");
+    // Answered: done, failed.
+    assert!(batch.answered(0, "INBOX", 1, Ok(())));
+    assert!(batch.answered(0, "INBOX", 2, Ok(())));
+    assert!(batch.answered(0, "INBOX", 3, Err("no such label".into())));
+    assert!(!batch.answered(0, "INBOX", 9, Ok(())), "not one asked");
+    assert_eq!(batch.jobs[2].state, State::Failed("no such label".into()));
+    // A look at the mail: 1 has left, 2 not yet; another, 2 has.
+    batch.looked(0, |j| Some(j.uid == 1));
+    assert_eq!(batch.jobs[0].state, State::Confirmed);
+    assert!(matches!(batch.jobs[1].state, State::Done { .. }));
+    assert!(batch.busy());
+    assert!(batch.settled().is_none(), "not till all are");
+    batch.looked(0, |_| Some(true));
+    assert!(!batch.busy());
+    assert_eq!(batch.said(), "2 of 3 confirmed · 1 failed");
+    // Settled, said once.
+    assert!(batch.settled().is_some());
+    assert!(batch.settled().is_none());
+    // One the mail still has, look after look: failed.
+    batch.ask(job(4, Goal::Trashed));
+    assert_eq!(batch.jobs.len(), 1, "a new batch, the last settled");
+    batch.answered(0, "INBOX", 4, Ok(()));
+    for _ in 0..crate::confirm::LOOKS {
+        batch.looked(0, |_| Some(false));
+    }
+    assert!(matches!(batch.jobs[0].state, State::Failed(_)));
+    // Where nothing looks at the mail, its server's word is taken.
+    let mut batch = Batch::default();
+    batch.ask(job(5, Goal::Archived));
+    batch.answered(0, "INBOX", 5, Ok(()));
+    batch.trust(0);
+    assert_eq!(batch.jobs[0].state, State::Confirmed);
+}
+
+/// The demo, its server saying no to moving the message with `subject`.
+fn demo_refusing(subject: &str) -> App {
+    let store = Demo::new();
+    store.refuse(subject);
+    let mut app = App::new(
+        vec![("Demo".to_string(), Box::new(store) as Box<dyn Store>)],
+        PathBuf::from("/nowhere/accounts.toml"),
+    );
+    app.ledger = scratch_ledger();
+    app.settle(Duration::from_secs(5));
+    app
+}
+
+#[test]
+fn what_the_inbox_looked_through_does_is_confirmed_and_what_failed_is_said() {
+    let refused = "R01 resubmission: internal deadline 3 November";
+    let mut app = demo_refusing(refused);
+    press(&mut app, &["<m-g>", "i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    let r01 = rows
+        .iter()
+        .copied()
+        .find(|&i| s.dots[i].subject == refused)
+        .unwrap();
+    let other = rows.iter().copied().find(|&i| i != r01).unwrap();
+    let other_subject = s.dots[other].subject.clone();
+    for i in [r01, other] {
+        app.review
+            .as_mut()
+            .unwrap()
+            .chosen
+            .insert(s.dots[i].key.clone(), app::Choice::Discard);
+    }
+    press(&mut app, &["$", "y"]);
+    app.settle(Duration::from_secs(5));
+    // A pop-up says how it went: the one done, the one not, and why.
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("1 of 2 confirmed · 1 failed"), "{screen}");
+    assert!(screen.contains("R01 resubmission"), "{screen}");
+    assert!(screen.contains("the server said no"), "{screen}");
+    // Any key closes it. The one that failed is looked through still, as
+    // it was chosen; the other gone.
+    press(&mut app, &["x"]);
+    assert!(!app.dialog.is_open());
+    let s = app.map.snapshot.clone().unwrap();
+    let r01 = s.dots.iter().position(|d| d.subject == refused).unwrap();
+    assert!(app.review_rows().contains(&r01));
+    assert_eq!(app.choice(r01), app::Choice::Discard);
+    let screen = app::screen(&mut app, 170, 45);
+    assert!(screen.contains("✗ Research Office"), "{screen}");
+    assert!(
+        !app.review_rows()
+            .iter()
+            .any(|&i| s.dots[i].subject == other_subject)
+    );
+}
+
+#[test]
+fn what_is_done_in_the_list_is_confirmed_by_a_pop_up() {
+    let mut app = demo();
+    press(&mut app, &[" ", " ", "d"]);
+    app.settle(Duration::from_secs(5));
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("2 of 2 confirmed"), "{screen}");
+    press(&mut app, &["x"]);
+    assert!(!app.dialog.is_open());
+}
+
+#[test]
+fn what_was_chosen_is_not_done_again_while_the_last_is_waited_for() {
+    let mut app = demo_map();
+    press(&mut app, &["i", "d"]);
+    app.batch.ask(job(1, crate::confirm::Goal::Trashed));
+    press(&mut app, &["$"]);
+    assert!(!app.dialog.is_open());
+    assert!(app.status.contains("still applying"), "{}", app.status);
+    // How far it has come, at the foot, over anything else said.
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("applying: 0 of 1 confirmed"), "{screen}");
 }

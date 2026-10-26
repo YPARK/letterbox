@@ -321,7 +321,14 @@ discards it, and `y` takes what is suggested; each goes on to the next.
 again leaves it. Nothing is done until `$`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the
-Trash, at once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
+Trash, at once, and the rest are left in the Inbox as they are. Each is
+followed till its server says it is done and the next look at the mail
+finds it so: the foot says how far it has come, and once all have
+settled a pop-up says how it went, each that failed with why. What failed
+is left where it was, marked `✗`, chosen as it was, for `$` again; `$`
+waits while the last is still followed. What is deleted, archived or filed
+in the list or on the map is followed alike, one message alone said
+`✓ confirmed` at the foot. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 While it is looked through, the map shows where it is heading, as
 chosen and, where not yet, as suggested: each label's cluster from grey,

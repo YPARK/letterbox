@@ -163,10 +163,17 @@ pub enum Answer {
     Mapping(String),
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
-    Archived(Result<(), String>),
+    /// The message `uid` of `folder` out of the Inbox, or why not.
+    Archived {
+        folder: String,
+        uid: u32,
+        result: Result<(), String>,
+    },
     Filed {
         key: crate::index::Key,
         label: String,
+        folder: String,
+        uid: u32,
         filed: Result<crate::store::Filed, String>,
     },
     LabelRenamed {
@@ -274,6 +281,8 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             filed: store.file(&folder, uid, &label, &message_id).map_err(text),
             key,
             label,
+            folder,
+            uid,
         },
         Ask::RenameLabel { old, new } => Answer::LabelRenamed {
             result: store.rename_label(&old, &new).map_err(text),
@@ -283,7 +292,11 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             folder,
             uid,
             message_id,
-        } => Answer::Archived(store.archive(&folder, uid, &message_id).map_err(text)),
+        } => Answer::Archived {
+            result: store.archive(&folder, uid, &message_id).map_err(text),
+            folder,
+            uid,
+        },
         Ask::Expunge { folder, uid } => Answer::Expunged {
             result: store.expunge(&folder, uid).map_err(text),
             folder,

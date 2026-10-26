@@ -701,6 +701,16 @@ pub enum Dialog {
     /// Whether to do what was chosen in the Inbox looked through: what it
     /// is, as said, and only that is done.
     Apply(Box<Plan>),
+    /// How what was asked of the servers went, once it all settled.
+    Applied(Box<Applied>),
+}
+
+/// How what was asked of the servers went: how many were confirmed, and
+/// each that failed, with why.
+#[derive(Clone, Debug, Default)]
+pub struct Applied {
+    pub said: String,
+    pub failed: Vec<String>,
 }
 
 /// Where a message of the Inbox looked through is heading, as chosen,
@@ -973,6 +983,13 @@ pub struct App {
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
     pub quit: bool,
+    /// What was asked of the servers, moving mail, followed till each is
+    /// confirmed or failed; what was chosen in the Inbox looked through for
+    /// what is being asked now; and whether what is asked now is done on its
+    /// own, not followed.
+    pub batch: crate::confirm::Batch,
+    choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
+    quiet: bool,
     /// Marking in the list with Shift and the arrows: the row it was begun
     /// from, and what was marked before.
     marking: Option<(usize, Vec<crate::index::Key>)>,
@@ -1232,6 +1249,9 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            batch: crate::confirm::Batch::default(),
+            choosing: std::collections::BTreeMap::new(),
+            quiet: false,
             marking: None,
             wheeled: None,
             c_x: false,
@@ -1322,6 +1342,9 @@ impl App {
     }
 
     fn ask(&mut self, account: usize, ask: Ask) {
+        if let Some(job) = self.job_of(account, &ask) {
+            self.batch.ask(job);
+        }
         let sent = self.accounts[account]
             .asks
             .as_ref()
@@ -1329,6 +1352,153 @@ impl App {
         if sent {
             self.pending += 1;
         }
+    }
+
+    /// What `ask` asks of `account`, to be followed till confirmed, if it
+    /// moves mail where it was asked to: filed, archived or trashed.
+    fn job_of(&self, account: usize, ask: &Ask) -> Option<crate::confirm::Job> {
+        use crate::confirm::{Goal, Job, State};
+        if self.quiet {
+            return None;
+        }
+        let (folder, uid, goal, key) = match ask {
+            Ask::Move {
+                from,
+                uid,
+                trashed: true,
+                ..
+            } => (from, *uid, Goal::Trashed, None),
+            Ask::File {
+                folder,
+                uid,
+                label,
+                key,
+                ..
+            } => (folder, *uid, Goal::Filed(label.clone()), Some(key.clone())),
+            Ask::Archive { folder, uid, .. } => (folder, *uid, Goal::Archived, None),
+            _ => return None,
+        };
+        let key = key.or_else(|| {
+            let ident = &self.accounts.get(account)?.ident;
+            self.index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .key_at(ident, folder, uid)
+        });
+        let subject = key
+            .as_ref()
+            .and_then(|k| {
+                let s = self.map.snapshot.as_ref()?;
+                Some(s.dots[s.find(k)?].subject.clone())
+            })
+            .or_else(|| {
+                self.shown
+                    .iter()
+                    .find(|l| l.account == account && &l.folder == folder && l.summary.uid == uid)
+                    .map(|l| l.summary.subject.clone())
+            })
+            .unwrap_or_else(|| "a message".to_string());
+        Some(Job {
+            account,
+            folder: folder.clone(),
+            uid,
+            choice: key.as_ref().and_then(|k| self.choosing.get(k).cloned()),
+            key,
+            subject,
+            goal,
+            state: State::Asked,
+        })
+    }
+
+    /// Its server's answer for the message `uid` of `folder` of `account`,
+    /// if it was followed: where nothing looks at the account's mail after,
+    /// its word taken; failed, what was chosen for it in the Inbox looked
+    /// through, chosen again, to be done again.
+    fn took(&mut self, account: usize, folder: &str, uid: u32, result: Result<(), &str>) {
+        let result = result.map_err(|e| first_line(e).to_string());
+        if !self.batch.answered(account, folder, uid, result) {
+            return;
+        }
+        if self.syncs.get(account).and_then(Option::as_ref).is_none() {
+            self.batch.trust(account);
+        }
+        self.choose_again();
+        self.say_settled();
+    }
+
+    /// A look at `account`'s mail: what it was asked to do, confirmed where
+    /// it has left where it was; failed where, looked at again, it has not.
+    fn looked_again(&mut self, account: usize) {
+        use crate::confirm::Goal;
+        {
+            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            self.batch.looked(account, |job| {
+                let key = job.key.as_ref()?;
+                let Some(record) = index.records.get(key) else {
+                    return Some(true);
+                };
+                Some(match job.goal {
+                    Goal::Trashed => !record
+                        .places
+                        .iter()
+                        .any(|p| p.folder == job.folder && p.uid == job.uid),
+                    // As the server says it, not as filed before it does.
+                    Goal::Filed(_) | Goal::Archived => {
+                        !crate::index::labels::system(record, &index.folders).inbox
+                    }
+                })
+            });
+        }
+        self.choose_again();
+        self.say_settled();
+    }
+
+    /// What failed that was chosen in the Inbox looked through, chosen
+    /// again, as it was.
+    fn choose_again(&mut self) {
+        let again: Vec<(crate::index::Key, Choice)> = self
+            .batch
+            .failed()
+            .filter_map(|j| Some((j.key.clone()?, j.choice.clone()?)))
+            .collect();
+        for (key, choice) in again {
+            match &mut self.review {
+                Some(r) => r.chosen.entry(key).or_insert(choice),
+                None => self.review_kept.entry(key).or_insert(choice),
+            };
+        }
+    }
+
+    /// Once what was asked has all settled, and nothing else is open, a
+    /// pop-up saying how it went; one message alone, done, said at the foot.
+    fn say_settled(&mut self) {
+        if self.dialog.is_open() || self.compose.is_some() {
+            return;
+        }
+        let Some(said) = self.batch.settled() else {
+            return;
+        };
+        let counts = self.batch.counts();
+        if counts.all == 1 && counts.failed == 0 {
+            self.status = if self.status.is_empty() {
+                format!("✓ confirmed: {}", self.batch.jobs[0].goal.said())
+            } else {
+                format!("{} · ✓ confirmed", self.status)
+            };
+            return;
+        }
+        let failed = self
+            .batch
+            .failed()
+            .map(|j| {
+                let why = match &j.state {
+                    crate::confirm::State::Failed(why) => why.clone(),
+                    _ => String::new(),
+                };
+                format!("{} {}: {why}", j.subject, j.goal.said())
+            })
+            .collect();
+        self.dialog = Dialog::Applied(Box::new(Applied { said, failed }));
     }
 
     /// The accounts not removed, by their place.
@@ -1571,19 +1741,47 @@ impl App {
             | Answer::Realm { .. } => {}
             #[cfg(feature = "pages")]
             Answer::Paged { .. } => {}
-            Answer::Filed { key, label, filed } => self.filed(a, key, label, filed),
+            Answer::Filed {
+                key,
+                label,
+                folder,
+                uid,
+                filed,
+            } => {
+                let result = filed.as_ref().map(|_| ()).map_err(String::as_str);
+                self.took(a, &folder, uid, result);
+                self.filed(a, key, label, filed)
+            }
             Answer::LabelRenamed { old, result } => match result {
                 Ok(()) => self.map_pass(a),
                 Err(e) => self.status = format!("cannot rename {old}: {}", first_line(&e)),
             },
-            Answer::Archived(result) => match result {
-                Ok(()) => {
-                    self.reload(a);
-                    self.map_pass(a);
+            Answer::Archived {
+                folder,
+                uid,
+                result,
+            } => {
+                self.took(
+                    a,
+                    &folder,
+                    uid,
+                    result.as_ref().map(|_| ()).map_err(String::as_str),
+                );
+                match result {
+                    Ok(()) => {
+                        self.reload(a);
+                        self.map_pass(a);
+                    }
+                    Err(e) => {
+                        self.status = format!("cannot archive it: {}", first_line(&e));
+                        self.reload(a);
+                    }
                 }
-                Err(e) => self.status = format!("cannot archive it: {}", first_line(&e)),
-            },
+            }
             Answer::Mapped(passed) => {
+                if passed.is_ok() {
+                    self.looked_again(a);
+                }
                 self.mapping = match passed {
                     Ok(_) => String::new(),
                     Err(e) => format!(
@@ -1712,37 +1910,41 @@ impl App {
                 trashed,
                 new_uid,
                 email,
-            } => match new_uid {
-                Ok(new_uid) => {
-                    if !email.is_empty() {
-                        self.accounts[a].email = email.clone();
-                    }
-                    if trashed {
-                        let at = jiff::Timestamp::now().as_second();
-                        if let Err(e) = self.ledger.record(Entry {
-                            account: email,
-                            message_id,
-                            folder: to.clone(),
-                            uid: new_uid,
-                            origin: from.clone(),
-                            at,
-                        }) {
-                            self.status = format!("moved to Trash, and not recorded: {e:#}");
+            } => {
+                let result = new_uid.as_ref().map(|_| ()).map_err(String::as_str);
+                self.took(a, &from, uid, result);
+                match new_uid {
+                    Ok(new_uid) => {
+                        if !email.is_empty() {
+                            self.accounts[a].email = email.clone();
                         }
-                    } else {
-                        let email = self.accounts[a].email.clone();
-                        self.forget_trashed(&email, &from, uid);
+                        if trashed {
+                            let at = jiff::Timestamp::now().as_second();
+                            if let Err(e) = self.ledger.record(Entry {
+                                account: email,
+                                message_id,
+                                folder: to.clone(),
+                                uid: new_uid,
+                                origin: from.clone(),
+                                at,
+                            }) {
+                                self.status = format!("moved to Trash, and not recorded: {e:#}");
+                            }
+                        } else {
+                            let email = self.accounts[a].email.clone();
+                            self.forget_trashed(&email, &from, uid);
+                        }
+                        self.ask(a, Ask::Count(from));
+                        self.ask(a, Ask::Count(to));
+                        self.reload(a);
+                        self.map_pass(a);
                     }
-                    self.ask(a, Ask::Count(from));
-                    self.ask(a, Ask::Count(to));
-                    self.reload(a);
-                    self.map_pass(a);
+                    Err(e) => {
+                        self.status = format!("cannot move it: {}", first_line(&e));
+                        self.reload(a);
+                    }
                 }
-                Err(e) => {
-                    self.status = format!("cannot move it: {}", first_line(&e));
-                    self.reload(a);
-                }
-            },
+            }
             Answer::Expunged {
                 folder,
                 uid,
@@ -3066,6 +3268,11 @@ impl App {
                     edit_line(typed, key);
                 }
             },
+            // Any key closes how it went; what settled since, said next.
+            Dialog::Applied(_) => {
+                self.dialog = Dialog::Closed;
+                self.say_settled();
+            }
             Dialog::Apply(_) => {
                 let Dialog::Apply(plan) = std::mem::take(&mut self.dialog) else {
                     unreachable!()
@@ -3170,6 +3377,10 @@ impl App {
                 self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             }
             (Dialog::Apply(_), _) => {}
+            (Dialog::Applied(_), _) => {
+                self.dialog = Dialog::Closed;
+                self.say_settled();
+            }
         }
     }
 
@@ -4625,7 +4836,10 @@ impl App {
             if written.is_err() {
                 continue;
             }
+            // Done on its own: not followed, nor said in a pop-up.
+            self.quiet = true;
             self.trash_quietly(a, place.folder.clone(), place.uid, message_id, trash);
+            self.quiet = false;
             thrown += 1;
         }
         if thrown > 0 {
@@ -6614,6 +6828,14 @@ impl App {
 
     /// Ask whether to do what was chosen in the Inbox looked through.
     fn ask_apply(&mut self) {
+        // Done once what was done last is confirmed, or failed.
+        if self.batch.busy() {
+            self.status = format!(
+                "still applying what was chosen before: {}",
+                self.batch.said()
+            );
+            return;
+        }
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
@@ -6678,6 +6900,16 @@ impl App {
             }
         }
         self.review_kept.clear();
+        // What was chosen for each, kept with what is asked, to be chosen
+        // again if it fails.
+        self.choosing = moves
+            .iter()
+            .flat_map(|(label, keys)| {
+                keys.iter()
+                    .map(|k| (k.clone(), Choice::Move(label.clone())))
+            })
+            .chain(discard.iter().map(|k| (k.clone(), Choice::Discard)))
+            .collect();
         let filed: usize = moves.values().map(Vec::len).sum();
         let kept_n = kept.len();
         for (label, keys) in moves {
@@ -6694,6 +6926,7 @@ impl App {
             said = format!("{said} · {}", self.status);
         }
         self.status = said;
+        self.choosing.clear();
         let first = self.review_rows().first().copied();
         self.pick_review(first);
     }

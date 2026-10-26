@@ -5,6 +5,7 @@
 mod app;
 mod compose;
 mod config;
+mod confirm;
 mod demo;
 mod edit;
 mod filter;

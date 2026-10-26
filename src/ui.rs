@@ -173,6 +173,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
+        Dialog::Applied(applied) => Some(applied_dialog(f, &t, applied)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
         Dialog::Label(typed) => Some(asking(
             f,
@@ -1051,6 +1052,64 @@ fn applying(f: &mut Frame, t: &Theme, said: &str) -> (Rect, Targets) {
         .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b)))
         .collect();
     (area, targets)
+}
+
+/// How what was asked of the servers went, once it all settled: how many
+/// were confirmed, and each that failed, with why.
+fn applied_dialog(f: &mut Frame, t: &Theme, applied: &crate::app::Applied) -> (Rect, Targets) {
+    let width = f.area().width.min(72);
+    let room = (width as usize).saturating_sub(4);
+    let (title, mark, colour) = if applied.failed.is_empty() {
+        ("Done", "✓ ", t.title)
+    } else {
+        ("Not all done", "✗ ", t.flag)
+    };
+    let mut lines = vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(mark, Style::new().fg(colour).bold()),
+            Span::styled(applied.said.clone(), Style::new().fg(t.title).bold()),
+        ]),
+    ];
+    if !applied.failed.is_empty() {
+        lines.push(Line::raw(""));
+        for failed in &applied.failed {
+            for (i, l) in wrap(failed, room.saturating_sub(2)).into_iter().enumerate() {
+                let mark = if i == 0 { "✗ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(mark, Style::new().fg(t.flag)),
+                    Span::raw(l),
+                ]));
+            }
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "What failed is left where it was; in the Inbox looked through, as it was chosen, for $ again.",
+            Style::new().fg(t.dim),
+        ));
+    }
+    let lines: Vec<Line> = lines
+        .into_iter()
+        .flat_map(|l| {
+            // A long last line wrapped, as the rest are.
+            if l.width() > room && l.spans.len() == 1 {
+                let style = l.spans[0].style;
+                wrap(&l.spans[0].content, room)
+                    .into_iter()
+                    .map(|w| Line::styled(w, style))
+                    .collect()
+            } else {
+                vec![l]
+            }
+        })
+        .collect();
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, title, "any key closes")),
+        area,
+    );
+    (area, Vec::new())
 }
 
 /// The message being written, over the screen, faded beneath it: as wide
@@ -2932,7 +2991,14 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             &d.from
         };
         let date = d.date.map(|at| short_date(at, &now)).unwrap_or_default();
-        let mark = if d.flags.seen { "  " } else { "● " };
+        let failed = app.batch.failed().any(|j| j.key.as_ref() == Some(&d.key));
+        let mark = if failed {
+            "✗ "
+        } else if d.flags.seen {
+            "  "
+        } else {
+            "● "
+        };
         let said = format!("{mark}{} — {}", clip(from, 22), d.subject);
         let room_said = usize::from(width).saturating_sub(date.width() + 2);
         let style = if d.looked {
@@ -3495,10 +3561,17 @@ fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
         }
         lines.push(Line::from(spans));
     }
-    if app.status.is_empty() {
+    // While what was asked of the servers is waited for, how far it has
+    // come, over anything else said.
+    let (said, style) = if app.batch.busy() {
+        (app.batch.said(), Style::new().fg(t.flag).bold())
+    } else {
+        (app.status.clone(), Style::new().fg(t.text).bold())
+    };
+    if said.is_empty() {
         return (lines, spots);
     }
-    let status = Span::styled(format!("{} ", app.status), Style::new().fg(t.text).bold());
+    let status = Span::styled(format!("{said} "), style);
     let last = lines.last_mut().expect("a line of keys");
     let gap = (width as usize).saturating_sub(last.width() + status.width());
     if gap >= 2 {
