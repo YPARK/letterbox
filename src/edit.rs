@@ -637,6 +637,8 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
             KeyCode::Char('c' | 'C') => Done::Send,
             KeyCode::Char('k' | 'K') => Done::Cancel,
             KeyCode::Char('a' | 'A') => Done::Attach,
+            // C-c C-s: the grammar checked, as M-$, no Meta needed.
+            KeyCode::Char('s' | 'S') => Done::Check,
             _ => Done::Stay,
         };
     }

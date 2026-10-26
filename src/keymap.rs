@@ -578,10 +578,17 @@ pub const KEYS: &[Binding] = &[
     },
     Binding {
         keys: &[],
-        name: "M-$",
-        hint: "M-$",
+        name: "C-c C-s",
+        hint: "C-c C-s",
         foot: &[(Writing, "grammar")],
-        help: "in the message being written, check its grammar with a small model from Hugging Face: each change said in turn, y takes it, n leaves it, ! takes all, q stops; built with --features grammar",
+        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change said in turn, y takes it, n leaves it, ! takes all, q stops; built with --features grammar",
+    },
+    Binding {
+        keys: &[],
+        name: "M-$",
+        hint: "",
+        foot: &[],
+        help: "in the message being written, as C-c C-s: Emacs's key to check spelling",
     },
     Binding {
         keys: &[("?", Help), ("F1", Help)],

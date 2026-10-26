@@ -35,7 +35,7 @@ cargo install letterbox --features pages
 That brings typst, so it builds for longer, and typst's evaluator
 assembles one small file with the system's C toolchain.
 
-To check the grammar of what you write, `M-$`, build it with a small
+To check the grammar of what you write, `C-c C-s`, build it with a small
 model's reader:
 
 ```sh
@@ -218,10 +218,12 @@ message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
 never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
-`M-$`, as Emacs checks spelling, checks the grammar of what you wrote,
-built with `--features grammar`: not the head, what it quotes, the line
+`C-c C-s`, or the Grammar button on its top edge, checks the grammar of
+what you wrote, built with `--features grammar`; `M-$`, as Emacs checks
+spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, nor the signature. Each change the model would make
-is said in turn, as Emacs's query-replace says it, marked in the text:
+is said in turn, as Emacs's query-replace says it, marked in red in the
+text:
 `y` or `space` takes it, `n` leaves it, `!` takes all that are left, `q`
 stops, and any other key stops and is written. Nothing changes but what
 you take.

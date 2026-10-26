@@ -50,6 +50,7 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     let buttons = [
         ("Send", "C-c C-c", t.accent, t.on_accent),
         ("Attach", "C-c C-a", t.focus, t.title),
+        ("Grammar", "C-c C-s", t.flag, t.on_accent),
         ("Discard", "C-c C-k", t.error, t.on_accent),
     ];
     let said: Vec<String> = buttons
@@ -130,6 +131,7 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
             &[
                 ("C-c C-c", "send"),
                 ("C-c C-a", "attach"),
+                ("C-c C-s", "grammar"),
                 ("C-c C-k", "discard"),
                 ("C-g", "stops, never losing it"),
             ],
@@ -177,8 +179,20 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 .and_then(|c| c.edit())
                 .filter(|e| e.row == i)
                 .map(|e| e.start..e.end.max(e.start + 1));
-            let region = checked.unwrap_or_else(|| compose.buffer.marked(i));
-            let mut shown = compose_line(line, i == cursor_row, cursor_col, width, t, region);
+            let (region, mark) = match checked {
+                Some(range) => (
+                    range,
+                    Style::new()
+                        .fg(t.title)
+                        .bg(crate::theme::mix(t.error, t.page, 0.55))
+                        .bold(),
+                ),
+                None => (
+                    compose.buffer.marked(i),
+                    Style::new().fg(t.title).bg(t.focus),
+                ),
+            };
+            let mut shown = compose_line(line, i == cursor_row, cursor_col, width, t, region, mark);
             if i < head
                 && let Some(value) = line.strip_prefix("Attach:").map(str::trim)
                 && !value.is_empty()
@@ -242,7 +256,7 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// A line of the message being written: the cursor reversed, and the
-/// columns in `region` marked as the region, its end too when it goes on.
+/// columns in `region` marked in `mark`, its end too when it goes on.
 pub(super) fn compose_line(
     line: &str,
     cursor: bool,
@@ -250,6 +264,7 @@ pub(super) fn compose_line(
     width: usize,
     t: Theme,
     region: std::ops::Range<usize>,
+    mark: Style,
 ) -> Line<'static> {
     let chars: Vec<char> = line.chars().collect();
     let widths: Vec<usize> = chars
@@ -274,7 +289,7 @@ pub(super) fn compose_line(
         let style = if cursor && i == col {
             Style::new().add_modifier(Modifier::REVERSED)
         } else if region.contains(&i) {
-            Style::new().fg(t.title).bg(t.focus)
+            mark
         } else if quoted {
             Style::new().fg(t.dim)
         } else {
@@ -291,7 +306,7 @@ pub(super) fn compose_line(
         ));
     } else if region.end > chars.len() && x < width {
         // The line's end is in the region, as what it cuts takes it too.
-        spans.push(Span::styled(" ", Style::new().bg(t.focus)));
+        spans.push(Span::styled(" ", mark));
     }
     Line::from(spans)
 }

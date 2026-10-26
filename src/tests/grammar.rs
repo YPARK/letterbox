@@ -136,6 +136,42 @@ fn m_dollar_checks_what_is_written_and_each_change_is_taken_or_not() {
     assert!(written(&app).contains("I went home"), "{}", written(&app));
 }
 
+#[test]
+fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
+    let fix = |_: &str| -> anyhow::Result<Box<dyn grammar::Corrector>> {
+        Ok(Box::new(grammar::Using(|s: &str| {
+            Ok(s.replace("you time", "your time"))
+        })))
+    };
+    // C-c C-s, no Meta needed.
+    let mut app = writing("Thank you for you time.");
+    app.grammar_open = fix;
+    press(&mut app, &["<c-c>", "<c-s>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.status.contains("“you” → “your”"), "{}", app.status);
+    // The Grammar button on the message's top edge, clicked.
+    let mut app = writing("Thank you for you time.");
+    app.grammar_open = fix;
+    let _ = app::screen(&mut app, 160, 40);
+    let chord = (
+        crate::keymap::key_named("C-c").unwrap(),
+        crate::keymap::key_named("C-s").unwrap(),
+    );
+    let (rect, _) = *app
+        .targets
+        .iter()
+        .filter(|(_, t)| *t == app::Target::Chord(chord.0, chord.1))
+        .min_by_key(|(r, _)| r.y)
+        .unwrap();
+    app.mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 1,
+        rect.y,
+    ));
+    app.settle(Duration::from_secs(5));
+    assert!(app.status.contains("“you” → “your”"), "{}", app.status);
+}
+
 #[cfg(not(feature = "grammar"))]
 #[test]
 fn without_the_grammar_feature_m_dollar_says_how_to_have_it() {
