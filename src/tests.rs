@@ -4912,6 +4912,34 @@ fn filing_on_gmail_gives_the_label_and_takes_the_inbox_off() {
 }
 
 #[test]
+fn what_one_machine_does_on_gmail_another_sees_at_its_next_pass() {
+    let (account, _boxes) = serve_boxes(gmail_boxes());
+    let (here, there) = (Mutex::new(Index::memory()), Mutex::new(Index::memory()));
+    let (mut a, mut b) = (Imap::new(account.clone()), Imap::new(account));
+    sync_once(&mut a, &here);
+    sync_once(&mut b, &there);
+    assert!(labelled(&there, "Aims page, third pass").2);
+    // On one machine: the Aims page archived, the R01 trashed, and the
+    // reply filed.
+    a.archive("[Gmail]/All Mail", 21, "").unwrap();
+    a.relocate("[Gmail]/All Mail", 22, "[Gmail]/Trash", "")
+        .unwrap();
+    // The other, at its next pass and the one after: as it was left.
+    for now in [1_000_100, 1_000_200] {
+        sync_at(&mut b, &there, now);
+        assert!(!labelled(&there, "Aims page, third pass").2, "archived");
+        let index = there.lock().unwrap();
+        assert!(
+            index
+                .records
+                .values()
+                .all(|r| r.subject != "R01 resubmission"),
+            "trashed"
+        );
+    }
+}
+
+#[test]
 fn filing_on_a_server_of_folders_moves_it_to_the_folder_the_label_is() {
     let (account, boxes) = server();
     let index = Mutex::new(Index::memory());
