@@ -131,7 +131,6 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
             &[
                 ("C-c C-c", "send"),
                 ("C-c C-a", "attach"),
-                ("C-c C-s", "grammar"),
                 ("C-c C-k", "discard"),
                 ("C-g", "stops, never losing it"),
             ],
