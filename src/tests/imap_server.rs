@@ -543,12 +543,33 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                                     l.modseq = seq;
                                 }
                             }
-                            // Out of the Inbox, without its label.
-                            let inbox = boxes.iter().position(|b| b.name == "INBOX");
-                            if let Some(i) = inbox {
-                                boxes[i]
-                                    .letters
-                                    .retain(|l| l.labels.iter().any(|x| x == "\\Inbox"));
+                            // Each label's folder holds what has the label.
+                            let mut every: Vec<Letter> = Vec::new();
+                            for b in boxes.iter() {
+                                for l in &b.letters {
+                                    if !every.iter().any(|e| e.msgid == l.msgid) {
+                                        every.push(l.clone());
+                                    }
+                                }
+                            }
+                            for b in boxes.iter_mut() {
+                                if b.name.starts_with("[Gmail]")
+                                    || b.attributes.contains("Noselect")
+                                {
+                                    continue;
+                                }
+                                let own = match b.name.as_str() {
+                                    "INBOX" => "\\Inbox".to_string(),
+                                    name => name.to_string(),
+                                };
+                                let has = |l: &Letter| l.labels.contains(&own);
+                                b.letters.retain(has);
+                                for l in every.iter().filter(|l| has(l)) {
+                                    if !b.letters.iter().any(|x| x.msgid == l.msgid) {
+                                        let uid = b.next;
+                                        b.push(Letter { uid, ..l.clone() });
+                                    }
+                                }
                             }
                         } else {
                             let b = &mut boxes[selected.unwrap()];

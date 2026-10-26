@@ -247,11 +247,18 @@ impl App {
     pub(super) fn listed_on_map(&self) -> Option<usize> {
         let l = self.current()?;
         let ident = &self.accounts.get(l.account)?.ident;
-        let key = self
-            .index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .key_at(ident, &l.folder, l.summary.uid)?;
+        let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        // On Gmail the map reads All Mail, not the Inbox listed: there the
+        // message is found by its Message-ID.
+        let key = index.key_at(ident, &l.folder, l.summary.uid).or_else(|| {
+            let id = &l.summary.message_id;
+            index
+                .records
+                .values()
+                .find(|r| r.key.account == *ident && !id.is_empty() && r.message_id == *id)
+                .map(|r| r.key.clone())
+        })?;
+        drop(index);
         self.map.snapshot.as_ref()?.find(&key)
     }
 
