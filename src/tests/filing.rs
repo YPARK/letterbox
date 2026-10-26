@@ -500,6 +500,32 @@ fn the_map_follows_the_message_picked_into_its_cluster() {
     assert!(text.contains(&format!("Subject: {reply}")), "{text}");
 }
 
+#[test]
+fn a_message_read_is_let_go_once_the_map_has_gone_into_another_cluster() {
+    let (mut app, grant) = grant_tree();
+    let s = app.map.snapshot.clone().unwrap();
+    // Read in another cluster, and out to every cluster: still read.
+    let other = s.groups.iter().position(|g| g.id != grant).unwrap();
+    let i = s.central(other).unwrap();
+    let subject = s.dots[i].subject.clone();
+    app.map.cursor = Some(s.dots[i].key.clone());
+    read_on_map(&mut app);
+    assert!(app::screen(&mut app, 150, 45).contains(&subject));
+    app.map.zoom_all();
+    assert!(app::screen(&mut app, 150, 45).contains(&subject));
+    // Into the Grant: what was read there is out of it, and not shown.
+    app.map.open_block(grant);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(!screen.contains(&subject), "{screen}");
+    assert!(screen.contains("reads the message picked"), "{screen}");
+    // One of the Grant's read is shown, as it is in what is shown.
+    read_on_map(&mut app);
+    let picked = app.map.picked().unwrap();
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains(&s.dots[picked].subject), "{screen}");
+    assert!(!screen.contains("reads the message picked"), "{screen}");
+}
+
 /// The demo's map, its Grant opened as its tree, drawn.
 pub(super) fn grant_tree() -> (App, u32) {
     let mut app = demo_map();
