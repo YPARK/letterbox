@@ -5320,8 +5320,22 @@ impl App {
             self.status = format!("cannot file it: {e:#}");
             return;
         }
+        // Out of the Inbox, out of its list, and no longer read, before
+        // the server has said so, as archived mail is.
+        let inbox: Vec<(usize, String, u32)> = asks
+            .iter()
+            .filter_map(|(a, ask)| match ask {
+                Ask::File { folder, uid, .. } if *folder == self.inbox(*a) => {
+                    Some((*a, folder.clone(), *uid))
+                }
+                _ => None,
+            })
+            .collect();
         for (a, ask) in asks {
             self.ask(a, ask);
+        }
+        for (a, folder, uid) in inbox {
+            self.drop_listed(a, &folder, uid);
         }
         self.map.region = None;
         self.map.suggesting = Some(label.clone());

@@ -8878,6 +8878,33 @@ fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
 }
 
 #[test]
+fn in_the_list_a_message_filed_is_out_of_it_at_once_and_the_next_picked() {
+    let mut app = demo();
+    let at = app.list.selected().unwrap();
+    let subject = app.shown[at].summary.subject.clone();
+    let uid = app.shown[at].summary.uid;
+    let next = app.shown[at + 1].summary.subject.clone();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.reading.is_some());
+    // Filed while read: out of the list, and the next picked, before the
+    // server has said so.
+    press(&mut app, &["m", "<enter>"]);
+    assert!(
+        !app.shown.iter().any(|l| l.summary.subject == subject),
+        "still listed"
+    );
+    assert_eq!(app.current().unwrap().summary.subject, next);
+    assert!(
+        app.reading.as_ref().is_none_or(|r| r.uid != uid),
+        "still read"
+    );
+    // And once it has, still out of it.
+    app.settle(Duration::from_secs(5));
+    assert!(!app.shown.iter().any(|l| l.summary.subject == subject));
+}
+
+#[test]
 fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
     let mut app = demo();
     let s = app.map.snapshot.clone().unwrap();
