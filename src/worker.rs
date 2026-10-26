@@ -55,6 +55,8 @@ pub enum Ask {
         label: String,
         message_id: String,
         key: crate::index::Key,
+        /// The folder it was listed in, filed from it.
+        from: Option<String>,
     },
     /// Call a label something else, on the server.
     RenameLabel {
@@ -311,8 +313,13 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             label,
             message_id,
             key,
+            from,
         } => Answer::Filed {
-            filed: store.file(&folder, uid, &label, &message_id).map_err(text),
+            filed: match &from {
+                Some(listed) => store.file_from(&folder, uid, &label, &message_id, listed),
+                None => store.file(&folder, uid, &label, &message_id),
+            }
+            .map_err(text),
             key,
             label,
             folder,

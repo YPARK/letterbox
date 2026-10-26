@@ -169,6 +169,19 @@ pub trait Store: Send {
     ) -> anyhow::Result<Filed> {
         Err(unsupported("file a message"))
     }
+    /// File it as `file` does, from the list of the folder `listed`: where
+    /// that folder is a label, as on Gmail, the label taken off too, as a
+    /// move from it.
+    fn file_from(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        message_id: &str,
+        _listed: &str,
+    ) -> anyhow::Result<Filed> {
+        self.file(folder, uid, label, message_id)
+    }
     /// Call the label `old` `new` on the server, wherever it is.
     fn rename_label(&mut self, _old: &str, _new: &str) -> anyhow::Result<()> {
         Err(unsupported("rename a label"))

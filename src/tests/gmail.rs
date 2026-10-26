@@ -6,10 +6,32 @@ use super::*;
 /// Letterbox on one Gmail account, settled: its Inbox listed. Without
 /// All Mail, as it is when Gmail is told not to show it.
 fn gmail_app(all_mail: bool) -> (App, Boxes) {
+    gmail_app_with(all_mail, true)
+}
+
+/// As `gmail_app`, the Aims page in the Inbox, or in its label alone.
+fn gmail_app_with(all_mail: bool, aims_in_inbox: bool) -> (App, Boxes) {
     let boxes = gmail_boxes();
-    if !all_mail {
+    {
         let mut fake = boxes.lock().unwrap();
-        fake.retain(|b| b.name != "[Gmail]/All Mail");
+        // The label's folder holds what has the label, as Gmail's does.
+        if !aims_in_inbox {
+            fake[0].letters.retain(|l| l.msgid != 9021);
+            for b in fake.iter_mut() {
+                for l in b.letters.iter_mut().filter(|l| l.msgid == 9021) {
+                    l.labels.retain(|x| x != "\\Inbox");
+                }
+            }
+        }
+        let aims = fake[2].letters[0].clone();
+        let grant = fake
+            .iter_mut()
+            .find(|b| b.name == "Projects/Grant")
+            .unwrap();
+        grant.push(Letter { uid: 1, ..aims });
+        if !all_mail {
+            fake.retain(|b| b.name != "[Gmail]/All Mail");
+        }
     }
     let (account, boxes) = serve_boxes(boxes);
     let mut app = App::new(
@@ -76,4 +98,51 @@ fn filed_from_the_gmail_inbox_list_it_is_out_of_the_inbox() {
 #[test]
 fn without_all_mail_filed_from_the_gmail_inbox_it_is_out_of_the_inbox_too() {
     filed_from_the_inbox_list(false);
+}
+
+/// List the folder `path` of the one account, from the sidebar.
+fn list_folder(app: &mut App, path: &str) {
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].path == path,
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("no {path} in the sidebar"));
+    press(app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.focus = app::Focus::List;
+}
+
+fn filed_from_a_label(all_mail: bool, aims_in_inbox: bool) {
+    let (mut app, boxes) = gmail_app_with(all_mail, aims_in_inbox);
+    list_folder(&mut app, "Projects/Grant");
+    pick(&mut app, "Aims page, third pass");
+    press(&mut app, &["m"]);
+    press(&mut app, &["Family", "<enter>"]);
+    // Moved from the label listed to the one given, and out of the Inbox.
+    let (labels, inbox) = on_server(&boxes, "Aims page, third pass");
+    assert_eq!(labels, ["Family"]);
+    assert!(!inbox, "out of the Inbox");
+    assert!(app.status.contains("✓ confirmed"), "{}", app.status);
+}
+
+#[test]
+fn filed_from_a_gmail_labels_list_it_loses_that_label() {
+    filed_from_a_label(true, true);
+}
+
+#[test]
+fn without_all_mail_filed_from_a_gmail_labels_list_it_loses_that_label_too() {
+    filed_from_a_label(false, true);
+}
+
+#[test]
+fn in_a_label_alone_filed_from_its_list_it_loses_that_label() {
+    // Gmail takes no label off in its own folder: it is found in the
+    // folder of the label given.
+    filed_from_a_label(false, false);
+    filed_from_a_label(true, false);
 }

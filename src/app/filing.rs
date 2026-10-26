@@ -33,6 +33,11 @@ impl App {
         let mut filed = 0;
         let mut pending = Vec::new();
         let mut asks = Vec::new();
+        // Filed from a folder's list, it is moved from that folder.
+        let listed = match self.listing.as_ref().map(|l| &l.view) {
+            Some(View::Folder(a, path)) => Some((*a, path.clone())),
+            _ => None,
+        };
         for key in &keys {
             let Some(i) = s.find(key) else { continue };
             let dot = &s.dots[i];
@@ -53,6 +58,10 @@ impl App {
                     label: label.clone(),
                     message_id: dot.message_id.clone(),
                     key: key.clone(),
+                    from: listed
+                        .as_ref()
+                        .filter(|(at, _)| *at == a)
+                        .map(|(_, path)| path.clone()),
                 },
             ));
             filed += 1;
