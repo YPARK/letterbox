@@ -9185,3 +9185,60 @@ fn where_mail_would_go_is_voted_by_the_filed_mail_nearest_it() {
     let voted = model.voted(|i, l| i == at(&course) && l == "projects");
     assert_ne!(voted[at(&course)].as_deref(), Some("Projects"));
 }
+
+// ---- a message's pages, in the terminal ----
+
+#[cfg(not(feature = "pages"))]
+#[test]
+fn v_built_without_pages_says_how_to_have_them() {
+    let mut app = demo();
+    press(&mut app, &["<enter>", "V"]);
+    assert!(app.status.contains("--features pages"), "{}", app.status);
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .expect("Noether's letter, in HTML");
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    // A terminal that draws no images: said, and O offered.
+    app.picker = None;
+    press(&mut app, &["V"]);
+    assert!(app.paged.is_none());
+    assert!(app.status.contains("O"), "{}", app.status);
+    // One that does: typeset, and shown a page at a time.
+    app.picker = Some(ratatui_image::picker::Picker::halfblocks());
+    press(&mut app, &["V"]);
+    app.settle(Duration::from_secs(60));
+    let paged = app.paged.as_ref().expect("its pages");
+    assert!(!paged.pages.is_empty());
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("page 1 of"), "{screen}");
+    // V again: its text.
+    press(&mut app, &["V"]);
+    assert!(app.paged.is_none());
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("differentiable symmetry"), "{screen}");
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_turn_as_far_as_there_are() {
+    let blank = || image::RgbaImage::new(10, 14);
+    let mut paged = crate::pages::Paged::new(1, vec![blank(), blank(), blank()]);
+    paged.step(1);
+    paged.step(1);
+    paged.step(1);
+    assert_eq!(paged.at, 2);
+    paged.step(-5);
+    assert_eq!(paged.at, 0);
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    assert!(paged.drawn(&picker).is_some());
+}

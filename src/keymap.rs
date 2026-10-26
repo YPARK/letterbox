@@ -43,6 +43,8 @@ pub enum Act {
     Debrief,
     /// The papers the message read tells of, to put in paperstack.
     Papers,
+    /// The message read as its pages, or as its text again.
+    Pages,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -288,6 +290,13 @@ pub const KEYS: &[Binding] = &[
         hint: "o",
         foot: &[(Reader, "open")],
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
+    },
+    Binding {
+        keys: &[("V", Pages)],
+        name: "V",
+        hint: "V",
+        foot: &[],
+        help: "the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images, as kitty, WezTerm, Ghostty and iTerm2 do; j k or space b turn them; V again its text. Built --features pages",
     },
     Binding {
         keys: &[("P", Papers)],

@@ -140,6 +140,12 @@ pub enum Answer {
     },
     /// A linked document downloaded, and where it is kept.
     Fetched(Result<std::path::PathBuf, String>),
+    /// The pages of the message `uid`, typeset.
+    #[cfg(feature = "pages")]
+    Paged {
+        uid: u32,
+        pages: Result<Vec<image::RgbaImage>, String>,
+    },
     /// Where each paper of the message read stands with paperstack.
     Standings(Result<Vec<crate::paperstack::Standing>, String>),
     /// The paper `at` of those listed, put in paperstack, starred.

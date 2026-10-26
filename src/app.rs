@@ -928,10 +928,21 @@ pub struct App {
     pub filter_file: Option<PathBuf>,
     /// paperstack, once asked: run as it is first wanted, and kept.
     pub library: Arc<Mutex<Option<Box<dyn crate::paperstack::Library>>>>,
+    /// What the terminal draws images with, if it draws them; and the
+    /// message read as its pages, shown in place of its text.
+    #[cfg(feature = "pages")]
+    pub picker: Option<ratatui_image::picker::Picker>,
+    #[cfg(feature = "pages")]
+    pub paged: Option<crate::pages::Paged>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
     let mut terminal = take();
+    // Asked once the screen is the alternate one, before any key is read.
+    #[cfg(feature = "pages")]
+    {
+        app.picker = crate::pages::ask_terminal();
+    }
     let result = (|| -> anyhow::Result<()> {
         let mut stale = true;
         while !app.quit {
@@ -1137,6 +1148,10 @@ impl App {
             auto: Default::default(),
             filter_file: None,
             library: Default::default(),
+            #[cfg(feature = "pages")]
+            picker: None,
+            #[cfg(feature = "pages")]
+            paged: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1299,6 +1314,20 @@ impl App {
         if let Answer::Relaid { lens, keys, at } = reply.answer {
             return self.relaid(lens, &keys, &at);
         }
+        #[cfg(feature = "pages")]
+        if let Answer::Paged { uid, pages } = reply.answer {
+            match pages {
+                Ok(pages) if !pages.is_empty() => {
+                    if self.message().is_some_and(|m| m.uid == uid) {
+                        self.paged = Some(crate::pages::Paged::new(uid, pages));
+                        self.status = "its pages: j k turn them, V its text".to_string();
+                    }
+                }
+                Ok(_) => self.status = "it has no pages to show".to_string(),
+                Err(e) => self.status = format!("cannot typeset it: {}", first_line(&e)),
+            }
+            return;
+        }
         if let Answer::Standings(said) = reply.answer {
             if let Dialog::Papers(p) = &mut self.dialog {
                 match said {
@@ -1417,6 +1446,8 @@ impl App {
             | Answer::Drawn(_)
             | Answer::Relaid { .. }
             | Answer::Realm { .. } => {}
+            #[cfg(feature = "pages")]
+            Answer::Paged { .. } => {}
             Answer::Filed { key, label, filed } => self.filed(a, key, label, filed),
             Answer::LabelRenamed { old, result } => match result {
                 Ok(()) => self.map_pass(a),
@@ -2593,6 +2624,10 @@ impl App {
         if self.map.mode == Mode::List && self.focus != Focus::Side && self.list_marked_act(act) {
             return;
         }
+        #[cfg(feature = "pages")]
+        if self.focus == Focus::Reader && self.pages_act(act) {
+            return;
+        }
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
             Act::Quit => self.quit = true,
@@ -2724,6 +2759,7 @@ impl App {
             Act::Files => self.list_files(),
             Act::Debrief => self.debrief(),
             Act::Papers => self.list_papers(),
+            Act::Pages => self.toggle_pages(),
             Act::Present => self.present(),
             Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),
@@ -4453,6 +4489,71 @@ impl App {
             n => format!("{n} put back, and learnt as kept"),
         };
         self.dialog = Dialog::Debrief(d);
+    }
+
+    /// Show the message read as its pages, typeset off the screen's thread;
+    /// shown so, its text again.
+    #[cfg(feature = "pages")]
+    fn toggle_pages(&mut self) {
+        if self.paged.take().is_some() {
+            self.status = "its text".to_string();
+            return;
+        }
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to show: ⏎ reads the message picked".to_string();
+            return;
+        };
+        let Some(picker) = &self.picker else {
+            self.status =
+                "this terminal draws no images: O hands the message to ohp instead".to_string();
+            return;
+        };
+        let cols = if self.read_width > 0 {
+            self.read_width
+        } else {
+            80
+        };
+        let width = u32::from(cols) * u32::from(picker.font_size().width.max(1));
+        let path = match write_page(&m) {
+            Ok(path) => path,
+            Err(e) => {
+                self.status = format!("cannot typeset it: {e:#}");
+                return;
+            }
+        };
+        self.status = "typesetting its pages…".to_string();
+        let (replies, uid) = (self.replies_to.clone(), m.uid);
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let pages = crate::pages::typeset(&path, width).map_err(worker::text);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Paged { uid, pages },
+            });
+        });
+    }
+
+    #[cfg(not(feature = "pages"))]
+    fn toggle_pages(&mut self) {
+        self.status = "letterbox was built without pages: cargo install letterbox --features pages; O hands it to ohp".to_string();
+    }
+
+    /// A key while the message read is shown as its pages: they are turned;
+    /// whether it was its to do.
+    #[cfg(feature = "pages")]
+    fn pages_act(&mut self, act: Act) -> bool {
+        let uid = self.message().map(|m| m.uid);
+        let Some(paged) = self.paged.as_mut().filter(|p| Some(p.uid) == uid) else {
+            return false;
+        };
+        match act {
+            Act::Down | Act::ScreenDown | Act::PageDown | Act::NextMessage => paged.step(1),
+            Act::Up | Act::ScreenUp | Act::PageUp | Act::PreviousMessage => paged.step(-1),
+            Act::Top => paged.at = 0,
+            Act::End => paged.step(isize::MAX / 2),
+            _ => return false,
+        }
+        true
     }
 
     /// List the papers the message read tells of, and ask paperstack where

@@ -3174,6 +3174,42 @@ fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The message read as its pages, if it is shown so: the page shown, as
+/// wide as the pane, and which it is below it. Whether it was.
+#[cfg(feature = "pages")]
+fn paged(f: &mut Frame, app: &mut App, area: Rect) -> bool {
+    let uid = app.message().map(|m| m.uid);
+    let (Some(paged), Some(picker)) = (
+        app.paged.as_mut().filter(|p| Some(p.uid) == uid),
+        app.picker.as_ref(),
+    ) else {
+        return false;
+    };
+    let t = app.theme;
+    let foot = Rect {
+        y: area.bottom().saturating_sub(1),
+        height: 1.min(area.height),
+        ..area
+    };
+    let page = Rect {
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+    let said = format!(
+        "page {} of {} · j k turn · V its text",
+        paged.at + 1,
+        paged.pages.len()
+    );
+    if let Some(drawn) = paged.drawn(picker) {
+        f.render_stateful_widget(ratatui_image::StatefulImage::default(), page, drawn);
+    }
+    f.render_widget(
+        Paragraph::new(Line::styled(said, Style::new().fg(t.dim))),
+        foot,
+    );
+    true
+}
+
 fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let block = Block::new()
@@ -3190,6 +3226,10 @@ fn reader(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.targets.push((area, Target::Reader));
+    #[cfg(feature = "pages")]
+    if paged(f, app, inner) {
+        return;
+    }
     let width = inner.width as usize;
     let dim = Style::new().fg(t.dim);
     let said: Vec<Line<'static>>;

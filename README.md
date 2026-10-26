@@ -25,6 +25,16 @@ or `cargo install --path .` in a clone of this repository.
 This installs `letterbox`, and `lbx`, the same program by a shorter name:
 `lbx` for the TUI, `lbx list -n 5`, and so on.
 
+To read a message as its pages, typeset by ohp and drawn in the terminal
+where it draws images, `V`, build it with them:
+
+```sh
+cargo install letterbox --features pages
+```
+
+That brings typst, so it builds for longer, and typst's evaluator
+assembles one small file with the system's C toolchain.
+
 Pure Rust, as paperstack and ohp: nothing in C is compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
 
@@ -145,6 +155,7 @@ letterbox search grant report --account Work
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
+| `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text. In a letterbox built `--features pages` |
 | `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `C-n` | look for new mail now; it is looked for every two minutes |
