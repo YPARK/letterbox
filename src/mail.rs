@@ -489,13 +489,23 @@ fn attachment(p: &mail_parser::MessagePart) -> Attachment {
 fn addresses(a: &Address) -> Vec<String> {
     a.iter()
         .map(|x| match (x.name().map(clean), x.address().map(clean)) {
-            (Some(n), Some(a)) if !n.is_empty() && n != a => format!("{n} <{a}>"),
+            (Some(n), Some(a)) if !n.is_empty() && n != a => format!("{} <{a}>", phrase(&n)),
             (_, Some(a)) => a,
             (Some(n), None) => n,
             (None, None) => String::new(),
         })
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// A name as written before its address: quoted, as it came, when it holds
+/// what would part it from its address or from the next, as `Yan, Joseph`.
+fn phrase(name: &str) -> String {
+    if name.contains([',', ';', ':', '<', '>', '@', '"', '\\', '(', ')', '[', ']']) {
+        format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        name.to_string()
+    }
 }
 
 /// A message's text, its lines ended alike, without the blank lines it ends

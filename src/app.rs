@@ -131,6 +131,9 @@ pub const PASSPHRASE: usize = 8;
 pub const AGAIN: usize = 9;
 pub const OUTGOING: usize = 10;
 
+/// How many messages of the Inbox looked through a page goes past.
+const REVIEW_PAGE: isize = 10;
+
 /// Why the form could not add its account: a mistake in what is typed, or
 /// the server refused to sign in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -961,7 +964,9 @@ pub struct App {
     due: Option<(Instant, Due)>,
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
-    quit: bool,
+    pub quit: bool,
+    /// Whether C-x was pressed, the key after it waited for: C-c quits.
+    c_x: bool,
     /// The index the map reads, shared with each account's sync.
     pub index: Arc<Mutex<Index>>,
     /// Why there is no map, if there is none: as its key could not be had.
@@ -1214,6 +1219,7 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            c_x: false,
             index: Arc::new(Mutex::new(index)),
             map_off,
             map_later,
@@ -2190,6 +2196,30 @@ impl App {
                 }
             }
         }
+        self.form_changed(before);
+    }
+
+    /// Typed into the form's field, as one: its lines run together, as a
+    /// password copied ends with one.
+    fn form_paste(&mut self, text: &str) {
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
+        if form.checking || form.at == KEEP || form.at == SIGN_IN {
+            return;
+        }
+        let text: String = text.chars().filter(|c| !matches!(c, '\r' | '\n')).collect();
+        if text.is_empty() {
+            return;
+        }
+        form.fields[form.at].push_str(&text);
+        form.typed[form.at] = true;
+        let at = form.at;
+        self.form_changed(at);
+    }
+
+    /// What follows from the form changed, from the field `before` it.
+    fn form_changed(&mut self, before: usize) {
         let Some(form) = self.dialog.form_mut() else {
             return;
         };
@@ -2209,10 +2239,11 @@ impl App {
         self.shown.get(self.list.selected()?)
     }
 
-    /// The message picked: on the map, where it is looked at, else in the
-    /// list.
+    /// The message picked: on the map, the map's, where it is looked at,
+    /// read, or looked through in the Inbox; else in the list. Never the
+    /// list's behind the map.
     fn picked(&self) -> Option<Listed> {
-        if self.map.mode == Mode::Map && self.focus == Focus::List {
+        if self.map.mode == Mode::Map {
             return self.listed_dot(&self.dot()?);
         }
         self.current().cloned()
@@ -2672,8 +2703,30 @@ impl App {
             }
             return self.compose_key(key);
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.quit = true;
+        // C-x C-c quits, as Emacs does; C-x and anything else, nothing,
+        // and C-c alone, nothing: compose's C-c C-c, pressed once more than
+        // it needed, quits no more.
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if std::mem::take(&mut self.c_x) {
+            if ctrl && key.code == KeyCode::Char('c') {
+                self.quit = true;
+            } else {
+                self.status = format!("{} quits", keymap::QUIT);
+            }
+            return;
+        }
+        if ctrl && key.code == KeyCode::Char('c') {
+            self.status = format!("{} quits", keymap::QUIT);
+            return;
+        }
+        if ctrl
+            && key.code == KeyCode::Char('x')
+            && !self.dialog.is_open()
+            && self.menu.is_none()
+            && !self.searching
+        {
+            self.c_x = true;
+            self.status = "C-x-".to_string();
             return;
         }
         if self.dialog.is_open() {
@@ -2683,8 +2736,11 @@ impl App {
             return self.menu_key(key);
         }
         if self.searching {
+            // esc, or C-g as Emacs has it, lets it go.
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let off = key.code == KeyCode::Esc || ctrl && key.code == KeyCode::Char('g');
             match key.code {
-                KeyCode::Esc => {
+                _ if off => {
                     self.query.clear();
                     self.found = None;
                     self.map.hits = None;
@@ -2719,6 +2775,9 @@ impl App {
         }
         if let Some(act) = keymap::act(key) {
             self.act(act);
+        } else if key.code == KeyCode::Char('q') && key.modifiers == KeyModifiers::NONE {
+            // q quit once: said how it is done now.
+            self.status = format!("{} quits", keymap::QUIT);
         }
     }
 
@@ -2739,7 +2798,6 @@ impl App {
         }
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
-            Act::Quit => self.quit = true,
             Act::Help => self.dialog = Dialog::Help(0),
             Act::Review => self.open_review(),
             Act::Apply => {
@@ -2866,6 +2924,7 @@ impl App {
             Act::Wider | Act::Narrower if self.read_width > 0 => {
                 let by: i16 = if act == Act::Wider { 4 } else { -4 };
                 self.reader_width = Some(self.read_width.saturating_add_signed(by));
+                self.remember_look();
             }
             Act::Wider | Act::Narrower => {}
             Act::MapView => self.show_map(),
@@ -2890,6 +2949,13 @@ impl App {
 
     /// Take a key in the dialog open.
     fn dialog_key(&mut self, key: KeyEvent) {
+        // C-g, as Emacs has it, is esc to every dialog.
+        let key = if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g')
+        {
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        } else {
+            key
+        };
         match &mut self.dialog {
             Dialog::Closed => {}
             Dialog::Help(_) => match keymap::act(key) {
@@ -3267,6 +3333,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {
                 self.resizing = false;
+                self.remember_look();
                 return;
             }
             MouseEventKind::Drag(MouseButton::Left) => return self.map_drag(m.column, m.row),
@@ -4058,9 +4125,11 @@ impl App {
 
     /// What was pasted, or dropped onto the terminal as the paths of its
     /// files: attached, if the message being written takes them and each
-    /// is a file; else written in, or typed into the search.
+    /// is a file; else written in, or typed into the search or the form.
     pub fn paste(&mut self, text: &str) {
-        if self.compose.is_some() && !self.dialog.is_open() {
+        if self.dialog.form().is_some() {
+            self.form_paste(text);
+        } else if self.compose.is_some() && !self.dialog.is_open() {
             let paths = dropped(text);
             if !paths.is_empty() {
                 return self.attach(&paths);
@@ -4245,14 +4314,14 @@ impl App {
                 self.map.zoom_all();
                 return true;
             }
-            // From farther than all of it, a cluster's node is opened.
+            // From farther than all of it, a cluster's block is opened.
             Act::Open if self.map.clusters => {
                 let id = self
                     .map
                     .picked()
                     .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
                 if let Some(id) = id {
-                    self.map.open_node(id);
+                    self.map.open_block(id);
                 }
                 return true;
             }
@@ -4277,8 +4346,9 @@ impl App {
                 self.map.suggesting = None;
                 return true;
             }
+            // In a cluster gone into, esc goes out a level.
             Act::Back if self.map.tree.is_some() && self.map.region.is_none() => {
-                self.map.close_tree();
+                self.map.tree_out();
                 return true;
             }
             _ => {}
@@ -4417,7 +4487,13 @@ impl App {
     /// pauses, where the message read is beside the map.
     fn map_step(&mut self, dx: i32, dy: i32) {
         let now = jiff::Timestamp::now().as_second();
-        if self.map.tree.is_some() {
+        let parts = matches!(
+            self.map.level(now),
+            Some((_, _, crate::forest::Level::Mosaic(_)))
+        );
+        if parts {
+            self.map.step_part(dx, dy, now);
+        } else if self.map.tree.is_some() {
             match dx.signum() {
                 1 => {
                     self.map.tree_in(now);
@@ -4426,7 +4502,7 @@ impl App {
                 _ => self.map.tree_along(dy as isize, now),
             }
         } else if self.map.clusters {
-            self.map.step_node(dx, dy);
+            self.map.step_block(dx, dy);
         } else {
             self.map.step(dx, dy);
         }
@@ -4464,8 +4540,9 @@ impl App {
     }
 
     /// Open as the mail was last looked at: the map, from as far as its
-    /// clusters if they were shown, else the list. Never looked at, the
-    /// list, and the map, when it is, from its clusters.
+    /// clusters if they were shown, else the list, and the message read as
+    /// wide as it was made. Never looked at, the list, and the map, when it
+    /// is, from its clusters.
     pub fn recall_look(&mut self) {
         let Some(said) = self
             .look_file
@@ -4475,7 +4552,14 @@ impl App {
             self.map.clusters = true;
             return;
         };
-        let mut words = said.split_whitespace();
+        let mut lines = said.lines();
+        let look = lines.next().unwrap_or_default();
+        for line in lines {
+            if let Some(w) = line.strip_prefix("reader ") {
+                self.reader_width = w.trim().parse().ok();
+            }
+        }
+        let mut words = look.split_whitespace();
         if words.next() != Some("map") || self.map_off.is_some() || self.map_later {
             return;
         }
@@ -4857,7 +4941,8 @@ impl App {
         }
     }
 
-    /// Write down how the mail is looked at, to open so again.
+    /// Write down how the mail is looked at, to open so again: the list or
+    /// the map, and how wide the message read was made, if it was.
     pub fn remember_look(&self) {
         let Some(path) = &self.look_file else {
             return;
@@ -4867,8 +4952,11 @@ impl App {
             Mode::Map => "map",
             Mode::List => "list",
         };
+        let wide = self
+            .reader_width
+            .map_or(String::new(), |w| format!("reader {w}\n"));
         // Only how it was left; nothing lost if it cannot be kept.
-        let _ = std::fs::write(path, format!("{look}\n"));
+        let _ = std::fs::write(path, format!("{look}\n{wide}"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked
@@ -5951,8 +6039,8 @@ impl App {
         let (Some(s), Some(at)) = (self.map.snapshot.clone(), self.map.preview.take()) else {
             return;
         };
-        // Laid out again, the clusters' nodes are put where they now are.
-        self.map.pins.clear();
+        // Laid out again, the clusters' blocks are tiled anew.
+        self.map.mosaic = None;
         let layout = s
             .model
             .keys
@@ -6322,6 +6410,12 @@ impl App {
                     r.reading = false;
                     return self.review_act(act);
                 }
+                // Nothing is done till $, read or not.
+                Act::Archive => {
+                    self.status =
+                        "here, m moves it, space keeps it, d discards it; $ does those chosen"
+                            .to_string()
+                }
                 _ => return false,
             }
             return true;
@@ -6332,6 +6426,8 @@ impl App {
             (Act::Up, _) => self.review_step(-1),
             (Act::Top, _) => self.review_step(isize::MIN / 2),
             (Act::End, _) => self.review_step(isize::MAX / 2),
+            (Act::PageDown, _) => self.review_step(REVIEW_PAGE),
+            (Act::PageUp, _) => self.review_step(-REVIEW_PAGE),
             (Act::Left | Act::Right, Some(i)) => {
                 let label = match self.choice(i) {
                     Choice::Move(l) => Some(l),
@@ -6564,7 +6660,7 @@ impl App {
             return self.move_onto(id);
         }
         if self.map.clusters {
-            return self.map.open_node(id);
+            return self.map.open_block(id);
         }
         self.map.focused = if self.map.focused == Focused::Cluster(id) {
             Focused::All

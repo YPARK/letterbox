@@ -140,36 +140,36 @@ letterbox search grant report --account Work
 
 | Key | |
 |---|---|
-| `j` / `k`, the arrows | move; in a message, scroll |
-| `h` / `l`, `tab` / `S-tab` | between folders, messages and the message read |
+| `j` / `k`, the arrows, `C-n` / `C-p` | move; in a message, scroll |
+| `h` / `l`, `C-b` / `C-f`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
-| `space` / `b` | a page down, or up, in the message |
-| `<` / `>` | make the message read wider, or narrower; or drag the line before it |
+| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys |
+| `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
-| `g` / `G` | go to the top, or the end |
+| `g` / `G`, `M-<` / `M->` | go to the top, or the end |
 | `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
-| `esc` | back to the list; clear the search |
+| `esc` / `C-g` | back to the list; clear the search; close a dialog; out of a cluster gone into, a level. `C-g` as Emacs has it, wherever `esc` goes back |
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
 | `c` | write a message |
 | `r`, `C-r` | reply to the sender |
 | `a` | reply to all: the sender, the others it went to copied |
-| `f`, `C-f` | forward it, its files with it |
+| `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text. In a letterbox built `--features pages` |
 | `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
-| `C-n` | look for new mail now; it is looked for every two minutes |
+| `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
-| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
+| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, the clusters are a mosaic, each a block as big as how many it holds, gone into by `⏎`, its parts a mosaic too, and `esc` out a level. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
@@ -180,7 +180,7 @@ letterbox search grant report --account Work
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
-| `q` | quit |
+| `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 ⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
@@ -200,7 +200,7 @@ again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
 it. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
-never of the message. Outside it `C-c` still quits.
+never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
 If Emacs is new to you, this is all you need:
 
@@ -271,22 +271,28 @@ is in, and the five messages nearest it. `[` and `]` narrow the map to
 one cluster after another. `z` looks nearer, about the message picked,
 `Z` farther, and `0` at all of it; the wheel zooms about where it is, and
 what is seen follows the message picked as it moves. `Z` from all of it
-shows its clusters: each one round node, its area growing with the
-square root of how many messages it holds, so that small ones are seen
-beside a big one, bright where any is unread, with its name and how
-many beside it. A node stays where it was first put, until the map is
-laid out again. The arrows go from node to node, and `⏎` or a click
-opens one as a tree, drawn from the left: the cluster, its parts by what
-they are about, the threads of each by their subject, and their
-messages, oldest first, so that new mail comes at the end and nothing
-else moves. Only the branch picked and those it is under are open; the
-rest are closed, as big as how many they hold. `j` and `k` go along a
-level, `l` or `⏎` into the branch picked, `h` out of it, and `⏎` on a
-message reads it; `esc`, or `h` from the parts, goes back to the
-clusters, and `[` `]` to the next cluster's tree. `z` from the clusters
+shows its clusters as a mosaic, as paperstack shows its themes: each
+cluster a block, boxed, as big as how many messages it holds and beside
+the clusters it lies by on the map, the blocks filling the map between
+them; each message a half of a cell of its block, bright where it is
+unread, or found by a search; and on each block its name, how many it
+holds and what is new in it. The arrows go from block to block, and `⏎`
+or a click goes into one: a mosaic of its parts, by what they are
+about, each a block, its messages each a tile, the unread bright; the
+way in said over the map, as `Grant › budget aims`. A part of twelve
+messages or more is gone into alike, in finer parts of its own, and so
+on, four deep at most; one too small to split shows its threads, by
+their subject, and their messages, oldest first, as a tree drawn from
+the left, so that new mail comes at the end and nothing else moves.
+Only the branch picked and those it is under are open; the rest are
+closed, as big as how many they hold. In a mosaic the arrows go from
+block to block; in a tree, `j` and `k` go along a level, `l` or `⏎` into
+the branch picked and `h` out of it, and `⏎` on a message reads it.
+`esc` goes out a level, and out of the parts back to the clusters; `[`
+`]` go to the next cluster. `z` from the clusters
 goes back to all of the map, its dots. The map opens at its clusters;
-after that, letterbox opens as you left it: the list or the map, and
-its clusters if they were shown. `/` searches it as you type: the messages
+after that, letterbox opens as you left it: the list or the map, its
+clusters if they were shown, and the message read as wide as you made it. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.
@@ -318,7 +324,7 @@ of them, and offers a new label by that name; the last picks where on the
 map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
-`←` and `→` go round them, and back to none chosen; a click picks one, and
+`←` and `→` go round them, and back to none chosen; and `C-f` and `C-b`, as Emacs's keys move everywhere; `C-v` and `M-v` a page; a click picks one, and
 again leaves it. Nothing is done until `$`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the

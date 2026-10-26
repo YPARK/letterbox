@@ -16,6 +16,7 @@ mod mail;
 mod map;
 mod mcp;
 mod model;
+mod mosaic;
 mod net;
 mod oauth;
 #[cfg(feature = "pages")]

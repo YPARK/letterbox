@@ -515,8 +515,15 @@ pub(crate) fn split_addrs(s: &str) -> Vec<String> {
     let mut cur = String::new();
     let mut angle = false;
     let mut quote = false;
+    let mut escaped = false;
     for c in s.chars() {
+        if escaped {
+            escaped = false;
+            cur.push(c);
+            continue;
+        }
         match c {
+            '\\' if quote => escaped = true,
             '"' if !angle => quote = !quote,
             '<' if !quote => angle = true,
             '>' if !quote => angle = false,
