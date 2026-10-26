@@ -167,8 +167,15 @@ pub const KEYS: &[Binding] = &[
         help: "open the folder, or read the message",
     },
     Binding {
-        keys: &[("j", Down), ("down", Down), ("k", Up), ("up", Up)],
-        name: "j k",
+        keys: &[
+            ("j", Down),
+            ("down", Down),
+            ("C-n", Down),
+            ("k", Up),
+            ("up", Up),
+            ("C-p", Up),
+        ],
+        name: "j k C-n C-p",
         hint: "j/k",
         foot: &[
             (Side, "move"),
@@ -176,33 +183,37 @@ pub const KEYS: &[Binding] = &[
             (Map, "move"),
             (Reviewing, "move"),
         ],
-        help: "move; in a message, scroll; in the map, to the nearest message that way, as h and l; the arrows too",
+        help: "move; in a message, scroll; in the map, to the nearest message that way, as h and l; the arrows too, and C-n and C-p, as Emacs has them",
     },
     Binding {
         keys: &[
             ("h", Left),
             ("left", Left),
+            ("C-b", Left),
             ("l", Right),
             ("right", Right),
+            ("C-f", Right),
             ("tab", NextPane),
             ("S-tab", PreviousPane),
         ],
-        name: "h l tab",
+        name: "h l C-b C-f tab",
         hint: "",
         foot: &[],
-        help: "move between folders, messages and the message read; tab and S-tab in the map",
+        help: "move between folders, messages and the message read; tab and S-tab in the map; C-b and C-f as h and l",
     },
     Binding {
         keys: &[
             ("space", ScreenDown),
             ("pgdn", PageDown),
+            ("C-v", PageDown),
             ("b", ScreenUp),
             ("pgup", PageUp),
+            ("M-v", PageUp),
         ],
-        name: "space b",
+        name: "space b C-v M-v",
         hint: "␣",
         foot: &[(Reader, "page"), (Reviewing, "keep")],
-        help: "a page down, or up, in the message; in the Inbox looked through, keep it there",
+        help: "a page down, or up, in the message; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
         keys: &[("n", NextMessage), ("p", PreviousMessage)],
@@ -212,11 +223,18 @@ pub const KEYS: &[Binding] = &[
         help: "read the next message, or the one before; in the map, searched, the next found, or the one before",
     },
     Binding {
-        keys: &[("g", Top), ("home", Top), ("G", End), ("end", End)],
-        name: "g G",
+        keys: &[
+            ("g", Top),
+            ("home", Top),
+            ("M-<", Top),
+            ("G", End),
+            ("end", End),
+            ("M->", End),
+        ],
+        name: "g G M-< M->",
         hint: "",
         foot: &[],
-        help: "go to the top, or the end",
+        help: "go to the top, or the end; M-< and M-> as Emacs has them",
     },
     Binding {
         keys: &[("d", Trash)],
@@ -252,7 +270,7 @@ pub const KEYS: &[Binding] = &[
         help: "reply to all: the sender, and the others it went to, copied",
     },
     Binding {
-        keys: &[("f", Forward), ("C-f", Forward)],
+        keys: &[("f", Forward)],
         name: "f C-f",
         hint: "f",
         foot: &[(List, "forward"), (Reader, "forward")],
@@ -359,9 +377,9 @@ pub const KEYS: &[Binding] = &[
         help: "remove an account: the one picked in the sidebar, else the one listed",
     },
     Binding {
-        keys: &[("C-n", NewMail)],
-        name: "C-n",
-        hint: "C-n",
+        keys: &[("U", NewMail)],
+        name: "U",
+        hint: "U",
         foot: &[(Side, "new mail"), (List, "new mail")],
         help: "look for new mail now; it is looked for every two minutes",
     },
@@ -656,7 +674,9 @@ pub fn chord(key: KeyEvent) -> Chord {
     let held = key.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     match key.code {
         KeyCode::Char(c) if !held.is_empty() => {
-            let shift = key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase();
+            // Shift on a letter alone: `<` is Shift's already, said or not.
+            let shift = c.is_alphabetic()
+                && (key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase());
             let shift = if shift {
                 KeyModifiers::SHIFT
             } else {

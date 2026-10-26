@@ -2703,13 +2703,19 @@ impl App {
             }
             return self.compose_key(key);
         }
+        // C-x C-c quits, as Emacs does; C-x and anything else, nothing,
+        // and C-c alone, nothing: compose's C-c C-c, pressed once more than
+        // it needed, quits no more.
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && key.code == KeyCode::Char('c') {
-            self.quit = true;
+        if std::mem::take(&mut self.c_x) {
+            if ctrl && key.code == KeyCode::Char('c') {
+                self.quit = true;
+            } else {
+                self.status = format!("{} quits", keymap::QUIT);
+            }
             return;
         }
-        // C-x C-c quits, as Emacs does; C-x and anything else, nothing.
-        if std::mem::take(&mut self.c_x) {
+        if ctrl && key.code == KeyCode::Char('c') {
             self.status = format!("{} quits", keymap::QUIT);
             return;
         }
@@ -2767,36 +2773,12 @@ impl App {
             }
             return;
         }
-        if let Some(act) = self.review_emacs(key).or_else(|| keymap::act(key)) {
+        if let Some(act) = keymap::act(key) {
             self.act(act);
         } else if key.code == KeyCode::Char('q') && key.modifiers == KeyModifiers::NONE {
             // q quit once: said how it is done now.
             self.status = format!("{} quits", keymap::QUIT);
         }
-    }
-
-    /// What one of Emacs's keys does in the Inbox looked through, with the
-    /// focus on it, as in the labels dropped down over it: `C-n` and `C-p`
-    /// down and up, `C-f` and `C-b` round what may be done with one, `C-v`
-    /// and `M-v` a page, and `M-<` and `M->` to either end; `C-g` is esc
-    /// everywhere.
-    fn review_emacs(&self, key: KeyEvent) -> Option<Act> {
-        if self.review.is_none() || self.focus != Focus::Reader || self.map.mode != Mode::Map {
-            return None;
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let meta = key.modifiers.contains(KeyModifiers::ALT);
-        Some(match key.code {
-            KeyCode::Char('n') if ctrl => Act::Down,
-            KeyCode::Char('p') if ctrl => Act::Up,
-            KeyCode::Char('f') if ctrl => Act::Right,
-            KeyCode::Char('b') if ctrl => Act::Left,
-            KeyCode::Char('v') if ctrl => Act::PageDown,
-            KeyCode::Char('v') if meta => Act::PageUp,
-            KeyCode::Char('<') if meta => Act::Top,
-            KeyCode::Char('>') if meta => Act::End,
-            _ => return None,
-        })
     }
 
     /// Do what a key in the table does, where the focus is.

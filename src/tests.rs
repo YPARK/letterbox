@@ -3314,15 +3314,14 @@ fn a_message_with_files_is_sent_in_parts_each_as_it_was() {
 #[test]
 fn reply_forward_and_new_mail_have_their_keys() {
     let mut app = demo();
-    press(&mut app, &["<c-n>"]);
+    press(&mut app, &["U"]);
     assert!(app.status.contains("new mail"), "{}", app.status);
-    // As in Gmail: r replies, a to all, f forwards; C-r and C-f too.
+    // As in Gmail: r replies, a to all, f forwards; C-r too.
     for (keys, subject) in [
         (["r"], "Subject: Re: "),
         (["<c-r>"], "Subject: Re: "),
         (["a"], "Subject: Re: "),
         (["f"], "Subject: Fwd: "),
-        (["<c-f>"], "Subject: Fwd: "),
     ] {
         press(&mut app, &keys);
         let text = app.compose.as_ref().unwrap().buffer.text();
@@ -3440,10 +3439,7 @@ fn a_forward_carries_the_files_of_what_it_forwards() {
         .position(|m| m.from == "Alan Turing")
         .unwrap();
     app.list.select(Some(turing));
-    press(
-        &mut app,
-        &["<c-f>", "ada@analytical.example", "<c-c>", "<c-c>"],
-    );
+    press(&mut app, &["f", "ada@analytical.example", "<c-c>", "<c-c>"]);
     assert!(app.compose.is_none(), "{}", app.status);
     press(&mut app, &["h", "j", "j"]);
     assert_eq!(app.folder_name(), "Sent");
@@ -3535,7 +3531,7 @@ fn a_forward_s_files_are_attach_lines_that_can_be_let_go() {
         .position(|m| m.from == "Alan Turing")
         .unwrap();
     app.list.select(Some(turing));
-    press(&mut app, &["<c-f>"]);
+    press(&mut app, &["f"]);
     let text = app.compose.as_ref().unwrap().buffer.text();
     let lines: Vec<&str> = text
         .lines()
@@ -4040,11 +4036,51 @@ fn c_x_c_c_quits_as_emacs_does_and_q_alone_does_not() {
     assert!(app.status.contains("C-x"), "{}", app.status);
     press(&mut app, &["j"]);
     assert!(!app.quit);
+    // C-c alone, as compose's C-c C-c might be pressed once it is gone, no
+    // more.
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(!app.quit, "C-c alone quits no more");
+    assert!(app.status.contains("C-x C-c quits"), "{}", app.status);
     press(&mut app, &["<c-x>", "<c-c>"]);
     assert!(app.quit);
     let mut app = demo();
     let screen = app::screen(&mut app, 140, 40);
     assert!(screen.contains("C-x C-c quit"), "{screen}");
+}
+
+#[test]
+fn emacs_keys_move_in_the_list_and_the_map_as_in_the_inbox_looked_through() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = demo();
+    let at = |app: &App| app.list.selected();
+    let first = at(&app);
+    press(&mut app, &["<c-n>", "<c-n>"]);
+    assert_eq!(at(&app), first.map(|f| f + 2));
+    press(&mut app, &["<c-p>"]);
+    assert_eq!(at(&app), first.map(|f| f + 1));
+    assert!(app.compose.is_none(), "C-n begins no mail");
+    // M-> and M-<, Shift held for them or not, as terminals say it.
+    for held in [KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT] {
+        app.key(KeyEvent::new(KeyCode::Char('>'), held));
+        assert_eq!(at(&app), Some(app.shown.len() - 1), "{held:?}");
+        app.key(KeyEvent::new(KeyCode::Char('<'), held));
+        assert_eq!(at(&app), Some(0), "{held:?}");
+    }
+    // C-f forwards no more: it reads the one picked, as l does.
+    press(&mut app, &["<c-f>"]);
+    assert!(app.compose.is_none());
+    assert_eq!(app.focus, app::Focus::Reader);
+    // On the map, C-n goes to the nearest message down, as j does.
+    let mut app = demo_map();
+    let _ = app::screen(&mut app, 140, 40);
+    press(&mut app, &["0"]);
+    let _ = app::screen(&mut app, 140, 40);
+    let before = app.map.picked();
+    press(&mut app, &["j"]);
+    let by_j = app.map.picked();
+    app.map.cursor = before.map(|i| app.map.snapshot.as_ref().unwrap().dots[i].key.clone());
+    press(&mut app, &["<c-n>"]);
+    assert_eq!(app.map.picked(), by_j);
 }
 
 #[test]
