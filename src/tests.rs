@@ -7247,6 +7247,104 @@ fn the_pop_up_names_the_labels_filed_under() {
 }
 
 #[test]
+fn as_the_inbox_is_looked_through_the_map_says_where_it_is_heading() {
+    let mut app = demo_map();
+    // Not looked through: nothing said of it.
+    assert!(app.heading().is_none());
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(!screen.contains("where the Inbox goes"), "{screen}");
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    // Each where it would go, as suggested: to a label, to the Trash, or
+    // kept; all of them, somewhere.
+    let h = app.heading().expect("heading");
+    let to: usize = h.to.values().map(|w| w.chosen + w.suggested).sum();
+    let unmapped = rows
+        .iter()
+        .filter(|&&i| matches!(app.choice(i), app::Choice::Move(ref l) if !s.groups.iter().any(|g| g.label.as_deref() == Some(l))))
+        .count();
+    assert_eq!(
+        to + h.trash.chosen + h.trash.suggested + h.kept.chosen + h.kept.suggested + unmapped,
+        INBOX
+    );
+    assert!(h.to.values().all(|w| w.chosen == 0), "none chosen yet");
+    // The one picked, to where it is suggested.
+    let going = rows
+        .iter()
+        .position(|&i| s.suggestion(i).is_some())
+        .unwrap();
+    for _ in 0..going {
+        press(&mut app, &["j"]);
+    }
+    let label = s.suggestion(rows[going]).unwrap().to_string();
+    let there = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some(label.as_str()))
+        .unwrap()
+        .id;
+    let h = app.heading().unwrap();
+    assert_eq!(h.picked, Some(app::Bound::To(there)));
+    let before = h.to[&there];
+    // Revised: to the Trash; there one fewer, and the Trash one more, chosen.
+    press(&mut app, &["d", "k"]);
+    let after = app.heading().unwrap();
+    assert_eq!(after.picked, Some(app::Bound::Trash));
+    assert_eq!(
+        after.to.get(&there).map_or(0, |w| w.suggested),
+        before.suggested - 1
+    );
+    assert_eq!(after.trash.chosen, 1);
+    // Revised again, to Grant: chosen there.
+    let grant = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some("Grant"))
+        .unwrap()
+        .id;
+    let was = app
+        .heading()
+        .unwrap()
+        .to
+        .get(&grant)
+        .map_or(0, |w| w.chosen);
+    app.review.as_mut().unwrap().chosen.insert(
+        s.dots[rows[going]].key.clone(),
+        app::Choice::Move("Grant".into()),
+    );
+    let h = app.heading().unwrap();
+    assert_eq!(h.to[&grant].chosen, was + 1);
+    assert_eq!(h.picked, Some(app::Bound::To(grant)));
+    // Drawn: said under the map, and how many go to each label beside it.
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("where the Inbox goes"), "{screen}");
+    assert!(screen.contains("Grant ←"), "{screen}");
+}
+
+#[test]
+fn the_words_a_message_shares_with_where_it_goes_are_found() {
+    let words = vec![
+        "aims".to_string(),
+        "budget".to_string(),
+        "grant".to_string(),
+    ];
+    assert_eq!(
+        crate::map::shared("Re: the Aims page, third pass", &words),
+        vec![true, false, false]
+    );
+    assert_eq!(
+        crate::map::shared("Grant budget, again", &words),
+        vec![false, true, true]
+    );
+    // A word, not a part of one.
+    assert_eq!(
+        crate::map::shared("Disclaims", &words),
+        vec![false, false, false]
+    );
+}
+
+#[test]
 fn a_message_looked_through_goes_under_a_new_label_named_for_it() {
     let mut app = demo_map();
     press(&mut app, &["i"]);

@@ -166,6 +166,20 @@ impl Group {
     }
 }
 
+/// Which of `words`, a cluster's, `text` has, each as a word of it, as
+/// tokens are made of them: what a message shares with where it goes.
+pub fn shared(text: &str, words: &[String]) -> Vec<bool> {
+    let had = crate::model::words(text);
+    words
+        .iter()
+        .map(|w| {
+            crate::model::words(w)
+                .first()
+                .is_some_and(|w| had.contains(w))
+        })
+        .collect()
+}
+
 /// What the map is drawn from: the index as it was, by one lens.
 pub struct Snapshot {
     pub version: u64,
