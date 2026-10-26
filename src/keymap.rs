@@ -435,7 +435,7 @@ pub const KEYS: &[Binding] = &[
         name: "z Z 0",
         hint: "z/Z",
         foot: &[(Map, "zoom")],
-        help: "in the map, look nearer, about the message picked, or farther; 0 all of it. Farther than all of it, each cluster is one node, the bigger the more it holds: ⏎ or a click opens it as a tree of its parts, threads and messages, gone along by j and k, into by l or ⏎, out of by h or esc. The wheel zooms about where it is; what is seen follows the message picked",
+        help: "in the map, look nearer, about the message picked, or farther; 0 all of it. Farther than all of it, the clusters are a mosaic, each a block as big as how many it holds, beside those it lies by: ⏎ or a click goes into it, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; esc goes out a level. The wheel zooms about where it is; what is seen follows the message picked",
     },
     Binding {
         keys: &[("i", Review)],

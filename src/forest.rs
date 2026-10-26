@@ -1,7 +1,8 @@
-//! A cluster as a tree: its parts, by what they are about; the threads of
-//! each, by their subject; and their messages, oldest first. A branch comes
-//! after those begun before it, so that new mail comes at the end of its
-//! thread, or begins one at the end of its part, and nothing else moves.
+//! A cluster as a tree: its parts, by what they are about, and theirs, as
+//! long as a part is big enough to split; the threads of the finest, by
+//! their subject; and their messages, oldest first. A branch comes after
+//! those begun before it, so that new mail comes at the end of its thread,
+//! or begins one at the end of its part, and nothing else moves.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +17,13 @@ pub struct Branch {
     /// The messages under it, by their place, oldest first.
     pub messages: Vec<usize>,
     pub branches: Vec<Branch>,
+    /// Whether its branches are parts, shown as a mosaic, rather than
+    /// threads.
+    pub parts: bool,
 }
+
+/// How far down a cluster's parts go, the cluster's own parts the first.
+const DEEPEST: usize = 4;
 
 impl Branch {
     pub fn is_leaf(&self) -> bool {
@@ -65,6 +72,37 @@ impl Branch {
     pub fn levels(&self) -> usize {
         1 + self.branches.iter().map(Branch::levels).max().unwrap_or(0)
     }
+
+    /// What is shown with the branch the way `picked` goes to picked: the
+    /// parts it is among, as a mosaic; else, below the finest parts, the
+    /// threads of the part it is under, as a tree from that part.
+    pub fn level(&self, picked: &[usize]) -> Level {
+        let above = &picked[..picked.len().saturating_sub(1)];
+        if self.at(above).is_some_and(|b| b.parts) {
+            return Level::Mosaic(above.to_vec());
+        }
+        let part = (0..picked.len())
+            .rev()
+            .find(|&j| self.at(&picked[..j]).is_some_and(|b| b.parts))
+            .map_or(Vec::new(), |j| picked[..=j].to_vec());
+        Level::Tree(part)
+    }
+
+    /// The names of the branches the way `path` goes through, itself the
+    /// first.
+    pub fn names(&self, path: &[usize]) -> Vec<String> {
+        (0..=path.len())
+            .filter_map(|j| self.at(&path[..j]).map(|b| b.name.clone()))
+            .collect()
+    }
+}
+
+/// What a cluster gone into shows: a mosaic of the parts of the branch the
+/// way goes to, or a tree from the part the way goes to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Level {
+    Mosaic(Vec<usize>),
+    Tree(Vec<usize>),
 }
 
 /// When the message `i` came, to put it in turn.
@@ -111,36 +149,64 @@ pub fn grow(
     if let Some(l) = &g.label {
         named.extend(model::words(l));
     }
+    let (branches, parts) = split(s, parts, &members, &named, u64::from(id), 1);
+    Some((
+        Branch {
+            name: g.name(),
+            messages: members,
+            branches,
+            parts,
+        },
+        centres,
+    ))
+}
+
+/// The branches of `whole`, oldest first, as `parts` splits it, and
+/// whether they are parts: each part named by the words that set it apart
+/// from the rest of `whole`, but those `named` above it, and split again
+/// as `model::parts` splits it, `depth` deep, till too small to split;
+/// one part alone, the threads of `whole`.
+fn split(
+    s: &Snapshot,
+    parts: Vec<Vec<usize>>,
+    whole: &[usize],
+    named: &[String],
+    seed: u64,
+    depth: usize,
+) -> (Vec<Branch>, bool) {
+    let parts: Vec<Vec<usize>> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+    if parts.len() < 2 {
+        return (threads(s, whole), false);
+    }
     let mut branches: Vec<Branch> = parts
         .into_iter()
-        .filter(|p| !p.is_empty())
-        .map(|mut part| {
+        .enumerate()
+        .map(|(k, mut part)| {
             part.sort_by_key(|&i| when(s, i));
-            let words = model::part_words(&s.model, &part, &members, &named);
+            let words = model::part_words(&s.model, &part, whole, named);
+            let (branches, parts) = if depth < DEEPEST {
+                let seed = seed.wrapping_mul(31).wrapping_add(k as u64 + 1);
+                let (finer, _) = model::parts(&s.model, &part, None, seed);
+                let mut named = named.to_vec();
+                named.extend(words.iter().cloned());
+                split(s, finer, &part, &named, seed, depth + 1)
+            } else {
+                (threads(s, &part), false)
+            };
             Branch {
                 name: if words.is_empty() {
                     "the rest".to_string()
                 } else {
                     words.join(" ")
                 },
-                branches: threads(s, &part),
+                branches,
+                parts,
                 messages: part,
             }
         })
         .collect();
-    // One part alone: its threads are the cluster's own.
-    if branches.len() == 1 {
-        branches = branches.remove(0).branches;
-    }
     branches.sort_by_key(|b| b.messages.first().map(|&i| when(s, i)));
-    Some((
-        Branch {
-            name: g.name(),
-            messages: members,
-            branches,
-        },
-        centres,
-    ))
+    (branches, true)
 }
 
 /// A subject as threads are told apart: `Re:` and `Fwd:` let go, and each
@@ -275,6 +341,7 @@ fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
                     name: format!("{subject} — {}", who(s, first)),
                     messages: thread,
                     branches: Vec::new(),
+                    parts: false,
                 };
             }
             // Told apart by a number, each says its own subject.
@@ -291,9 +358,11 @@ fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
                         },
                         messages: vec![i],
                         branches: Vec::new(),
+                        parts: false,
                     })
                     .collect(),
                 messages: thread,
+                parts: false,
             }
         })
         .collect();

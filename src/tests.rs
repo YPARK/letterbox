@@ -5998,45 +5998,131 @@ fn shown_of(app: &App, id: u32) -> usize {
     g.members.iter().filter(|i| shown.contains(i)).count()
 }
 
+/// How many cells of the screen each cluster's block has, by its number,
+/// as the clicks it takes say.
+fn block_areas(app: &App) -> std::collections::BTreeMap<u32, u32> {
+    let mut areas = std::collections::BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for &(r, t) in &app.targets {
+        if let app::Target::Anchor(id) = t {
+            for x in r.x..r.right() {
+                if seen.insert((x, r.y)) {
+                    *areas.entry(id).or_default() += 1;
+                }
+            }
+        }
+    }
+    areas
+}
+
 #[test]
-fn farther_than_all_of_it_each_cluster_is_one_node_the_bigger_the_more_it_holds() {
+fn a_mosaic_gives_each_message_a_cell_and_each_cluster_a_block() {
+    use crate::mosaic::Mosaic;
+    // Three clusters along the map, 40, 15 and 5 messages each.
+    let mut items = Vec::new();
+    let centres = [[0.0, 0.0], [10.0, 1.0], [20.0, 0.0]];
+    for (b, n) in [40, 15, 5].into_iter().enumerate() {
+        for k in 0..n {
+            let wobble = (k as f32 * 0.37).sin();
+            let p = [
+                centres[b][0] + wobble,
+                centres[b][1] + (k as f32 * 0.11).cos(),
+            ];
+            items.push((items.len(), b, p));
+        }
+    }
+    let m = Mosaic::new(&items, &centres, 2.0);
+    assert!(m.cols * m.rows >= items.len());
+    assert_eq!(m.cells.len(), items.len(), "every message tiled");
+    let cell = |p: [f32; 2]| (p[0].floor() as i64, p[1].floor() as i64);
+    let cells: std::collections::HashSet<(i64, i64)> = m.cells.iter().map(|c| cell(c.1)).collect();
+    assert_eq!(cells.len(), items.len(), "one message to a cell");
+    for &(i, p) in &m.cells {
+        assert_eq!(m.at(p), Some(items[i].1), "each in its cluster's block");
+        assert_eq!(m.held(p), Some(i), "its cell holds it");
+    }
+    let held = (0..m.cols)
+        .flat_map(|x| (0..m.rows).map(move |y| [x as f32 + 0.5, y as f32 + 0.5]))
+        .filter(|&p| m.held(p).is_some())
+        .count();
+    assert_eq!(held, items.len(), "the rest spare");
+    // Each block one: each of its cells reached from one, step by step;
+    // and as big as how many it holds, or a little bigger.
+    let of = |b: usize, (x, y): (i64, i64)| m.at([x as f32 + 0.5, y as f32 + 0.5]) == Some(b);
+    let mut middles = Vec::new();
+    for (b, n) in [40, 15, 5].into_iter().enumerate() {
+        let all: Vec<(i64, i64)> = (0..m.cols as i64)
+            .flat_map(|x| (0..m.rows as i64).map(move |y| (x, y)))
+            .filter(|&c| of(b, c))
+            .collect();
+        assert!(
+            all.len() >= n && all.len() <= n + n.div_ceil(3) + 2,
+            "{b}: {}",
+            all.len()
+        );
+        let (mut seen, mut next) = (std::collections::HashSet::from([all[0]]), vec![all[0]]);
+        while let Some((x, y)) = next.pop() {
+            for c in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
+                if of(b, c) && seen.insert(c) {
+                    next.push(c);
+                }
+            }
+        }
+        assert_eq!(seen.len(), all.len(), "cluster {b} in one block");
+        middles.push(all.iter().map(|c| c.0 as f32).sum::<f32>() / all.len() as f32);
+    }
+    // Beside those it lies by: left to right, as on the map.
+    assert!(
+        middles[0] < middles[1] && middles[1] < middles[2],
+        "{middles:?}"
+    );
+    // The same map, the same mosaic.
+    assert_eq!(Mosaic::new(&items, &centres, 2.0).cells, m.cells);
+}
+
+#[test]
+fn farther_than_all_of_it_the_clusters_are_a_mosaic_each_a_block_as_big_as_it_holds() {
     let mut app = demo_map();
     let _ = app::screen(&mut app, 150, 45);
     press(&mut app, &["Z"]);
     let screen = app::screen(&mut app, 150, 45);
     assert!(app.map.clusters);
     assert!(screen.contains("its clusters"), "{screen}");
-    assert!(app.map.drawn.is_empty(), "no dots, only nodes");
+    assert!(app.map.drawn.is_empty(), "no dots, only blocks");
     let s = app.map.snapshot.clone().unwrap();
     let with_mail = s.groups.iter().filter(|g| shown_of(&app, g.id) > 0).count();
-    assert_eq!(app.map.nodes.len(), with_mail, "one node each");
-    // The more, the wider: its area as the root of how many.
-    let mut by_count: Vec<(usize, f32)> = app
-        .map
-        .nodes
-        .iter()
-        .map(|&(id, _, r)| (shown_of(&app, id), r))
-        .collect();
-    by_count.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    assert_eq!(app.map.blocks.len(), with_mail, "one block each");
+    // The more it holds, the bigger, none in another's.
+    let areas = block_areas(&app);
+    assert_eq!(areas.len(), with_mail, "{areas:?}");
+    // Together they fill the map.
+    let v = app.map.view.unwrap();
+    let filled: u32 = areas.values().sum();
     assert!(
-        by_count.windows(2).all(|w| w[0].1 <= w[1].1),
-        "{by_count:?}"
+        filled as f32 >= 0.7 * f32::from(v.w) * f32::from(v.h),
+        "{filled} of {}x{}",
+        v.w,
+        v.h
     );
-    assert!(by_count.last().unwrap().1 > by_count[0].1, "{by_count:?}");
-    let &(most, widest) = by_count.last().unwrap();
-    for &(n, r) in by_count.iter().filter(|&&(_, r)| r > 1.0) {
-        let damped = widest * (n as f32 / most as f32).powf(0.25);
-        assert!((r - damped).abs() < 1e-3, "{n}: {r} not {damped}");
+    for (&a, &area_a) in &areas {
+        for (&b, &area_b) in &areas {
+            if shown_of(&app, a) >= 2 * shown_of(&app, b) + 2 {
+                assert!(area_a > area_b, "{a}: {area_a} cells, {b}: {area_b}");
+            }
+        }
     }
-    // Each named once, by its node, with how many it holds.
+    // The biggest named once, on its block, with how many it holds.
     let biggest = s
         .groups
         .iter()
         .max_by_key(|g| (shown_of(&app, g.id), std::cmp::Reverse(g.id)))
         .unwrap();
-    let named = format!("{} {}", biggest.name(), shown_of(&app, biggest.id));
-    assert_eq!(screen.matches(&named).count(), 1, "{named}\n{screen}");
-    // The arrows go from node to node.
+    assert_eq!(screen.matches(&biggest.name()).count(), 1, "{screen}");
+    assert!(
+        screen.contains(&format!("{} ", shown_of(&app, biggest.id))),
+        "{screen}"
+    );
+    // The arrows go from block to block.
     let group = |app: &App| {
         let p = app.map.picked().unwrap();
         app.map.snapshot.as_ref().unwrap().group_of(p).unwrap().id
@@ -6049,14 +6135,15 @@ fn farther_than_all_of_it_each_cluster_is_one_node_the_bigger_the_more_it_holds(
         }
     }
     let other = group(&app);
-    assert_ne!(other, first, "on to another node");
+    assert_ne!(other, first, "on to another block");
     // ⏎ opens it, as its tree.
     press(&mut app, &["<enter>"]);
     let screen = app::screen(&mut app, 150, 45);
     assert!(!app.map.clusters);
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
     assert_eq!(app.map.focused, crate::map::Focused::Cluster(other));
-    assert!(screen.contains("as a tree"), "{screen}");
+    let name = s.group(other).unwrap().name();
+    assert!(screen.contains(&format!("Map · {name}")), "{screen}");
     assert_eq!(group(&app), other, "a message of it picked");
     // 0, all of it; z from its clusters, all of it again.
     press(&mut app, &["0", "Z", "z"]);
@@ -6065,7 +6152,7 @@ fn farther_than_all_of_it_each_cluster_is_one_node_the_bigger_the_more_it_holds(
 }
 
 #[test]
-fn a_node_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
+fn a_block_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
     let mut app = demo_map();
     let _ = app::screen(&mut app, 150, 45);
     let v = app.map.view.unwrap();
@@ -6117,7 +6204,7 @@ fn grant_tree() -> (App, u32) {
         .find(|g| g.label.as_deref() == Some("Grant"))
         .unwrap()
         .id;
-    app.map.open_node(id);
+    app.map.open_block(id);
     let _ = app::screen(&mut app, 150, 45);
     (app, id)
 }
@@ -6169,8 +6256,98 @@ fn a_cluster_opened_is_a_tree_of_its_parts_threads_and_messages_oldest_first() {
     let again = app.map.grown(now).unwrap();
     assert_eq!(*again, *root);
     let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains("Grant as a tree"), "{screen}");
-    assert!(screen.contains("├─") && screen.contains("└─"), "{screen}");
+    assert!(screen.contains("Map · Grant ·"), "{screen}");
+}
+
+#[test]
+fn a_big_cluster_is_split_into_parts_and_its_big_parts_again() {
+    let (records, _) = made_mail(1500, 7);
+    let mut index = Index::memory();
+    index
+        .cache(
+            records
+                .into_iter()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let s = crate::map::compute(crate::map::input(&index, Lens::Both, None, None, true));
+    let all: Vec<usize> = (0..s.dots.len()).collect();
+    let biggest = s.groups.iter().max_by_key(|g| g.members.len()).unwrap();
+    let (root, _) = crate::forest::grow(&s, biggest.id, &all, None).unwrap();
+    // Parts, each of two or more, none of fewer than twelve split; below
+    // the finest, threads of messages.
+    fn walk(b: &crate::forest::Branch, depth: usize, deepest: &mut usize, leaves: &mut Vec<usize>) {
+        if b.is_leaf() {
+            leaves.extend(&b.messages);
+            return;
+        }
+        if b.parts {
+            assert!(b.branches.len() >= 2, "{}", b.name);
+            assert!(b.messages.len() >= 12, "{}: {}", b.name, b.messages.len());
+            *deepest = (*deepest).max(depth + 1);
+        } else {
+            for thread in &b.branches {
+                assert!(!thread.parts);
+                assert!(
+                    thread.branches.iter().all(|m| m.is_leaf()),
+                    "{}",
+                    thread.name
+                );
+            }
+        }
+        for c in &b.branches {
+            walk(c, depth + 1, deepest, leaves);
+        }
+    }
+    let (mut deepest, mut leaves) = (0, Vec::new());
+    walk(&root, 0, &mut deepest, &mut leaves);
+    leaves.sort();
+    let mut members = biggest.members.clone();
+    members.sort();
+    assert_eq!(leaves, members, "each message once");
+    assert!(deepest >= 2, "a big part split again: {deepest}");
+}
+
+#[test]
+fn a_cluster_gone_into_is_a_mosaic_of_its_parts_and_a_part_its_threads() {
+    let (mut app, _) = grant_tree();
+    let now = jiff::Timestamp::now().as_second();
+    let path = |app: &mut App| app.map.tree_picked(now).unwrap().1;
+    let root = app.map.grown(now).unwrap();
+    assert!(root.parts);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("Map · Grant ·"), "{screen}");
+    assert!(app.map.drawn.is_empty(), "no dots");
+    assert_eq!(app.map.blocks.len(), root.branches.len(), "a block each");
+    assert!(!screen.contains("├─"), "no tree yet\n{screen}");
+    // The arrows go from part to part.
+    let first = path(&mut app);
+    assert_eq!(first.len(), 1);
+    for key in ["l", "j", "h", "k"] {
+        press(&mut app, &[key]);
+        let _ = app::screen(&mut app, 150, 45);
+        if path(&mut app) != first {
+            break;
+        }
+    }
+    let other = path(&mut app);
+    assert_eq!(other.len(), 1);
+    assert_ne!(other, first, "on to another part");
+    // ⏎ into a part: its threads, as a tree from it, named above.
+    press(&mut app, &["<enter>"]);
+    let screen = app::screen(&mut app, 150, 45);
+    assert_eq!(path(&mut app)[0], other[0]);
+    assert_eq!(path(&mut app).len(), 2);
+    let part = &root.branches[other[0]].name;
+    assert!(screen.contains(&format!("Grant › {part}")), "{screen}");
+    // h out of the threads, to the parts; esc out of them, to the clusters.
+    press(&mut app, &["h"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert_eq!(path(&mut app), other);
+    assert!(!app.map.blocks.is_empty());
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.tree.is_none() && app.map.clusters);
 }
 
 #[test]
@@ -6178,20 +6355,15 @@ fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
     let (mut app, _) = grant_tree();
     let now = jiff::Timestamp::now().as_second();
     let path = |app: &mut App| app.map.tree_picked(now).unwrap().1;
-    assert_eq!(path(&mut app).len(), 1, "a part picked");
-    // j and k along the parts.
-    press(&mut app, &["k", "k", "k"]);
-    assert_eq!(path(&mut app), vec![0], "the first part");
-    press(&mut app, &["j"]);
-    assert_eq!(path(&mut app), vec![1]);
-    press(&mut app, &["k"]);
-    // l into it, h out of it.
-    press(&mut app, &["l"]);
+    let part = path(&mut app);
+    assert_eq!(part.len(), 1, "a part picked");
+    // ⏎ into it, its finer parts or its threads; esc out of it.
+    press(&mut app, &["<enter>"]);
     let inside = path(&mut app);
     assert_eq!(inside.len(), 2);
-    assert_eq!(inside[0], 0);
-    press(&mut app, &["h"]);
-    assert_eq!(path(&mut app), vec![0]);
+    assert_eq!(inside[0], part[0]);
+    press(&mut app, &["<esc>"]);
+    assert_eq!(path(&mut app), part);
     // Down to a message with ⏎, and it is read.
     for _ in 0..4 {
         press(&mut app, &["<enter>"]);
@@ -6200,8 +6372,11 @@ fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
     let subject = app.map.snapshot.as_ref().unwrap().dots[p].subject.clone();
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains(&subject), "{subject}\n{screen}");
-    // A click on a branch picks it; on it again, goes into it.
+    // Back out to the parts: a click on one picks it; on it again, goes
+    // into it.
+    app.map.tree.as_mut().unwrap().depth = 1;
     let _ = app::screen(&mut app, 150, 45);
+    assert_eq!(path(&mut app).len(), 1);
     let row = app.map.branches.iter().position(|b| *b == vec![1]).unwrap();
     click_at(&mut app, app::Target::Branch(row));
     assert_eq!(path(&mut app), vec![1]);
@@ -6209,8 +6384,8 @@ fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
     let row = app.map.branches.iter().position(|b| *b == vec![1]).unwrap();
     click_at(&mut app, app::Target::Branch(row));
     assert_eq!(path(&mut app).len(), 2, "into it");
-    // h out, and out again: the clusters; esc from a tree, too.
-    press(&mut app, &["h", "h"]);
+    // esc out, and out again: the clusters.
+    press(&mut app, &["<esc>", "<esc>"]);
     assert!(app.map.tree.is_none() && app.map.clusters);
     press(&mut app, &["<enter>"]);
     assert!(app.map.tree.is_some());
@@ -6219,25 +6394,14 @@ fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
 }
 
 #[test]
-fn the_clusters_nodes_stay_where_they_were_put() {
+fn the_clusters_mosaic_stays_as_it_is_while_moving_in_it() {
     let mut app = demo_map();
     press(&mut app, &["Z"]);
     let _ = app::screen(&mut app, 150, 45);
-    let before = app.map.nodes.clone();
+    let before = (app.map.blocks.clone(), block_areas(&app));
     press(&mut app, &["l", "j"]);
     let _ = app::screen(&mut app, 150, 45);
-    let close = |a: &[(u32, [f32; 2], f32)], b: &[(u32, [f32; 2], f32)]| {
-        a.len() == b.len()
-            && a.iter().zip(b).all(|(x, y)| {
-                x.0 == y.0 && (x.1[0] - y.1[0]).abs() < 0.6 && (x.1[1] - y.1[1]).abs() < 0.6
-            })
-    };
-    assert!(
-        close(&before, &app.map.nodes),
-        "{before:?}\n{:?}",
-        app.map.nodes
-    );
-    assert!(!app.map.pins.is_empty());
+    assert_eq!(before, (app.map.blocks.clone(), block_areas(&app)));
 }
 
 #[test]
@@ -6768,7 +6932,7 @@ fn measure(n: usize) {
 }
 
 #[test]
-fn a_label_split_between_clusters_is_one_node_and_lights_all_its_mail() {
+fn a_label_split_between_clusters_is_one_block_and_lights_all_its_mail() {
     let (mut records, truth) = made_mail(1_500, 11);
     // Work is six topics' label, far apart on the map.
     for (r, t) in records.iter_mut().zip(&truth) {
@@ -6799,7 +6963,7 @@ fn a_label_split_between_clusters_is_one_node_and_lights_all_its_mail() {
         .iter()
         .filter(|g| g.label.as_deref() == Some("Work"))
         .collect();
-    assert_eq!(nodes.len(), 1, "one node for Work");
+    assert_eq!(nodes.len(), 1, "one block for Work");
     let g = nodes[0];
     assert!(g.core.len() < g.members.len() && g.core.iter().all(|i| g.members.contains(i)));
     // Picked, it lights every message of Work, wherever it lies.

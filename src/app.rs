@@ -4271,14 +4271,14 @@ impl App {
                 self.map.zoom_all();
                 return true;
             }
-            // From farther than all of it, a cluster's node is opened.
+            // From farther than all of it, a cluster's block is opened.
             Act::Open if self.map.clusters => {
                 let id = self
                     .map
                     .picked()
                     .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
                 if let Some(id) = id {
-                    self.map.open_node(id);
+                    self.map.open_block(id);
                 }
                 return true;
             }
@@ -4303,8 +4303,9 @@ impl App {
                 self.map.suggesting = None;
                 return true;
             }
+            // In a cluster gone into, esc goes out a level.
             Act::Back if self.map.tree.is_some() && self.map.region.is_none() => {
-                self.map.close_tree();
+                self.map.tree_out();
                 return true;
             }
             _ => {}
@@ -4443,7 +4444,13 @@ impl App {
     /// pauses, where the message read is beside the map.
     fn map_step(&mut self, dx: i32, dy: i32) {
         let now = jiff::Timestamp::now().as_second();
-        if self.map.tree.is_some() {
+        let parts = matches!(
+            self.map.level(now),
+            Some((_, _, crate::forest::Level::Mosaic(_)))
+        );
+        if parts {
+            self.map.step_part(dx, dy, now);
+        } else if self.map.tree.is_some() {
             match dx.signum() {
                 1 => {
                     self.map.tree_in(now);
@@ -4452,7 +4459,7 @@ impl App {
                 _ => self.map.tree_along(dy as isize, now),
             }
         } else if self.map.clusters {
-            self.map.step_node(dx, dy);
+            self.map.step_block(dx, dy);
         } else {
             self.map.step(dx, dy);
         }
@@ -5977,8 +5984,8 @@ impl App {
         let (Some(s), Some(at)) = (self.map.snapshot.clone(), self.map.preview.take()) else {
             return;
         };
-        // Laid out again, the clusters' nodes are put where they now are.
-        self.map.pins.clear();
+        // Laid out again, the clusters' blocks are tiled anew.
+        self.map.mosaic = None;
         let layout = s
             .model
             .keys
@@ -6590,7 +6597,7 @@ impl App {
             return self.move_onto(id);
         }
         if self.map.clusters {
-            return self.map.open_node(id);
+            return self.map.open_block(id);
         }
         self.map.focused = if self.map.focused == Focused::Cluster(id) {
             Focused::All

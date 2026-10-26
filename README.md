@@ -169,7 +169,7 @@ letterbox search grant report --account Work
 | `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
-| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
+| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, the clusters are a mosaic, each a block as big as how many it holds, gone into by `⏎`, its parts a mosaic too, and `esc` out a level. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
@@ -271,19 +271,25 @@ is in, and the five messages nearest it. `[` and `]` narrow the map to
 one cluster after another. `z` looks nearer, about the message picked,
 `Z` farther, and `0` at all of it; the wheel zooms about where it is, and
 what is seen follows the message picked as it moves. `Z` from all of it
-shows its clusters: each one round node, its area growing with the
-square root of how many messages it holds, so that small ones are seen
-beside a big one, bright where any is unread, with its name and how
-many beside it. A node stays where it was first put, until the map is
-laid out again. The arrows go from node to node, and `⏎` or a click
-opens one as a tree, drawn from the left: the cluster, its parts by what
-they are about, the threads of each by their subject, and their
-messages, oldest first, so that new mail comes at the end and nothing
-else moves. Only the branch picked and those it is under are open; the
-rest are closed, as big as how many they hold. `j` and `k` go along a
-level, `l` or `⏎` into the branch picked, `h` out of it, and `⏎` on a
-message reads it; `esc`, or `h` from the parts, goes back to the
-clusters, and `[` `]` to the next cluster's tree. `z` from the clusters
+shows its clusters as a mosaic, as paperstack shows its themes: each
+cluster a block, boxed, as big as how many messages it holds and beside
+the clusters it lies by on the map, the blocks filling the map between
+them; each message a half of a cell of its block, bright where it is
+unread, or found by a search; and on each block its name, how many it
+holds and what is new in it. The arrows go from block to block, and `⏎`
+or a click goes into one: a mosaic of its parts, by what they are
+about, each a block, its messages each a tile, the unread bright; the
+way in said over the map, as `Grant › budget aims`. A part of twelve
+messages or more is gone into alike, in finer parts of its own, and so
+on, four deep at most; one too small to split shows its threads, by
+their subject, and their messages, oldest first, as a tree drawn from
+the left, so that new mail comes at the end and nothing else moves.
+Only the branch picked and those it is under are open; the rest are
+closed, as big as how many they hold. In a mosaic the arrows go from
+block to block; in a tree, `j` and `k` go along a level, `l` or `⏎` into
+the branch picked and `h` out of it, and `⏎` on a message reads it.
+`esc` goes out a level, and out of the parts back to the clusters; `[`
+`]` go to the next cluster. `z` from the clusters
 goes back to all of the map, its dots. The map opens at its clusters;
 after that, letterbox opens as you left it: the list or the map, and
 its clusters if they were shown. `/` searches it as you type: the messages

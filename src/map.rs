@@ -4,12 +4,13 @@
 //! the screen's thread and made again as the index changes: clusters
 //! follow each change, and the layout moves only when asked to.
 
-use crate::forest::{self, Branch};
+use crate::forest::{self, Branch, Level};
 use crate::index::labels::System;
 use crate::index::record::Place;
 use crate::index::{Index, Key, Lens, Record};
 use crate::mail::Flags;
 use crate::model::{self, Clustering, Corpus, Model, Point, Vector};
+use crate::mosaic::Mosaic;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -750,16 +751,16 @@ pub struct Map {
     pub view: Option<View>,
     /// Where each message shown is, as a cell, on the screen or past it.
     pub places: BTreeMap<usize, (i32, i32)>,
-    /// Whether it is looked at from farther than all of it: each cluster
-    /// one node, as big as how many it holds.
+    /// Whether it is looked at from farther than all of it: the clusters
+    /// as a mosaic, each a block as big as how many it holds.
     pub clusters: bool,
-    /// The nodes drawn, while it is: their group's number, their middle,
-    /// across and down in cells, and their radius, in columns.
-    pub nodes: Vec<(u32, [f32; 2], f32)>,
-    /// Where each node was first put, as shares of the map across and down,
-    /// by the lens and its group's number: it stays there.
-    pub pins: BTreeMap<(Lens, u32), [f32; 2]>,
-    /// A cluster opened from its node, shown as its tree.
+    /// The blocks drawn, while it is: their group's number, their middle,
+    /// across and down in cells, and half their width, in columns.
+    pub blocks: Vec<(u32, [f32; 2], f32)>,
+    /// The mosaic last tiled, and what of: the snapshot, the messages
+    /// shown and the canvas's size; tiled again only when one changes.
+    pub mosaic: Option<(Tiled, Arc<Mosaic>)>,
+    /// A cluster opened from its block, shown as its tree.
     pub tree: Option<Tree>,
     /// The centres each cluster's parts were split by, and how many it
     /// held then, by its number: its parts hold while it holds about as
@@ -768,6 +769,11 @@ pub struct Map {
     /// The way to each branch of the tree drawn, by its row.
     pub branches: Vec<Vec<usize>>,
 }
+
+/// What a mosaic was tiled from: the snapshot, by where it is, the
+/// messages tiled, the canvas, across and down, and, of a cluster gone
+/// into, the cluster and the way to the parts tiled.
+pub type Tiled = (usize, Vec<usize>, u16, u16, Option<(u32, Vec<usize>)>);
 
 /// A cluster looked at as its tree.
 #[derive(Clone, Debug)]
@@ -847,10 +853,10 @@ impl Map {
     /// Look nearer by `factor`, or farther, below one, keeping the point
     /// `fixed` of the map, as shares, where it is on the screen.
     fn zoom_by(&mut self, factor: f32, fixed: [f32; 2]) {
-        // Farther than a cluster's tree, the clusters.
+        // Farther, out of a cluster gone into a level.
         if self.tree.is_some() {
             if factor < 1.0 {
-                self.close_tree();
+                self.tree_out();
             }
             return;
         }
@@ -886,9 +892,9 @@ impl Map {
         self.tree = None;
     }
 
-    /// Open the cluster `id` from its node, as its tree, its newest
+    /// Open the cluster `id` from its block, as its tree, its newest
     /// message picked, and the part it is in.
-    pub fn open_node(&mut self, id: u32) {
+    pub fn open_block(&mut self, id: u32) {
         let Some(s) = self.snapshot.clone() else {
             return;
         };
@@ -911,7 +917,7 @@ impl Map {
         self.cursor = newest.map(|i| s.dots[i].key.clone());
     }
 
-    /// Back from a cluster's tree to the clusters, its node among them.
+    /// Back from a cluster's tree to the clusters, its block among them.
     pub fn close_tree(&mut self) {
         self.tree = None;
         self.clusters = true;
@@ -973,13 +979,24 @@ impl Map {
         Some((root.clone(), path[..t.depth.min(path.len())].to_vec()))
     }
 
-    /// Pick the branch `by` after the one picked, as far down, or before:
-    /// the newest message under it.
+    /// Pick the branch `by` after the one picked, as far down within the
+    /// part shown as a tree, or before: the newest message under it.
     pub fn tree_along(&mut self, by: isize, now: i64) {
         let Some((root, path)) = self.tree_picked(now) else {
             return;
         };
-        let all = root.at_depth(path.len());
+        let part = match root.level(&path) {
+            Level::Tree(part) => part,
+            Level::Mosaic(_) => Vec::new(),
+        };
+        let Some(from) = root.at(&part) else {
+            return;
+        };
+        let all: Vec<Vec<usize>> = from
+            .at_depth(path.len() - part.len())
+            .into_iter()
+            .map(|p| [part.as_slice(), &p].concat())
+            .collect();
         let at = all.iter().position(|p| *p == path).unwrap_or(0);
         let next = (at as isize + by).clamp(0, all.len() as isize - 1) as usize;
         if let Some(i) = all.get(next).and_then(|p| root.at(p)?.newest()) {
@@ -1023,21 +1040,48 @@ impl Map {
         }
     }
 
-    /// Pick the node nearest that way, `dx` across and `dy` down, from the
+    /// The tree of the cluster gone into, the way to the branch picked,
+    /// and what is shown of it.
+    pub fn level(&mut self, now: i64) -> Option<(Arc<Branch>, Vec<usize>, Level)> {
+        let (root, path) = self.tree_picked(now)?;
+        let level = root.level(&path);
+        Some((root, path, level))
+    }
+
+    /// In a cluster's parts, pick the part nearest that way, `dx` across
+    /// and `dy` down, among those drawn: the newest message under it.
+    pub fn step_part(&mut self, dx: i32, dy: i32, now: i64) {
+        let Some((_, path, Level::Mosaic(above))) = self.level(now) else {
+            return;
+        };
+        let here = path.last().map(|&k| k as u32);
+        if let Some(k) = self.nearest_block(here, dx, dy) {
+            self.pick_branch(&[above.as_slice(), &[k as usize]].concat(), now);
+        }
+    }
+
+    /// Pick the block nearest that way, `dx` across and `dy` down, from the
     /// one the message picked is in: its message nearest its middle.
-    pub fn step_node(&mut self, dx: i32, dy: i32) {
+    pub fn step_block(&mut self, dx: i32, dy: i32) {
         let Some(s) = self.snapshot.clone() else {
             return;
         };
-        let here = self
-            .picked()
-            .and_then(|i| s.group_of(i))
-            .map(|g| g.id)
-            .and_then(|id| self.nodes.iter().find(|n| n.0 == id).copied());
-        let next = match here {
-            None => self.nodes.first().map(|n| n.0),
+        let here = self.picked().and_then(|i| s.group_of(i)).map(|g| g.id);
+        let next = self.nearest_block(here, dx, dy);
+        let at = next.and_then(|id| s.groups.iter().position(|g| g.id == id));
+        if let Some(i) = at.and_then(|at| s.central(at)) {
+            self.cursor = Some(s.dots[i].key.clone());
+        }
+    }
+
+    /// The block drawn nearest that way, `dx` across and `dy` down, from
+    /// the block `here`; the first, if none is.
+    fn nearest_block(&self, here: Option<u32>, dx: i32, dy: i32) -> Option<u32> {
+        let here = here.and_then(|id| self.blocks.iter().find(|n| n.0 == id).copied());
+        match here {
+            None => self.blocks.first().map(|n| n.0),
             Some((id, [x0, y0], _)) => self
-                .nodes
+                .blocks
                 .iter()
                 .filter(|n| n.0 != id)
                 .filter_map(|&(other, [x, y], _)| {
@@ -1049,10 +1093,6 @@ impl Map {
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
                 .map(|(_, other)| other),
-        };
-        let at = next.and_then(|id| s.groups.iter().position(|g| g.id == id));
-        if let Some(i) = at.and_then(|at| s.central(at)) {
-            self.cursor = Some(s.dots[i].key.clone());
         }
     }
 
@@ -1338,7 +1378,7 @@ impl Map {
         }
         // Looked at as a tree, the next cluster's tree.
         if self.tree.is_some() {
-            self.open_node(s.groups[next].id);
+            self.open_block(s.groups[next].id);
         }
     }
 }

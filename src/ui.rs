@@ -1919,8 +1919,10 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             "messages"
         }
     );
-    if let Some(g) = app.map.tree.as_ref().and_then(|tree| s.group(tree.id)) {
-        what = format!(" · {} as a tree{what}", g.name());
+    let level = app.map.level(now);
+    if let Some((root, _, level)) = &level {
+        let (crate::forest::Level::Mosaic(way) | crate::forest::Level::Tree(way)) = level;
+        what = format!(" · {}{what}", root.names(way).join(" › "));
     } else if app.map.clusters {
         what = format!(" · its clusters{what}");
     } else if app.map.scale() > 1.0 {
@@ -1943,12 +1945,14 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Focused::All => {}
     }
     head.push(Span::styled(what, dim));
-    let key = if app.map.tree.is_some() {
-        "   h out  l in  j/k along  ⏎ read  • one  ● more"
+    let key = if let Some((_, _, crate::forest::Level::Mosaic(_))) = &level {
+        "   ⏎ in  esc out  ▀ unread"
+    } else if app.map.tree.is_some() {
+        "   h out  l in  j/k along  ⏎ read  esc out  • one  ● more"
     } else if heading.is_some() {
         "   orange where the Inbox goes, the more the brighter  ··· where the one picked goes"
     } else if app.map.clusters {
-        "   ⬤ the bigger the more it holds, bright with unread  ◆ label  ◇ cluster"
+        "   ▦ a block each, as big as it holds, by those alike  ▀ unread  ◆ label  ◇ cluster"
     } else {
         "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster"
     };
@@ -2064,7 +2068,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     if app.map.clusters {
         app.map.drawn.clear();
-        return cluster_nodes(f, app, &s, &shown, canvas, now);
+        return cluster_mosaic(f, app, &s, &shown, canvas, now);
     }
     // What has anything new, by cluster: the rest dimmed, when asked.
     let lively: std::collections::BTreeSet<usize> = shown
@@ -2494,9 +2498,21 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
     use crate::forest::Branch;
     let t = app.theme;
     app.map.branches.clear();
-    let Some((root, picked)) = app.map.tree_picked(now) else {
+    let Some((whole, picked, level)) = app.map.level(now) else {
         return;
     };
+    // Its parts, a mosaic of them; below the finest, the threads of the
+    // part they are in, as a tree from it.
+    let base = match level {
+        crate::forest::Level::Mosaic(above) => {
+            return parts_mosaic(f, app, s, &whole, &picked, &above, canvas, now);
+        }
+        crate::forest::Level::Tree(part) => part,
+    };
+    let Some(root) = whole.at(&base) else {
+        return;
+    };
+    let picked = picked[base.len()..].to_vec();
     let query = app.query.clone();
     let found = app.map.hits(&query).map(|h| h.matched.clone());
     struct Row {
@@ -2532,7 +2548,7 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
     }
     let mut rows = Vec::new();
     let mut count = 0;
-    lay(&root, Vec::new(), &picked, &mut rows, &mut count);
+    lay(root, Vec::new(), &picked, &mut rows, &mut count);
     let row_of: std::collections::HashMap<Vec<usize>, usize> =
         rows.iter().map(|r| (r.path.clone(), r.row)).collect();
     // What is seen moves only to keep the branch picked in sight.
@@ -2654,7 +2670,7 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
         }
         buf.set_stringn(x + 1, y, chars.as_str(), usize::from(width), style);
         spots.push((Rect::new(x, y, width.max(1), 1), app.map.branches.len()));
-        app.map.branches.push(r.path.clone());
+        app.map.branches.push([base.as_slice(), &r.path].concat());
         if !r.open {
             continue;
         }
@@ -2699,11 +2715,33 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
     }
 }
 
-/// The map from farther than all of it: each cluster one round node, its
-/// area growing with the root of how many of its messages are shown, in its hue, bright
-/// with mail unread, its name and how many beside it. Drawn in half cells,
-/// whose halves are about as tall as a cell is wide, so that round is round.
-fn cluster_nodes(
+/// A block of a mosaic: what a click on it is, what it is called and
+/// holds, where it lies on the map, and how it is lit.
+struct Tile {
+    /// Its number among the blocks drawn: a cluster's, or a part's place.
+    id: u32,
+    target: Target,
+    chip: &'static str,
+    name: String,
+    members: Vec<usize>,
+    centre: [f32; 2],
+    hue: f32,
+    /// Its colour, where not its hue: as much of the Inbox goes there.
+    colour: Option<ratatui::style::Color>,
+    /// Whether it is in what the map is narrowed to.
+    focus: bool,
+    /// How much of the Inbox looked through goes there, and whether the
+    /// one picked does.
+    going: usize,
+    bound: bool,
+    /// What it says, only what is not yet filed shown.
+    unfiled: Option<&'static str>,
+}
+
+/// Farther than all of it, the clusters as a mosaic, as paperstack shows
+/// its themes: each a block as big as how many of its messages are shown,
+/// beside those it lies by on the map.
+fn cluster_mosaic(
     f: &mut Frame,
     app: &mut App,
     s: &crate::map::Snapshot,
@@ -2712,27 +2750,12 @@ fn cluster_nodes(
     now: i64,
 ) {
     use crate::map::Focused;
-    let t = app.theme;
-    let query = app.query.clone();
-    let found = app.map.hits(&query).map(|h| h.matched.clone());
+    let Some(at) = s.at.as_ref() else {
+        return;
+    };
     let heading = app.heading();
-    struct Node {
-        id: u32,
-        at: usize,
-        n: usize,
-        unread: usize,
-        new: usize,
-        hits: Option<usize>,
-        // Across in columns, down in half rows.
-        centre: [f32; 2],
-        r: f32,
-        // Where it was put before, to stay.
-        pinned: bool,
-    }
-    let (x0, x1) = (f32::from(canvas.x), f32::from(canvas.right()));
-    let (y0, y1) = (2.0 * f32::from(canvas.y), 2.0 * f32::from(canvas.bottom()));
-    let mut nodes: Vec<Node> = Vec::new();
-    for (at, g) in s.groups.iter().enumerate() {
+    let mut tiles = Vec::new();
+    for g in &s.groups {
         let members: Vec<usize> = g
             .members
             .iter()
@@ -2742,269 +2765,372 @@ fn cluster_nodes(
         if members.is_empty() {
             continue;
         }
-        let core: Vec<(i32, i32)> = g
+        // Where it lies: the middle of its largest part, a label's mail
+        // lying, it may be, in several.
+        let core: Vec<usize> = g
             .core
             .iter()
-            .chain(&members)
-            .filter_map(|i| app.map.places.get(i).copied())
-            .take(g.core.len().max(1))
+            .copied()
+            .filter(|i| shown.binary_search(i).is_ok())
             .collect();
-        let k = core.len().max(1) as f32;
-        let x = core.iter().map(|c| c.0 as f32).sum::<f32>() / k + 0.5;
-        let y = core.iter().map(|c| c.1 as f32).sum::<f32>() / k + 0.5;
-        let pin = app.map.pins.get(&(s.lens, g.id));
-        let centre = match pin {
-            Some(p) => [x0 + p[0] * (x1 - x0), y0 + p[1] * (y1 - y0)],
-            None => [x, 2.0 * y],
-        };
-        nodes.push(Node {
+        let middle = if core.is_empty() { &members } else { &core };
+        tiles.push(Tile {
             id: g.id,
-            at,
-            n: members.len(),
-            unread: members.iter().filter(|&&i| !s.dots[i].flags.seen).count(),
-            new: members
-                .iter()
-                .filter(|&&i| app.map.is_new(&s.dots[i], now))
-                .count(),
-            hits: found
+            target: Target::Anchor(g.id),
+            chip: if g.label.is_some() { "◆ " } else { "◇ " },
+            name: g.name(),
+            centre: middle_of(at, middle),
+            hue: g.hue,
+            colour: heading.as_ref().map(|h| match h.heat(g.id) {
+                heat if heat > 0.0 => heated(&app.theme, heat),
+                _ => app.theme.rule,
+            }),
+            focus: matches!(app.map.focused, Focused::All)
+                || app.map.focused == Focused::Cluster(g.id),
+            going: heading
                 .as_ref()
-                .map(|m| members.iter().filter(|&&i| m[i]).count()),
-            centre,
-            r: 0.0,
-            pinned: pin.is_some(),
+                .and_then(|h| h.to.get(&g.id))
+                .map_or(0, crate::app::Going::all),
+            bound: heading
+                .as_ref()
+                .is_some_and(|h| h.picked == Some(crate::app::Bound::To(g.id))),
+            unfiled: app.map.unfiled_only.then_some(if g.label.is_some() {
+                "would go here"
+            } else {
+                "no label yet"
+            }),
+            members,
         });
     }
-    // Each one's area as the root of how many it holds, so that one cluster
-    // of much does not leave the rest specks; all of them a sixth of the
-    // map, the biggest no more than a fifth of its height across, and none
-    // smaller than a cell.
-    let most = nodes.iter().map(|n| n.n).max().unwrap_or(1) as f32;
-    let share = |n: &Node| (n.n as f32 / most).powf(0.25);
-    let areas: f32 = nodes.iter().map(|n| share(n).powi(2)).sum();
-    let room = (x1 - x0) * (y1 - y0) / 6.0;
-    let biggest = (room / (std::f32::consts::PI * areas.max(1.0)))
-        .sqrt()
-        .min(f32::from(canvas.height) / 5.0)
-        .min(f32::from(canvas.width) / 8.0)
-        .max(1.0);
-    for n in &mut nodes {
-        n.r = (biggest * share(n)).max(1.0);
-    }
-    // Those that overlap pushed apart, the smaller the more and those put
-    // before not unless both were, a column clear between them, and kept on
-    // the map.
-    for _ in 0..40 {
-        let mut moved = false;
-        for a in 0..nodes.len() {
-            for b in a + 1..nodes.len() {
-                let (pa, pb) = (nodes[a].centre, nodes[b].centre);
-                let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
-                let d = (dx * dx + dy * dy).sqrt();
-                let need = nodes[a].r + nodes[b].r + 1.0;
-                if d >= need {
-                    continue;
-                }
-                moved = true;
-                let (ux, uy) = if d > 1e-3 {
-                    (dx / d, dy / d)
-                } else {
-                    (1.0, 0.0)
-                };
-                let (ra, rb) = (nodes[a].r, nodes[b].r);
-                let (wa, wb) = match (nodes[a].pinned, nodes[b].pinned) {
-                    (true, false) => (0.0, 1.0),
-                    (false, true) => (1.0, 0.0),
-                    _ => (rb / (ra + rb), ra / (ra + rb)),
-                };
-                let gap = need - d;
-                nodes[a].centre = [pa[0] - ux * gap * wa, pa[1] - uy * gap * wa];
-                nodes[b].centre = [pb[0] + ux * gap * wb, pb[1] + uy * gap * wb];
-            }
-        }
-        for n in &mut nodes {
-            let keep = |v: f32, lo: f32, hi: f32| {
-                if hi - lo > 2.0 * n.r {
-                    v.clamp(lo + n.r, hi - n.r)
-                } else {
-                    (lo + hi) / 2.0
-                }
-            };
-            n.centre = [keep(n.centre[0], x0, x1), keep(n.centre[1], y0, y1)];
-        }
-        if !moved {
-            break;
-        }
-    }
     let picked = app.map.picked().and_then(|i| s.group_of(i)).map(|g| g.id);
-    for n in &nodes {
-        let share = [
-            (n.centre[0] - x0) / (x1 - x0).max(1.0),
-            (n.centre[1] - y0) / (y1 - y0).max(1.0),
-        ];
-        app.map.pins.insert((s.lens, n.id), share);
-    }
-    app.map.nodes = nodes
-        .iter()
-        .map(|n| (n.id, [n.centre[0], n.centre[1] / 2.0], n.r))
-        .collect();
-    // The biggest first, so that the smaller lie on them and are seen.
-    nodes.sort_by(|a, b| b.n.cmp(&a.n).then(a.id.cmp(&b.id)));
-    let lit = |n: &Node| {
-        let in_focus =
-            matches!(app.map.focused, Focused::All) || app.map.focused == Focused::Cluster(n.id);
-        in_focus && n.hits != Some(0) && !(app.map.new_only && n.new == 0)
+    mosaic(f, app, s, canvas, &tiles, picked, None, now);
+}
+
+/// A cluster gone into, its parts the branch `above` is split in, as a
+/// mosaic, the one the way `picked` goes to picked.
+#[allow(clippy::too_many_arguments)]
+fn parts_mosaic(
+    f: &mut Frame,
+    app: &mut App,
+    s: &crate::map::Snapshot,
+    root: &crate::forest::Branch,
+    picked: &[usize],
+    above: &[usize],
+    canvas: Rect,
+    now: i64,
+) {
+    let (Some(at), Some(parent)) = (s.at.as_ref(), root.at(above)) else {
+        return;
     };
-    let buf = f.buffer_mut();
-    let mut runs: Vec<(Rect, u32)> = Vec::new();
-    let mut filled: std::collections::BTreeSet<(u16, u16)> = std::collections::BTreeSet::new();
-    for n in &nodes {
-        let g = &s.groups[n.at];
-        let colour = if !lit(n) {
-            t.rule
-        } else if let Some(h) = &heading {
-            // Each as much of the Inbox looked through goes to it.
-            match h.heat(g.id) {
-                heat if heat > 0.0 => heated(&t, heat),
-                _ => t.rule,
-            }
-        } else if n.unread == 0 {
-            crate::theme::mix(t.hue(g.hue), t.page, 0.5)
-        } else {
-            t.hue(g.hue)
-        };
-        let inside = |x: f32, y: f32| {
-            let (dx, dy) = (x - n.centre[0], y - n.centre[1]);
-            dx * dx + dy * dy <= n.r * n.r
-        };
-        let top = ((n.centre[1] - n.r) / 2.0).floor().max(f32::from(canvas.y)) as u16;
-        let bottom = ((n.centre[1] + n.r) / 2.0)
-            .ceil()
-            .min(f32::from(canvas.bottom())) as u16;
-        let left = (n.centre[0] - n.r).floor().max(x0) as u16;
-        let right = (n.centre[0] + n.r).ceil().min(x1) as u16;
-        for y in top..bottom {
-            let mut run: Option<(u16, u16)> = None;
-            for x in left..right {
-                let cx = f32::from(x) + 0.5;
-                let upper = inside(cx, 2.0 * f32::from(y) + 0.5);
-                let lower = inside(cx, 2.0 * f32::from(y) + 1.5);
-                let glyph = match (upper, lower) {
-                    (true, true) => '█',
-                    (true, false) => '▀',
-                    (false, true) => '▄',
-                    (false, false) => continue,
-                };
-                buf[(x, y)]
-                    .set_char(glyph)
-                    .set_style(Style::new().fg(colour).bg(t.page));
-                run = Some((run.map_or(x, |r| r.0), x));
-                filled.insert((x, y));
-            }
-            if let Some((a, b)) = run {
-                runs.push((Rect::new(a, y, b - a + 1, 1), n.id));
-            }
+    let mut tiles = Vec::new();
+    for (k, b) in parent.branches.iter().enumerate() {
+        let row = app.map.branches.len();
+        app.map.branches.push([above, &[k]].concat());
+        // Its hue, the mean of its messages' by angle.
+        let (sin, cos) = b.messages.iter().fold((0.0, 0.0), |(x, y), &i| {
+            let h = s.hues[i].to_radians();
+            (x + h.sin(), y + h.cos())
+        });
+        tiles.push(Tile {
+            id: k as u32,
+            target: Target::Branch(row),
+            chip: "",
+            name: b.name.clone(),
+            members: b.messages.clone(),
+            centre: middle_of(at, &b.messages),
+            hue: sin.atan2(cos).to_degrees().rem_euclid(360.0),
+            colour: None,
+            focus: true,
+            going: 0,
+            bound: false,
+            unfiled: None,
+        });
+    }
+    let id = app.map.tree.as_ref().map_or(0, |t| t.id);
+    let picked = picked.last().map(|&k| k as u32);
+    mosaic(
+        f,
+        app,
+        s,
+        canvas,
+        &tiles,
+        picked,
+        Some((id, above.to_vec())),
+        now,
+    );
+}
+
+/// The middle of the messages `members` as laid out at `at`.
+fn middle_of(at: &[crate::model::Point], members: &[usize]) -> [f32; 2] {
+    let k = members.len().max(1) as f32;
+    members.iter().fold([0.0, 0.0], |m, &i| {
+        [m[0] + at[i][0] / k, m[1] + at[i][1] / k]
+    })
+}
+
+/// `tiles` as a mosaic, as paperstack shows its themes: each a block,
+/// boxed, as big as how many messages it holds and beside those it lies
+/// by on the map; each message a half of a cell of its block, bright where
+/// it is unread, or found; on each, its name, how many it holds and what
+/// is new in it. `picked` is the block picked; `level`, the cluster and
+/// the way to the parts shown, if they are a cluster's.
+#[allow(clippy::too_many_arguments)]
+fn mosaic(
+    f: &mut Frame,
+    app: &mut App,
+    s: &crate::map::Snapshot,
+    canvas: Rect,
+    tiles: &[Tile],
+    picked: Option<u32>,
+    level: Option<(u32, Vec<usize>)>,
+    now: i64,
+) {
+    use crate::mosaic::Mosaic;
+    use crate::theme::mix;
+    let t = app.theme;
+    if tiles.is_empty() || canvas.width == 0 || canvas.height == 0 {
+        return;
+    }
+    let query = app.query.clone();
+    let found = app.map.hits(&query).map(|h| h.matched.clone());
+    let heading = app.heading();
+    // What each holds that is unread, new, and found.
+    let count = |m: &[usize], keep: &dyn Fn(usize) -> bool| m.iter().filter(|&&i| keep(i)).count();
+    let unread: Vec<usize> = tiles
+        .iter()
+        .map(|b| count(&b.members, &|i| !s.dots[i].flags.seen))
+        .collect();
+    let new: Vec<usize> = tiles
+        .iter()
+        .map(|b| count(&b.members, &|i| app.map.is_new(&s.dots[i], now)))
+        .collect();
+    let hits: Vec<Option<usize>> = tiles
+        .iter()
+        .map(|b| found.as_ref().map(|m| count(&b.members, &|i| m[i])))
+        .collect();
+    let lit: Vec<bool> = (0..tiles.len())
+        .map(|k| tiles[k].focus && hits[k] != Some(0) && !(app.map.new_only && new[k] == 0))
+        .collect();
+    // Tiled again only when what is shown, or the canvas, has changed: a
+    // message to a half of a cell, as square as a terminal's cells halved.
+    let items: Vec<(usize, usize, [f32; 2])> = match s.at.as_ref() {
+        Some(at) => tiles
+            .iter()
+            .enumerate()
+            .flat_map(|(k, b)| b.members.iter().map(move |&i| (i, k, at[i])))
+            .collect(),
+        None => return,
+    };
+    let tiled = (
+        s as *const crate::map::Snapshot as usize,
+        items.iter().map(|it| it.0).collect::<Vec<_>>(),
+        canvas.width,
+        canvas.height,
+        level,
+    );
+    let mosaic = match &app.map.mosaic {
+        Some((was, m)) if *was == tiled => m.clone(),
+        _ => {
+            let aspect = f32::from(canvas.width) / (2.0 * f32::from(canvas.height));
+            let centres: Vec<[f32; 2]> = tiles.iter().map(|b| b.centre).collect();
+            let m = Arc::new(Mosaic::new(&items, &centres, aspect));
+            app.map.mosaic = Some((tiled, m.clone()));
+            m
+        }
+    };
+    // Each half cell's block, a row of them to each half row.
+    let (w, h) = (usize::from(canvas.width), 2 * usize::from(canvas.height));
+    let (cols, rows) = (mosaic.cols as f32, mosaic.rows as f32);
+    let block_of: Vec<Option<usize>> = (0..h)
+        .flat_map(|half| (0..w).map(move |col| (col, half)))
+        .map(|(col, half)| {
+            mosaic.at([
+                (col as f32 + 0.5) / w as f32 * cols,
+                (half as f32 + 0.5) / h as f32 * rows,
+            ])
+        })
+        .collect();
+    let block_at = |col: i64, half: i64| {
+        ((0..w as i64).contains(&col) && (0..h as i64).contains(&half))
+            .then(|| block_of[half as usize * w + col as usize])
+            .flatten()
+    };
+    // Each message's own tile, read or not: where a cell of the grid
+    // spans a few of the screen's, with a gutter at its right and foot;
+    // where it spans less, each message unread, or, searching, found, at
+    // least the half cell its middle is in.
+    let lit_up = |i: usize| found.as_ref().map_or(!s.dots[i].flags.seen, |m| m[i]);
+    let mut marked = vec![false; w * h];
+    for &(i, p) in &mosaic.cells {
+        let col = ((p[0] / cols * w as f32) as usize).min(w - 1);
+        let half = ((p[1] / rows * h as f32) as usize).min(h - 1);
+        if lit_up(i) {
+            marked[half * w + col] = true;
         }
     }
-    for (r, id) in runs {
-        app.targets.push((r, Target::Anchor(id)));
-    }
-    // Each one's name and how many, beside it where there is room: to its
-    // right, else its left, else above or below it, else on it.
-    let mut taken: Vec<(u16, u16, u16)> = Vec::new();
-    for n in &nodes {
-        let g = &s.groups[n.at];
-        let mut said = format!(" {} {}", clip(&g.name(), 22), n.n);
-        let going = heading
-            .as_ref()
-            .and_then(|h| h.to.get(&g.id))
-            .map_or(0, crate::app::Going::all);
-        match n.hits {
-            _ if going > 0 => said.push_str(&format!(" ← {going} of the Inbox")),
-            Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
-            // Only what is not yet filed: where it would go, if anywhere.
-            _ if app.map.unfiled_only && g.label.is_some() => said.push_str(" · would go here"),
-            _ if app.map.unfiled_only => said.push_str(" · no label yet"),
-            _ if n.new > 0 => said.push_str(&format!(" · {} new", n.new)),
-            _ if n.unread > 0 => said.push_str(&format!(" · {} unread", n.unread)),
-            _ => {}
-        }
-        let chip = if g.label.is_some() { " ◆" } else { " ◇" };
-        let width = (chip.width() + said.width()) as u16;
-        let row = (n.centre[1] / 2.0).floor() as i32;
-        let (top, bottom) = (
-            ((n.centre[1] - n.r) / 2.0).floor() as i32 - 1,
-            ((n.centre[1] + n.r) / 2.0).ceil() as i32,
-        );
-        let right = (n.centre[0] + n.r).ceil() as i32 + 1;
-        let left = (n.centre[0] - n.r).floor() as i32 - i32::from(width) - 1;
-        let middle = n.centre[0] as i32 - i32::from(width / 2);
-        let within = |x: i32| {
-            x.clamp(
-                i32::from(canvas.x),
-                i32::from(canvas.right().saturating_sub(width)),
-            )
-        };
-        // Clear of the other names, and of every node but on it at last.
-        let clear = |x: u16, y: u16, on_it: bool| {
-            taken
-                .iter()
-                .all(|&(tx, ty, tw)| ty != y || x + width <= tx || tx + tw <= x)
-                && (on_it || (x..x + width).all(|x| !filled.contains(&(x, y))))
-        };
-        let beside = [
-            (right, row),
-            (left, row),
-            (right, row - 1),
-            (left, row - 1),
-            (right, row + 1),
-            (left, row + 1),
-            (within(middle), top),
-            (within(middle), bottom),
+    let grid = |col: i64, half: i64| {
+        [
+            ((col as f32 + 0.5) / w as f32 * cols).floor(),
+            ((half as f32 + 0.5) / h as f32 * rows).floor(),
         ]
-        .map(|at| (at, false));
-        let spot = beside
-            .into_iter()
-            .chain([((within(middle), row), true)])
-            .filter(|&((x, y), _)| {
-                x >= i32::from(canvas.x)
-                    && x + i32::from(width) <= i32::from(canvas.right())
-                    && y >= i32::from(canvas.y)
-                    && y < i32::from(canvas.bottom())
-            })
-            .map(|((x, y), on_it)| (x as u16, y as u16, on_it))
-            .find(|&(x, y, on_it)| clear(x, y, on_it))
-            .map(|(x, y, _)| (x, y));
-        let Some((x, y)) = spot else {
+    };
+    let gutters = w as f32 / cols >= 3.0 && h as f32 / rows >= 3.0;
+    // Of a half cell: none, a message read, or one lit up.
+    let tone = |col: i64, half: i64| -> u8 {
+        if marked[half as usize * w + col as usize] {
+            return 2;
+        }
+        let at = grid(col, half);
+        let Some(i) = mosaic.held([at[0] + 0.5, at[1] + 0.5]) else {
+            return 0;
+        };
+        if gutters && (grid(col + 1, half)[0] != at[0] || grid(col, half + 1)[1] != at[1]) {
+            return 0;
+        }
+        if lit_up(i) { 2 } else { 1 }
+    };
+    // Each block's colour: its own, or its hue; grey where it is not lit.
+    // Its cells in a faint pastel of it, less faint picked, its edge a box
+    // in a paler one, and what is unread, or found, in the colour itself.
+    let paper = t.ground();
+    let strong: Vec<_> = tiles
+        .iter()
+        .zip(&lit)
+        .map(|(b, &lit)| match b.colour {
+            _ if !lit => t.rule,
+            Some(c) => c,
+            None => t.hue(b.hue),
+        })
+        .collect();
+    let fills: Vec<_> = tiles
+        .iter()
+        .zip(&strong)
+        .map(|(b, &c)| mix(c, paper, if picked == Some(b.id) { 0.6 } else { 0.82 }))
+        .collect();
+    let reads: Vec<_> = tiles
+        .iter()
+        .zip(&strong)
+        .map(|(b, &c)| mix(c, paper, if picked == Some(b.id) { 0.45 } else { 0.7 }))
+        .collect();
+    let edges: Vec<_> = strong.iter().map(|&c| mix(c, paper, 0.4)).collect();
+    let colour = |col: i64, half: i64| {
+        let Some(b) = block_at(col, half) else {
+            return t.page;
+        };
+        let inner = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            .iter()
+            .all(|(dx, dy)| block_at(col + dx, half + dy) == Some(b));
+        match tone(col, half) {
+            _ if !inner => edges[b],
+            2 => strong[b],
+            1 => reads[b],
+            _ => fills[b],
+        }
+    };
+    // Each block's bounds on the screen, and the runs of it on each row,
+    // to be clicked.
+    let mut bounds: Vec<Option<[u16; 4]>> = vec![None; tiles.len()];
+    let mut runs: Vec<(Rect, usize)> = Vec::new();
+    let buf = f.buffer_mut();
+    for row in 0..canvas.height {
+        let mut run: Option<(u16, u16, usize)> = None;
+        for col in 0..canvas.width {
+            let (c, half) = (i64::from(col), 2 * i64::from(row));
+            let (top, low) = (colour(c, half), colour(c, half + 1));
+            let (x, y) = (canvas.x + col, canvas.y + row);
+            let cell = &mut buf[(x, y)];
+            // A half beyond the blocks as the page, never in the
+            // terminal's own colour for text, as a half block would be.
+            match (top == t.page, low == t.page) {
+                (true, true) => cell.set_symbol(" "),
+                (true, false) => cell.set_symbol("▄").set_fg(low),
+                _ => cell.set_symbol("▀").set_fg(top),
+            };
+            cell.set_bg(if top == t.page { t.page } else { low });
+            let Some(b) = block_at(c, half + 1).or(block_at(c, half)) else {
+                continue;
+            };
+            let r = bounds[b].get_or_insert([x, x, y, y]);
+            *r = [r[0].min(x), r[1].max(x), r[2].min(y), r[3].max(y)];
+            match &mut run {
+                Some((_, end, rb)) if *rb == b && *end + 1 == x => *end = x,
+                _ => {
+                    if let Some((a, e, rb)) = run.take() {
+                        runs.push((Rect::new(a, y, e - a + 1, 1), rb));
+                    }
+                    run = Some((x, x, b));
+                }
+            }
+        }
+        if let Some((a, e, rb)) = run {
+            runs.push((Rect::new(a, canvas.y + row, e - a + 1, 1), rb));
+        }
+    }
+    for (r, b) in runs {
+        app.targets.push((r, tiles[b].target));
+    }
+    app.map.blocks = tiles
+        .iter()
+        .zip(&bounds)
+        .filter_map(|(b, r)| {
+            let [x0, x1, y0, y1] = (*r)?;
+            let middle = |a: u16, z: u16| (f32::from(a) + f32::from(z) + 1.0) / 2.0;
+            Some((
+                b.id,
+                [middle(x0, x1), middle(y0, y1)],
+                f32::from(x1 - x0 + 1) / 2.0,
+            ))
+        })
+        .collect();
+    // On each block, inside its box, its name, then how many it holds and
+    // what is new in it; on one line where there is not room for two.
+    for (k, (b, r)) in tiles.iter().zip(&bounds).enumerate() {
+        let Some([x0, x1, y0, y1]) = *r else {
             continue;
         };
-        taken.push((x, y, width));
-        let bound_here = heading
-            .as_ref()
-            .is_some_and(|h| h.picked == Some(crate::app::Bound::To(n.id)));
-        let style = if bound_here {
+        let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+        let width = if bw > 2 { bw - 2 } else { bw };
+        if width < 3 {
+            continue;
+        }
+        let (x, y) = (
+            if bw > 2 { x0 + 1 } else { x0 },
+            if bh > 2 { y0 + 1 } else { y0 },
+        );
+        let mut said = format!("{}", b.members.len());
+        match hits[k] {
+            _ if b.going > 0 => said.push_str(&format!(" ← {} of the Inbox", b.going)),
+            Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
+            _ if b.unfiled.is_some() => said.push_str(&format!(" · {}", b.unfiled.unwrap_or(""))),
+            _ if new[k] > 0 => said.push_str(&format!(" · {} new", new[k])),
+            _ if unread[k] > 0 => said.push_str(&format!(" · {} unread", unread[k])),
+            _ => {}
+        }
+        let lines = if y + 1 < y1 {
+            vec![format!(" {}{} ", b.chip, b.name), format!(" {said} ")]
+        } else {
+            vec![format!(" {}{} {said} ", b.chip, b.name)]
+        };
+        let style = if b.bound {
             // Where the one picked goes.
             Style::new().fg(t.ground()).bg(t.flag).bold()
-        } else if picked == Some(n.id) {
+        } else if picked == Some(b.id) {
             Style::new().fg(t.title).bg(t.focus).bold()
-        } else if heading.is_some() && going > 0 {
-            Style::new().fg(t.flag).bg(t.page).bold()
-        } else if !lit(n) {
-            Style::new().fg(t.dim).bg(t.page)
-        } else if n.unread > 0 {
-            Style::new().fg(t.title).bg(t.page).bold()
+        } else if heading.is_some() && b.going > 0 {
+            Style::new().fg(t.flag).bg(fills[k]).bold()
+        } else if !lit[k] {
+            Style::new().fg(t.dim).bg(fills[k])
+        } else if unread[k] > 0 {
+            Style::new().fg(t.title).bg(fills[k]).bold()
         } else {
-            Style::new().fg(t.soft).bg(t.page)
+            Style::new().fg(t.soft).bg(fills[k])
         };
-        let chip_style = Style::new().fg(t.hue(g.hue)).bg(style.bg.unwrap_or(t.page));
-        let spot = Rect::new(x, y, width.min(canvas.right().saturating_sub(x)), 1);
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(chip, chip_style),
-                Span::styled(said, style),
-            ])),
-            spot,
-        );
-        app.targets.push((spot, Target::Anchor(n.id)));
+        for (row, line) in (y..).zip(&lines) {
+            let text = clip(line, usize::from(width));
+            let spot = Rect::new(x, row, text.width() as u16, 1);
+            f.render_widget(Paragraph::new(Span::styled(text, style)), spot);
+            app.targets.push((spot, b.target));
+        }
     }
 }
 
