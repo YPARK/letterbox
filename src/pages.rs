@@ -49,9 +49,30 @@ pub fn typeset(path: &Path, width: u32) -> anyhow::Result<Vec<RgbaImage>> {
     ohp::page::pages(path, width)
 }
 
-/// What the terminal draws images with, asked of it: none where it draws
-/// none, or only coarse blocks.
+/// Whether the terminal, as `env` says, is one that draws images: kitty,
+/// WezTerm, Ghostty or iTerm2. Only such a one is asked how: a terminal
+/// that does not answer keeps the asking reading the keys typed after it.
+pub fn draws_images(env: impl Fn(&str) -> Option<String>) -> bool {
+    let has = |k: &str| env(k).is_some_and(|v| !v.is_empty());
+    let term = env("TERM").unwrap_or_default().to_lowercase();
+    let program = env("TERM_PROGRAM").unwrap_or_default().to_lowercase();
+    has("KITTY_WINDOW_ID")
+        || has("WEZTERM_EXECUTABLE")
+        || has("GHOSTTY_RESOURCES_DIR")
+        || ["kitty", "ghostty", "wezterm"]
+            .iter()
+            .any(|t| term.contains(t))
+        || ["wezterm", "ghostty", "iterm.app"]
+            .iter()
+            .any(|p| program == *p)
+}
+
+/// What the terminal draws images with, asked of it, if it says it draws
+/// them: none where it does not, or draws only coarse blocks.
 pub fn ask_terminal() -> Option<Picker> {
+    if !draws_images(|k| std::env::var(k).ok()) {
+        return None;
+    }
     let picker = Picker::from_query_stdio().ok()?;
     (picker.protocol_type() != ratatui_image::picker::ProtocolType::Halfblocks).then_some(picker)
 }

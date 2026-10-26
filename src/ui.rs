@@ -3181,7 +3181,7 @@ fn paged(f: &mut Frame, app: &mut App, area: Rect) -> bool {
     let uid = app.message().map(|m| m.uid);
     let (Some(paged), Some(picker)) = (
         app.paged.as_mut().filter(|p| Some(p.uid) == uid),
-        app.picker.as_ref(),
+        app.picker.as_ref().and_then(Option::as_ref),
     ) else {
         return false;
     };

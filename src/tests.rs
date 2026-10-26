@@ -9208,13 +9208,15 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
     app.list.select(Some(noether));
     press(&mut app, &["<enter>"]);
     app.settle(Duration::from_secs(5));
+    // Not asked of the terminal as letterbox starts: only once V is.
+    assert!(app.picker.is_none(), "not asked yet");
     // A terminal that draws no images: said, and O offered.
-    app.picker = None;
+    app.picker = Some(None);
     press(&mut app, &["V"]);
     assert!(app.paged.is_none());
     assert!(app.status.contains("O"), "{}", app.status);
     // One that does: typeset, and shown a page at a time.
-    app.picker = Some(ratatui_image::picker::Picker::halfblocks());
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
     press(&mut app, &["V"]);
     app.settle(Duration::from_secs(60));
     let paged = app.paged.as_ref().expect("its pages");
@@ -9241,4 +9243,36 @@ fn pages_turn_as_far_as_there_are() {
     assert_eq!(paged.at, 0);
     let picker = ratatui_image::picker::Picker::halfblocks();
     assert!(paged.drawn(&picker).is_some());
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn only_a_terminal_that_says_it_draws_images_is_asked() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |k: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    };
+    for says in [
+        env(&[("KITTY_WINDOW_ID", "1")]),
+        env(&[("TERM", "xterm-kitty")]),
+        env(&[("TERM_PROGRAM", "WezTerm")]),
+        env(&[("TERM_PROGRAM", "ghostty")]),
+        env(&[("TERM_PROGRAM", "iTerm.app")]),
+    ] {
+        assert!(crate::pages::draws_images(says));
+    }
+    // Terminal, and one that says nothing: never asked, never kept waiting.
+    assert!(!crate::pages::draws_images(env(&[(
+        "TERM_PROGRAM",
+        "Apple_Terminal"
+    )])));
+    assert!(!crate::pages::draws_images(env(&[(
+        "TERM",
+        "xterm-256color"
+    )])));
+    assert!(!crate::pages::draws_images(env(&[])));
 }

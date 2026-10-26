@@ -928,21 +928,19 @@ pub struct App {
     pub filter_file: Option<PathBuf>,
     /// paperstack, once asked: run as it is first wanted, and kept.
     pub library: Arc<Mutex<Option<Box<dyn crate::paperstack::Library>>>>,
-    /// What the terminal draws images with, if it draws them; and the
-    /// message read as its pages, shown in place of its text.
+    /// What the terminal draws images with, once asked, as the message is
+    /// first shown as its pages: none if it draws none. Asked then, not as
+    /// letterbox starts, as a terminal that draws none keeps it waiting for
+    /// an answer it never gives. And the message read as its pages, shown
+    /// in place of its text.
     #[cfg(feature = "pages")]
-    pub picker: Option<ratatui_image::picker::Picker>,
+    pub picker: Option<Option<ratatui_image::picker::Picker>>,
     #[cfg(feature = "pages")]
     pub paged: Option<crate::pages::Paged>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
     let mut terminal = take();
-    // Asked once the screen is the alternate one, before any key is read.
-    #[cfg(feature = "pages")]
-    {
-        app.picker = crate::pages::ask_terminal();
-    }
     let result = (|| -> anyhow::Result<()> {
         let mut stale = true;
         while !app.quit {
@@ -4503,7 +4501,9 @@ impl App {
             self.status = "nothing to show: ⏎ reads the message picked".to_string();
             return;
         };
-        let Some(picker) = &self.picker else {
+        // Asked as it is first wanted, between keys, none being read.
+        let picker = self.picker.get_or_insert_with(crate::pages::ask_terminal);
+        let Some(picker) = picker else {
             self.status =
                 "this terminal draws no images: O hands the message to ohp instead".to_string();
             return;
