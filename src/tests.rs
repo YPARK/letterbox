@@ -6429,6 +6429,63 @@ fn letterbox_opens_as_it_was_left_the_list_or_the_map_and_its_clusters() {
     assert!(demo().look_file.is_none());
 }
 
+#[test]
+fn the_message_read_opens_as_wide_as_it_was_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let look = dir.path().join("look");
+    let mut app = demo();
+    app.look_file = Some(look.clone());
+    let _ = app::screen(&mut app, 140, 40);
+    // Made wider by a key: written down at once, not only on quitting.
+    press(&mut app, &[">"]);
+    let wide = app.reader_width.unwrap();
+    let mut again = demo();
+    again.look_file = Some(look.clone());
+    again.recall_look();
+    assert_eq!(again.reader_width, Some(wide));
+    // Dragged: written down as the drag ends.
+    let _ = app::screen(&mut app, 140, 40);
+    let x = app.panes_right - wide;
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, 10));
+    app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), x - 6, 10));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x - 6, 10));
+    let dragged = app.reader_width.unwrap();
+    assert_ne!(dragged, wide);
+    let mut third = demo();
+    third.look_file = Some(look.clone());
+    third.recall_look();
+    assert_eq!(third.reader_width, Some(dragged));
+    // A file written before, of how it was looked at alone, still read.
+    std::fs::write(&look, "list\n").unwrap();
+    let mut old = demo();
+    old.look_file = Some(look);
+    old.recall_look();
+    assert_eq!(old.reader_width, None);
+}
+
+#[test]
+fn c_g_goes_back_as_esc_does_on_the_map_and_its_mosaic() {
+    let mut app = demo_map();
+    press(&mut app, &["Z", "<enter>"]);
+    assert!(app.map.tree.is_some());
+    press(&mut app, &["<c-g>"]);
+    assert!(
+        app.map.tree.is_none() && app.map.clusters,
+        "out to the clusters"
+    );
+    // A search let go.
+    press(&mut app, &["/", "g", "r", "<c-g>"]);
+    assert!(!app.searching);
+    assert!(app.query.is_empty());
+    // A dialog closed: the help, and what the map shows.
+    for open in ["?", ","] {
+        press(&mut app, &[open]);
+        assert!(app.dialog.is_open(), "{open}");
+        press(&mut app, &["<c-g>"]);
+        assert!(!app.dialog.is_open(), "{open}");
+    }
+}
+
 /// The labels of the map's message with `subject`, and whether it is in
 /// the Inbox.
 fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {
@@ -7859,7 +7916,13 @@ fn the_inbox_looked_through_takes_emacs_keys() {
     assert!(app.compose.is_none());
     press(&mut app, &["<c-b>"]);
     assert_eq!(app.chosen(rows[0]), None);
-    // C-g, as esc: back to the map, all of it kept.
+    // C-g, as esc: reading one, back to the rest; then back to the map,
+    // all of it kept.
+    press(&mut app, &["<enter>"]);
+    assert!(app.review.as_ref().unwrap().reading);
+    press(&mut app, &["<c-g>"]);
+    assert!(!app.review.as_ref().unwrap().reading);
+    assert_eq!(app.focus, app::Focus::Reader);
     press(&mut app, &["<c-g>"]);
     assert_eq!(app.focus, app::Focus::List);
     assert!(app.review.is_some());

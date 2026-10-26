@@ -2710,8 +2710,11 @@ impl App {
             return self.menu_key(key);
         }
         if self.searching {
+            // esc, or C-g as Emacs has it, lets it go.
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let off = key.code == KeyCode::Esc || ctrl && key.code == KeyCode::Char('g');
             match key.code {
-                KeyCode::Esc => {
+                _ if off => {
                     self.query.clear();
                     self.found = None;
                     self.map.hits = None;
@@ -2752,7 +2755,8 @@ impl App {
     /// What one of Emacs's keys does in the Inbox looked through, with the
     /// focus on it, as in the labels dropped down over it: `C-n` and `C-p`
     /// down and up, `C-f` and `C-b` round what may be done with one, `C-v`
-    /// and `M-v` a page, `M-<` and `M->` to either end, and `C-g` as esc.
+    /// and `M-v` a page, and `M-<` and `M->` to either end; `C-g` is esc
+    /// everywhere.
     fn review_emacs(&self, key: KeyEvent) -> Option<Act> {
         if self.review.is_none() || self.focus != Focus::Reader || self.map.mode != Mode::Map {
             return None;
@@ -2768,7 +2772,6 @@ impl App {
             KeyCode::Char('v') if meta => Act::PageUp,
             KeyCode::Char('<') if meta => Act::Top,
             KeyCode::Char('>') if meta => Act::End,
-            KeyCode::Char('g') if ctrl => Act::Back,
             _ => return None,
         })
     }
@@ -2917,6 +2920,7 @@ impl App {
             Act::Wider | Act::Narrower if self.read_width > 0 => {
                 let by: i16 = if act == Act::Wider { 4 } else { -4 };
                 self.reader_width = Some(self.read_width.saturating_add_signed(by));
+                self.remember_look();
             }
             Act::Wider | Act::Narrower => {}
             Act::MapView => self.show_map(),
@@ -2941,6 +2945,13 @@ impl App {
 
     /// Take a key in the dialog open.
     fn dialog_key(&mut self, key: KeyEvent) {
+        // C-g, as Emacs has it, is esc to every dialog.
+        let key = if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g')
+        {
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        } else {
+            key
+        };
         match &mut self.dialog {
             Dialog::Closed => {}
             Dialog::Help(_) => match keymap::act(key) {
@@ -3318,6 +3329,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {
                 self.resizing = false;
+                self.remember_look();
                 return;
             }
             MouseEventKind::Drag(MouseButton::Left) => return self.map_drag(m.column, m.row),
@@ -4524,8 +4536,9 @@ impl App {
     }
 
     /// Open as the mail was last looked at: the map, from as far as its
-    /// clusters if they were shown, else the list. Never looked at, the
-    /// list, and the map, when it is, from its clusters.
+    /// clusters if they were shown, else the list, and the message read as
+    /// wide as it was made. Never looked at, the list, and the map, when it
+    /// is, from its clusters.
     pub fn recall_look(&mut self) {
         let Some(said) = self
             .look_file
@@ -4535,7 +4548,14 @@ impl App {
             self.map.clusters = true;
             return;
         };
-        let mut words = said.split_whitespace();
+        let mut lines = said.lines();
+        let look = lines.next().unwrap_or_default();
+        for line in lines {
+            if let Some(w) = line.strip_prefix("reader ") {
+                self.reader_width = w.trim().parse().ok();
+            }
+        }
+        let mut words = look.split_whitespace();
         if words.next() != Some("map") || self.map_off.is_some() || self.map_later {
             return;
         }
@@ -4917,7 +4937,8 @@ impl App {
         }
     }
 
-    /// Write down how the mail is looked at, to open so again.
+    /// Write down how the mail is looked at, to open so again: the list or
+    /// the map, and how wide the message read was made, if it was.
     pub fn remember_look(&self) {
         let Some(path) = &self.look_file else {
             return;
@@ -4927,8 +4948,11 @@ impl App {
             Mode::Map => "map",
             Mode::List => "list",
         };
+        let wide = self
+            .reader_width
+            .map_or(String::new(), |w| format!("reader {w}\n"));
         // Only how it was left; nothing lost if it cannot be kept.
-        let _ = std::fs::write(path, format!("{look}\n"));
+        let _ = std::fs::write(path, format!("{look}\n{wide}"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked

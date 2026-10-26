@@ -144,11 +144,11 @@ letterbox search grant report --account Work
 | `h` / `l`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
 | `space` / `b` | a page down, or up, in the message |
-| `<` / `>` | make the message read wider, or narrower; or drag the line before it |
+| `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G` | go to the top, or the end |
 | `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
-| `esc` | back to the list; clear the search |
+| `esc` / `C-g` | back to the list; clear the search; close a dialog; out of a cluster gone into, a level. `C-g` as Emacs has it, wherever `esc` goes back |
 | `u` | mark read, or unread |
 | `s` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
@@ -291,8 +291,8 @@ the branch picked and `h` out of it, and `⏎` on a message reads it.
 `esc` goes out a level, and out of the parts back to the clusters; `[`
 `]` go to the next cluster. `z` from the clusters
 goes back to all of the map, its dots. The map opens at its clusters;
-after that, letterbox opens as you left it: the list or the map, and
-its clusters if they were shown. `/` searches it as you type: the messages
+after that, letterbox opens as you left it: the list or the map, its
+clusters if they were shown, and the message read as wide as you made it. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.

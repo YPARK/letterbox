@@ -327,7 +327,7 @@ pub const KEYS: &[Binding] = &[
         help: "archive it: out of the Inbox, to Archive; in the map, it or what is marked",
     },
     Binding {
-        keys: &[("esc", Back)],
+        keys: &[("esc", Back), ("C-g", Back)],
         name: "esc",
         hint: "esc",
         foot: &[
@@ -336,7 +336,7 @@ pub const KEYS: &[Binding] = &[
             (Attaching, "cancel"),
             (Viewing, "close"),
         ],
-        help: "back to the list; clear the search",
+        help: "back to the list; clear the search; out of a cluster gone into, a level. C-g too, as Emacs has it",
     },
     Binding {
         keys: &[("A", AddAccount)],
