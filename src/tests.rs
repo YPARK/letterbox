@@ -4051,6 +4051,16 @@ fn identity() -> age::x25519::Identity {
     age::x25519::Identity::generate()
 }
 
+/// The journals' files in `dir`: all of it but the lock held as one is
+/// written to.
+fn journal_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().is_some_and(|n| n != "lock"))
+        .collect()
+}
+
 #[test]
 fn the_journals_give_back_what_was_written() {
     let dir = tempfile::tempdir().unwrap();
@@ -4096,13 +4106,14 @@ fn the_journals_give_back_what_was_written() {
     assert_eq!(index.keep.layouts[&Lens::Both][&a.key], (1.5, -2.0));
     assert_eq!(index.keep.looked, 42);
     // Encrypted: nothing of the mail is in the files.
-    for entry in std::fs::read_dir(dir.path()).unwrap() {
-        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+    for path in journal_files(dir.path()) {
+        let bytes = std::fs::read(path).unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("Photo") && !text.contains("Grant"));
         assert!(text.starts_with("age-encryption.org/v1"));
     }
     // Another key reads nothing, and says so.
+    drop(index);
     let other = Index::open_with(dir.path(), &identity());
     assert!(other.records.is_empty());
     assert!(other.keep_fault().is_some());
@@ -4184,7 +4195,7 @@ fn a_journal_with_many_logs_is_written_again_as_one_base() {
             index.flush().unwrap();
         }
     }
-    let files = || std::fs::read_dir(dir.path()).unwrap().count();
+    let files = || journal_files(dir.path()).len();
     assert_eq!(files(), many);
     let index = Index::open_with(dir.path(), &id);
     assert_eq!(index.records.len(), many);
@@ -4249,7 +4260,7 @@ fn a_keep_that_cannot_be_read_is_not_written_over() {
     index.flush().unwrap();
     drop(index);
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(journal_files(dir.path()).len(), 1);
 }
 
 /// Where a test keeps the map's key: here, the system's store left alone.
@@ -9490,4 +9501,219 @@ fn only_a_terminal_that_says_it_draws_images_is_asked() {
         ("GHOSTTY_RESOURCES_DIR", "/x"),
         ("TERM", "screen-256color")
     ])));
+}
+
+// ---- as reviewed ----
+
+#[test]
+fn a_late_answer_of_paperstack_never_lands_on_another_list_of_papers() {
+    let mut app = reading_the_alert();
+    let shelf = Arc::new(Mutex::new(Shelf::default()));
+    *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
+    // paperstack slow: P asked, let go, and asked again.
+    let held = shelf.lock().unwrap();
+    press(&mut app, &["P", "<esc>", "P"]);
+    // As if another message's, of fewer papers, were listed now.
+    if let app::Dialog::Papers(p) = &mut app.dialog {
+        p.papers.truncate(1);
+        p.standing.truncate(1);
+    }
+    drop(held);
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 120, 40);
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("closed: {}", app.status);
+    };
+    assert_eq!(p.standing.len(), p.papers.len());
+    press(&mut app, &["<enter>"]);
+    let _ = app::screen(&mut app, 120, 40);
+}
+
+#[test]
+fn an_ampersand_before_a_letter_of_more_than_a_byte_is_read() {
+    assert_eq!(
+        crate::papers::decode("Smith & Müller — Nature &amp; more"),
+        "Smith & Müller — Nature & more"
+    );
+}
+
+#[test]
+fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    app.map.region = Some(crate::map::Region {
+        keys: vec![s.dots[0].key.clone()],
+        boxed: None,
+    });
+    app.map.moving = Some(vec![s.dots[1].key.clone()]);
+    press(&mut app, &["<m-l>"]);
+    assert!(app.map.moving.is_none());
+    assert!(app.map.region.is_none(), "marked on the map, let go");
+    // Marked in the list, kept as the list is asked for again.
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some(), "{}", app.status);
+    press(&mut app, &["<m-l>"]);
+    assert!(app.map.region.is_some(), "marked in the list, kept");
+}
+
+#[test]
+fn what_is_marked_in_the_list_is_let_go_as_another_folder_is_opened() {
+    let mut app = demo();
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some(), "{}", app.status);
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Archive",
+            _ => false,
+        })
+        .unwrap();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.map.region.is_none(), "marked in the Inbox, let go");
+}
+
+#[test]
+fn on_the_map_m_on_the_message_read_drops_down_nothing_unseen() {
+    let mut app = demo_map();
+    app.focus = app::Focus::Reader;
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_none(), "a menu drawn nowhere");
+}
+
+#[test]
+fn mail_read_is_never_thrown_away_on_its_own() {
+    let mut app = demo_taught();
+    let sure: Vec<crate::index::Key> = {
+        let index = app.index.lock().unwrap();
+        let known = index.known();
+        index
+            .records
+            .values()
+            .filter(|r| index.system(&r.key).inbox)
+            .filter(|r| {
+                index.filter.odds(&crate::filter::Filter::tokens(r, &known)) >= crate::filter::AUTO
+            })
+            .map(|r| r.key.clone())
+            .collect()
+    };
+    assert!(!sure.is_empty());
+    // Read, all of them, and left in the Inbox.
+    for key in &sure {
+        app.index
+            .lock()
+            .unwrap()
+            .records
+            .get_mut(key)
+            .unwrap()
+            .flags
+            .seen = true;
+    }
+    app.auto = crate::filter::Auto {
+        on: true,
+        since: 0,
+        debriefed: 0,
+    };
+    app.throw_away_on_its_own();
+    app.settle(Duration::from_secs(5));
+    let auto = app
+        .index
+        .lock()
+        .unwrap()
+        .filter
+        .taught
+        .iter()
+        .filter(|t| t.auto)
+        .count();
+    assert_eq!(auto, 0);
+}
+
+/// A library that cannot be reached, or that says no.
+struct Failing(&'static str);
+
+impl crate::paperstack::Library for Failing {
+    fn search(&mut self, _: &str, _: usize) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        match self.0 {
+            "pipe" => Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into()),
+            said => Err(anyhow::anyhow!("paperstack: {said}")),
+        }
+    }
+    fn add(&mut self, _: &str) -> anyhow::Result<crate::paperstack::Found> {
+        anyhow::bail!("paperstack: no")
+    }
+    fn star(&mut self, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("paperstack: no")
+    }
+}
+
+#[test]
+fn paperstack_gone_is_run_again_and_paperstack_saying_no_is_kept() {
+    let mut app = reading_the_alert();
+    *app.library.lock().unwrap() = Some(Box::new(Failing("no such paper")));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.library.lock().unwrap().is_some(), "it answered");
+    press(&mut app, &["<esc>"]);
+    *app.library.lock().unwrap() = Some(Box::new(Failing("pipe")));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.library.lock().unwrap().is_none(), "run again next time");
+}
+
+#[test]
+fn in_the_list_all_marked_are_picked_where_to_go_on_the_map() {
+    let mut app = demo();
+    press(&mut app, &["v", "v"]);
+    let marked = app.map.region.as_ref().unwrap().keys.clone();
+    assert_eq!(marked.len(), 2);
+    press(&mut app, &["k", "m"]);
+    let on_map = app
+        .menu_items()
+        .iter()
+        .position(|p| matches!(p, app::Pick::OnMap))
+        .unwrap();
+    for _ in 0..on_map {
+        press(&mut app, &["<down>"]);
+    }
+    press(&mut app, &["<enter>"]);
+    let mut moving = app.map.moving.clone().expect("moving");
+    moving.sort();
+    let mut marked = marked;
+    marked.sort();
+    assert_eq!(moving, marked);
+    assert!(app.map.region.is_none());
+}
+
+#[test]
+fn an_image_whose_name_begins_another_s_leaves_it_whole() {
+    let html = r#"<img src="cid:1"><img src="cid:10">"#;
+    let images = vec![
+        ("1".to_string(), "image/png".to_string(), b"one".to_vec()),
+        ("10".to_string(), "image/png".to_string(), b"ten".to_vec()),
+    ];
+    let page = crate::app::inline_images(html, &images);
+    assert!(page.contains("data:image/png;base64,b25l\""), "{page}");
+    assert!(page.contains("data:image/png;base64,dGVu\""), "{page}");
+}
+
+#[test]
+fn one_letterbox_writes_the_index_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let first = Index::open_with(dir.path(), &id);
+    assert!(first.writes());
+    // Another, as `filter learn` while letterbox is open: read, never
+    // written, and why said.
+    let second = Index::open_with(dir.path(), &id);
+    assert!(!second.writes());
+    assert!(
+        second.fault.as_deref().is_some_and(|f| f.contains("open")),
+        "{:?}",
+        second.fault
+    );
+    drop(second);
+    drop(first);
+    assert!(Index::open_with(dir.path(), &id).writes());
 }

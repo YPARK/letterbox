@@ -147,9 +147,14 @@ pub enum Answer {
         pages: Result<Vec<image::RgbaImage>, String>,
     },
     /// Where each paper of the message read stands with paperstack.
-    Standings(Result<Vec<crate::paperstack::Standing>, String>),
+    /// Asked for the list of papers `asked`.
+    Standings {
+        asked: u64,
+        said: Result<Vec<crate::paperstack::Standing>, String>,
+    },
     /// The paper `at` of those listed, put in paperstack, starred.
     Shelved {
+        asked: u64,
         at: usize,
         found: Result<crate::paperstack::Found, String>,
     },

@@ -370,7 +370,10 @@ first, what you filed read again from its server first, as the index
 now reads a message; each only once. Mail read and then thrown away was dealt with, not
 unwanted, so it is left out: learnt from, it took meetings and colleagues'
 mail for what you throw away. `filter forget` takes back what was learnt
-from either, and your own decisions are all that is left.
+from either, and your own decisions are all that is left. Both write
+what letterbox writes, so each waits till letterbox is closed; one
+letterbox writes the map's index at a time, another opened beside it
+reads it, and says so.
 
 The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message

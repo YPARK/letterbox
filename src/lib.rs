@@ -1072,6 +1072,16 @@ fn command(args: &Args) -> anyhow::Result<()> {
         }
         Some(Command::Filter { action }) => {
             let mut index = open_index(args)?;
+            // Learnt or forgotten while letterbox is open, what either
+            // writes would be lost.
+            if matches!(action, FilterAction::Learn { .. } | FilterAction::Forget)
+                && !args.demo
+                && !index.writes()
+            {
+                bail!(
+                    "letterbox is open, and writes what is learnt: close it, then run this again"
+                );
+            }
             if let FilterAction::Forget = action {
                 let n = index.unseed()?;
                 index.flush()?;
