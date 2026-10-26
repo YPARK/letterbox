@@ -314,6 +314,16 @@ impl Store for Imap {
         })
     }
 
+    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+        let id = mail::brackets(message_id);
+        self.run(|s, selected| {
+            select(s, selected, folder, true)?;
+            Ok(!s
+                .uid_search(format!("HEADER Message-ID {}", astring(&id)))?
+                .is_empty())
+        })
+    }
+
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
         self.run(|s, selected| {
             let mut cmd = s.append(folder, raw);

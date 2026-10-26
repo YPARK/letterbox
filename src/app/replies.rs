@@ -93,7 +93,7 @@ impl App {
                     return Some(true);
                 };
                 Some(match job.goal {
-                    Goal::Trashed => !record
+                    Goal::Trashed | Goal::Brought(_) => !record
                         .places
                         .iter()
                         .any(|p| p.folder == job.folder && p.uid == job.uid),
@@ -191,6 +191,12 @@ impl App {
         }
         if let Answer::Checked { text, edits } = reply.answer {
             return self.checked(&text, edits);
+        }
+        if let Answer::Raw { folder, uid, raw } = reply.answer {
+            return self.brought_raw(a, folder, uid, raw);
+        }
+        if let Answer::Brought { from, result } = reply.answer {
+            return self.brought(from, result);
         }
         #[cfg(feature = "pages")]
         if let Answer::Paged { place, pages } = reply.answer {
@@ -335,6 +341,8 @@ impl App {
             | Answer::Drawn(_)
             | Answer::Relaid { .. }
             | Answer::Checked { .. }
+            | Answer::Raw { .. }
+            | Answer::Brought { .. }
             | Answer::Realm { .. } => {}
             #[cfg(feature = "pages")]
             Answer::Paged { .. } => {}

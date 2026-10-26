@@ -96,6 +96,10 @@ pub trait Store: Send {
     }
     /// Add `raw` to the end of `folder`, seen if `seen` is.
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()>;
+    /// Whether `folder` holds a message of the Message-ID `message_id`.
+    fn holds(&mut self, _folder: &str, _message_id: &str) -> anyhow::Result<bool> {
+        anyhow::bail!("this account cannot be asked what a folder holds")
+    }
     /// Make a folder named `path`.
     fn create(&mut self, path: &str) -> anyhow::Result<()>;
     /// The address mail from this account is sent as.

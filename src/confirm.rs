@@ -16,6 +16,8 @@ pub enum Goal {
     Filed(String),
     Archived,
     Trashed,
+    /// To another account's folder, as said: `Grant · Work`.
+    Brought(String),
 }
 
 impl Goal {
@@ -25,6 +27,7 @@ impl Goal {
             Goal::Filed(label) => format!("→ {label}"),
             Goal::Archived => "archived".to_string(),
             Goal::Trashed => "to the Trash".to_string(),
+            Goal::Brought(to) => format!("→ {to}"),
         }
     }
 }

@@ -26,6 +26,7 @@ mod keys_index;
 mod labels_model;
 mod lists;
 mod mapscreen;
+mod moving;
 mod passwords;
 mod reading;
 mod reviewing;

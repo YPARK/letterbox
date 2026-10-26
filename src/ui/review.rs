@@ -174,6 +174,16 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let shown = chosen.clone().unwrap_or_else(|| suggested.clone());
         let label = match &shown {
             Choice::Move(l) => Some(l.clone()),
+            // Another account's folder, by its name and the account's.
+            Choice::Bring(to, path) => {
+                let account = &app.accounts[*to];
+                let name = account
+                    .folders
+                    .iter()
+                    .find(|f| &f.path == path)
+                    .map_or(path.as_str(), |f| f.name.as_str());
+                Some(format!("{name} · {}", account.name))
+            }
             _ => s.suggestion(i).map(str::to_string),
         };
         let options = [
@@ -182,7 +192,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
                     Some(l) => format!("→ {}", clip(l, 18)),
                     None => "move to…".to_string(),
                 },
-                matches!(chosen, Some(Choice::Move(_))),
+                matches!(chosen, Some(Choice::Move(_) | Choice::Bring(..))),
                 t.accent,
                 t.on_accent,
                 chosen.is_none() && matches!(suggested, Choice::Move(_)),
@@ -284,6 +294,10 @@ pub(super) fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
         let (said, far) = match item {
             Pick::Label(name, deg) => (format!(" {name}"), format!("{deg:>3.0}° ")),
             Pick::New(name) => (format!(" + new label “{name}”"), String::new()),
+            Pick::Elsewhere(to, _, name) => (
+                format!(" {name} · {}", app.accounts[*to].name),
+                "↦ ".to_string(),
+            ),
             Pick::OnMap => (" ◇ pick on the map…".to_string(), String::new()),
         };
         let said = clip(&said, room.saturating_sub(far.width()));
@@ -291,7 +305,7 @@ pub(super) fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
         let text = format!("{said}{}{far}", " ".repeat(gap));
         let style = if k == menu.at {
             Style::new().fg(t.title).bg(t.focus).bold()
-        } else if matches!(item, Pick::Label(..)) {
+        } else if matches!(item, Pick::Label(..) | Pick::Elsewhere(..)) {
             Style::new().fg(t.text).bg(t.page)
         } else {
             Style::new().fg(t.soft).bg(t.page)
