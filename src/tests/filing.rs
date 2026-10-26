@@ -456,13 +456,17 @@ fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
     // The wheel: up over a block goes into it; down, out again, and no
     // farther than all of it.
     let _ = app::screen(&mut app, 150, 45);
+    // The biggest other cluster, as it has parts to go into; a small one's
+    // threads the wheel goes along.
+    let s = app.map.snapshot.clone().unwrap();
     let (r, other) = app
         .targets
         .iter()
-        .find_map(|&(r, t)| match t {
+        .filter_map(|&(r, t)| match t {
             app::Target::Anchor(g) if g != id => Some((r, g)),
             _ => None,
         })
+        .max_by_key(|&(_, g)| s.group(g).map_or(0, |g| g.members.len()))
         .unwrap();
     app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
