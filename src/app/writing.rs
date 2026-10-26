@@ -158,6 +158,15 @@ impl App {
     }
 
     pub(super) fn compose_key(&mut self, key: KeyEvent) {
+        // Asked if it is to go now, its grammar gone through: y sends it.
+        if std::mem::take(&mut self.sending_asked) {
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
+                self.send_compose();
+            } else {
+                self.status = "kept · C-c C-c sends it".to_string();
+            }
+            return;
+        }
         // The model's changes gone through: what is a key of theirs, theirs.
         if self.checking.is_some() && self.checking_key(key) {
             return;
@@ -179,6 +188,10 @@ impl App {
             return;
         }
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
+        // Sent as it is only by the C-c C-c that let its checking go.
+        if done == Done::Stay && !compose.prefix {
+            self.send_as_is = false;
+        }
         match done {
             Done::Stay => {}
             Done::Quit => self.status = QUIT.to_string(),
@@ -190,8 +203,8 @@ impl App {
                 self.compose = None;
                 self.status = "not sent".to_string();
             }
-            Done::Send => self.send_compose(),
-            Done::Check => self.check_grammar(),
+            Done::Send => self.send_or_check(),
+            Done::Check => self.check_grammar(false),
             Done::Attach => {
                 let dir = self
                     .attach_dir

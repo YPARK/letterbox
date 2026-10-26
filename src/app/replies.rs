@@ -569,7 +569,10 @@ impl App {
                             self.marked(a, &folder, uid, Flag::Answered, true);
                         }
                         self.compose = None;
-                        self.status = said;
+                        self.status = match self.send_note.take() {
+                            Some(note) => format!("{said} · {note}"),
+                            None => said,
+                        };
                         self.reload(a);
                     }
                     Err(e) => self.status = first_line(&e).to_string(),

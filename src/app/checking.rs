@@ -4,12 +4,13 @@
 use super::*;
 use crate::grammar::{self, Edit};
 
-/// The changes a model would make, and which is being looked at.
+/// The changes a model would make, and which is being looked at; how many
+/// were taken, and whether they are gone through before it is sent.
 pub struct Checking {
     pub edits: Vec<Edit>,
     pub at: usize,
-    /// How many were taken.
     pub taken: usize,
+    pub for_send: bool,
 }
 
 impl Checking {
@@ -20,14 +21,25 @@ impl Checking {
 }
 
 impl App {
-    /// Check what is written: sent to the model's thread, made the first
-    /// time with the model read on it, so the screen never waits for it.
-    pub(super) fn check_grammar(&mut self) {
+    /// Send the message, its grammar checked first where it is to be: as
+    /// it is where its checking was let go by C-c C-c.
+    pub(super) fn send_or_check(&mut self) {
+        if std::mem::take(&mut self.send_as_is) || !self.check_on_send {
+            return self.send_compose();
+        }
+        self.check_grammar(true);
+    }
+
+    /// Check what is written, before it is sent if `for_send`: sent to the
+    /// model's thread, made the first time with the model read on it, so
+    /// the screen never waits for it.
+    pub(super) fn check_grammar(&mut self, for_send: bool) {
         let Some(compose) = &self.compose else {
             return;
         };
         let text = compose.buffer.text();
         self.checking = None;
+        self.checking_for_send = for_send;
         let first = self.checker.is_none();
         if first {
             let (to, asked) = std::sync::mpsc::channel::<String>();
@@ -75,17 +87,27 @@ impl App {
     }
 
     /// What the model would change of `text`: gone through one by one, if
-    /// the message is still as it was sent.
+    /// the message is still as it was sent. Checked to be sent, and nothing
+    /// to change, or no model to say: sent, as it is.
     pub(super) fn checked(&mut self, text: &str, edits: Result<Vec<Edit>, String>) {
+        let for_send = std::mem::take(&mut self.checking_for_send);
         let Some(compose) = &self.compose else {
             return;
         };
         if compose.buffer.text() != text {
-            self.status = "changed while it was checked: M-$ again".to_string();
+            self.status = "changed while it was checked: C-c C-s again".to_string();
             return;
         }
         match edits {
+            Err(why) if for_send => {
+                self.send_note = Some(format!("grammar not checked: {}", first_line(&why)));
+                self.send_compose();
+            }
             Err(why) => self.status = first_line(&why).to_string(),
+            Ok(edits) if edits.is_empty() && for_send => {
+                self.send_note = Some("✓ the grammar".to_string());
+                self.send_compose();
+            }
             Ok(edits) if edits.is_empty() => {
                 self.status = "✓ the grammar: nothing to change".to_string()
             }
@@ -94,6 +116,7 @@ impl App {
                     edits,
                     at: 0,
                     taken: 0,
+                    for_send,
                 });
                 self.say_edit();
             }
@@ -106,9 +129,16 @@ impl App {
             return;
         };
         let Some(e) = c.edit() else {
-            let taken = c.taken;
+            let (taken, for_send) = (c.taken, c.for_send);
             self.checking = None;
             self.status = format!("the grammar: {taken} changed");
+            // Gone through to be sent: asked if it is to go now.
+            if for_send {
+                self.sending_asked = true;
+                self.status = format!(
+                    "the grammar: {taken} changed · Send it now? y sends it, any other key goes on writing"
+                );
+            }
             return;
         };
         let (said, with) = (e.said.trim(), e.with.trim());
@@ -119,7 +149,7 @@ impl App {
         };
         let (row, col) = (e.row, e.start);
         self.status = format!(
-            "{what} · y takes it, n leaves it, ! all, q stops ({} of {})",
+            "{what} · y takes it, n skips it, a accepts all, i ignores all ({} of {})",
             c.at + 1,
             c.edits.len()
         );
@@ -128,27 +158,29 @@ impl App {
         }
     }
 
-    /// A key while the model's changes are gone through: `y` or space takes
-    /// the one looked at, `n` or ⌫ leaves it, `!` takes all that are left,
-    /// `q`, ⏎, esc or `C-g` stops. Any other key stops and is the editor's:
-    /// whether it was theirs.
+    /// A key while the model's changes are gone through, as its pop-up's
+    /// buttons say: `y` or space takes the one looked at, `n` or ⌫ skips
+    /// it, `a` or `!` accepts all that are left, `i` or `q` ignores all of
+    /// them, as ⏎, esc and `C-g` do. Any other key stops and is the
+    /// editor's, `C-c` sending it as it is if it was to be sent: whether it
+    /// was theirs.
     pub(super) fn checking_key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         match key.code {
             KeyCode::Char('y' | ' ') if plain => self.take_edit(),
-
             KeyCode::Char('n') | KeyCode::Backspace | KeyCode::Delete if !ctrl => self.skip_edit(),
-            KeyCode::Char('!') if plain => {
+            KeyCode::Char('a' | '!') if plain => {
                 while self.checking.as_ref().is_some_and(|c| c.edit().is_some()) {
                     self.take_edit();
                 }
             }
-            KeyCode::Char('q') if plain => self.stop_checking(),
+            KeyCode::Char('i' | 'q') if plain => self.stop_checking(),
             KeyCode::Enter | KeyCode::Esc => self.stop_checking(),
             KeyCode::Char('g') if ctrl => self.stop_checking(),
             _ => {
-                self.checking = None;
+                let for_send = self.checking.take().is_some_and(|c| c.for_send);
+                self.send_as_is = for_send && ctrl && key.code == KeyCode::Char('c');
                 return false;
             }
         }

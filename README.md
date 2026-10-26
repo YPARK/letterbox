@@ -223,11 +223,20 @@ never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once m
 what you wrote, built with `--features grammar`; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, nor the signature. Each change the model would make
-is said in turn, as Emacs's query-replace says it, marked in red in the
-text:
-`y` or `space` takes it, `n` leaves it, `!` takes all that are left, `q`
-stops, and any other key stops and is written. Nothing changes but what
-you take.
+is asked in turn in a pop-up, the sentence it is in shown, what it would
+change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
+(`n`) leaves it, Accept all (`a`) takes all that are left, Ignore all
+(`i`) none, and any other key stops and is written. Nothing changes but
+what you take.
+
+Built with grammar, `C-c C-c` checks it first, before it is sent: with
+nothing to change it goes at once; else each change is asked, and then
+whether to send it now, Send (`y`) or Keep writing. `C-c C-c` again while
+it is asked sends it as it is. A model that cannot be read, as with no
+network the first time, keeps nothing from going: it is sent, and said
+to be unchecked.
+
+`!` and `q` do as `a` and `i`, as Emacs's query-replace has them.
 
 If Emacs is new to you, this is all you need:
 

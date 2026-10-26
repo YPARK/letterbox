@@ -200,3 +200,132 @@ fn the_default_model_corrects_a_sentence() {
     assert!(said.contains(&("you", "your")), "{said:?}");
     assert!(said.contains(&("monday.", "Monday.")), "{said:?}");
 }
+
+/// The demo, `body` written, sending checking the grammar first with a
+/// model that writes "you time" as "your time".
+fn sending(body: &str) -> App {
+    let mut app = writing(body);
+    app.check_on_send = true;
+    app.grammar_open = |_| {
+        Ok(Box::new(grammar::Using(|s: &str| {
+            Ok(s.replace("you time", "your time"))
+        })))
+    };
+    app
+}
+
+#[test]
+fn sending_checks_the_grammar_first_and_asks_once_it_is_gone_through() {
+    // Nothing to change: sent at once.
+    let mut app = sending("All is well.");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.compose.is_none(), "{}", app.status);
+    // Something: gone through first, then asked; y sends it.
+    let mut app = sending("Thank you for you time.");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.compose.is_some());
+    assert!(app.status.contains("“you” → “your”"), "{}", app.status);
+    press(&mut app, &["y"]);
+    assert!(app.status.contains("Send it now?"), "{}", app.status);
+    assert!(written(&app).contains("your time"), "{}", written(&app));
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(
+        screen.contains("Send  y") && screen.contains("Keep writing  n"),
+        "{screen}"
+    );
+    click_key(&mut app, 'y');
+    app.settle(Duration::from_secs(5));
+    assert!(app.compose.is_none(), "{}", app.status);
+    // Stopped, and any key but y: not sent, the message kept as it is.
+    let mut app = sending("Thank you for you time.");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    press(&mut app, &["q"]);
+    assert!(app.status.contains("Send it now?"), "{}", app.status);
+    press(&mut app, &["x"]);
+    assert!(app.compose.is_some());
+    assert!(written(&app).contains("for you time."), "{}", written(&app));
+    // C-c C-c while it is gone through: sent as it is, at once.
+    let mut app = sending("Thank you for you time.");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.compose.is_none(), "{}", app.status);
+}
+
+#[test]
+fn a_grammar_that_cannot_be_checked_does_not_keep_a_message_from_going() {
+    let mut app = writing("Thank you for you time.");
+    app.check_on_send = true;
+    app.grammar_open = |_| anyhow::bail!("no network");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.compose.is_none(), "{}", app.status);
+    assert!(app.status.contains("grammar not checked"), "{}", app.status);
+}
+
+/// Click the pop-up's button for `key` in what was last drawn.
+fn click_key(app: &mut App, key: char) {
+    let pressed = KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE);
+    let (rect, _) = *app
+        .targets
+        .iter()
+        .rev()
+        .find(|(_, t)| *t == app::Target::Key(pressed))
+        .unwrap_or_else(|| panic!("no button for {key}"));
+    app.mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 1,
+        rect.y,
+    ));
+}
+
+#[test]
+fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
+    let mut app = writing("Thank you for you time. I has went home on monday.");
+    app.grammar_open = |_| {
+        Ok(Box::new(grammar::Using(|s: &str| {
+            Ok(s.replace("you time", "your time")
+                .replace("has went", "went")
+                .replace("monday", "Monday"))
+        })))
+    };
+    press(&mut app, &["<c-c>", "<c-s>"]);
+    app.settle(Duration::from_secs(5));
+    let screen = app::screen(&mut app, 150, 40);
+    for said in [
+        "Grammar · 1 of 3",
+        "“you” → “your”",
+        "Yes  y",
+        "Skip  n",
+        "Accept all  a",
+        "Ignore all  i",
+    ] {
+        assert!(screen.contains(said), "{said} in {screen}");
+    }
+    // Skip, clicked: the next.
+    click_key(&mut app, 'n');
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("take out “has”"), "{screen}");
+    assert!(screen.contains("Grammar · 2 of 3"), "{screen}");
+    // Accept all: the rest taken, and the pop-up gone.
+    press(&mut app, &["a"]);
+    assert!(app.checking.is_none());
+    let text = written(&app);
+    assert!(
+        text.contains("for you time. I went home on Monday."),
+        "{text}"
+    );
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Grammar ·"), "{screen}");
+    // Ignore all: none taken.
+    press(&mut app, &["<c-c>", "<c-s>"]);
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 150, 40);
+    click_key(&mut app, 'i');
+    assert!(app.checking.is_none());
+    assert_eq!(written(&app), text);
+}
