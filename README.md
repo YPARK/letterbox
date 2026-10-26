@@ -321,6 +321,15 @@ a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the
 Trash, at once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
+While it is looked through, the map shows where it is heading, as
+chosen and, where not yet, as suggested: each label's cluster from grey,
+where none of it goes, to orange, where most does, with how many beside
+its name; the Inbox's own mail in blue; a trail of dots from the message
+picked to where it goes, and that label's words, those the message shares
+with it lit; under the map, how many go to each label, to the Trash and
+stay. As it is looked through, and each choice changed, so does the map,
+its clusters alike.
+
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
 list, and `u` and `s` mark the one picked.
 

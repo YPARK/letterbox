@@ -678,6 +678,56 @@ pub enum Dialog {
     Apply(Box<Plan>),
 }
 
+/// Where a message of the Inbox looked through is heading, as chosen,
+/// else as suggested.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Bound {
+    /// To the cluster of its label, on the map.
+    To(u32),
+    Trash,
+    Kept,
+    /// To a label not yet on the map.
+    Elsewhere,
+}
+
+/// How many are heading somewhere: chosen to, and only suggested.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Going {
+    pub chosen: usize,
+    pub suggested: usize,
+}
+
+impl Going {
+    pub fn all(&self) -> usize {
+        self.chosen + self.suggested
+    }
+}
+
+/// Where the Inbox looked through is heading: to each label's cluster, to
+/// the Trash, or kept; where the one picked is.
+#[derive(Clone, Debug, Default)]
+pub struct Heading {
+    pub to: std::collections::BTreeMap<u32, Going>,
+    pub trash: Going,
+    pub kept: Going,
+    pub elsewhere: Going,
+    pub picked: Option<Bound>,
+}
+
+impl Heading {
+    /// How much of what goes to a cluster goes to `id`, as of the most to
+    /// any: from 0, none, to 1.
+    pub fn heat(&self, id: u32) -> f32 {
+        let most = self.to.values().map(Going::all).max().unwrap_or(0);
+        let here = self.to.get(&id).map_or(0, Going::all);
+        if most == 0 {
+            0.0
+        } else {
+            here as f32 / most as f32
+        }
+    }
+}
+
 /// What was chosen in the Inbox looked through, as asked whether to do it.
 #[derive(Clone, Debug, Default)]
 pub struct Plan {
@@ -5917,6 +5967,45 @@ impl App {
             )
         });
         rows
+    }
+
+    /// Where the Inbox looked through is heading, as it is chosen and, where
+    /// not, suggested: none, not looked through.
+    pub fn heading(&self) -> Option<Heading> {
+        if self.map.mode != Mode::Map {
+            return None;
+        }
+        self.review.as_ref()?;
+        let s = self.map.snapshot.as_ref()?;
+        let picked = self.review_at().map(|(i, _)| i);
+        let mut h = Heading::default();
+        for i in self.review_rows() {
+            let chosen = self.chosen(i);
+            let bound = match chosen.clone().unwrap_or_else(|| Self::suggested(s, i)) {
+                Choice::Move(label) => s
+                    .groups
+                    .iter()
+                    .find(|g| g.label.as_deref() == Some(label.as_str()))
+                    .map_or(Bound::Elsewhere, |g| Bound::To(g.id)),
+                Choice::Discard => Bound::Trash,
+                Choice::Keep => Bound::Kept,
+            };
+            let going = match bound {
+                Bound::To(id) => h.to.entry(id).or_default(),
+                Bound::Trash => &mut h.trash,
+                Bound::Kept => &mut h.kept,
+                Bound::Elsewhere => &mut h.elsewhere,
+            };
+            if chosen.is_some() {
+                going.chosen += 1;
+            } else {
+                going.suggested += 1;
+            }
+            if picked == Some(i) {
+                h.picked = Some(bound);
+            }
+        }
+        Some(h)
     }
 
     /// What is suggested for the message `i` of `s`: discarded, if mail

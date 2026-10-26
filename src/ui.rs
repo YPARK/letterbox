@@ -1892,6 +1892,8 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         return say(f, &why);
     };
     let shown = app.map.shown(now);
+    // The Inbox looked through: where it is heading lit on the map.
+    let heading = app.heading();
     let new: usize = shown
         .iter()
         .filter(|&&i| app.map.is_new(&s.dots[i], now))
@@ -1943,6 +1945,8 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     head.push(Span::styled(what, dim));
     let key = if app.map.tree.is_some() {
         "   h out  l in  j/k along  ⏎ read  • one  ● more"
+    } else if heading.is_some() {
+        "   orange where the Inbox goes, the more the brighter  ··· where the one picked goes"
     } else if app.map.clusters {
         "   ⬤ the bigger the more it holds, bright with unread  ◆ label  ◇ cluster"
     } else {
@@ -1954,6 +1958,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(head)), legend);
     let explained = match s.faithfulness {
+        _ if heading.is_some() => heading_said(heading.as_ref().unwrap(), &s),
         Some(_) if app.map.preview.is_some() => {
             " laid out again, a trail from where each was: ⏎ keeps it, esc drops it".to_string()
         }
@@ -2134,6 +2139,16 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let hit = found.as_ref().map(|m| members.iter().any(|&i| m[i]));
         if !in_focus || quiet || hit == Some(false) {
             colour = t.rule;
+        } else if let Some(h) = &heading {
+            // The Inbox, blue, and each cluster as much of it goes there.
+            let inbox = members
+                .iter()
+                .any(|&i| s.dots[i].system.inbox && !s.dots[i].system.sent);
+            colour = match s.group_of(first).map(|g| h.heat(g.id)) {
+                _ if inbox => t.accent,
+                Some(heat) if heat > 0.0 => heated(&t, heat),
+                _ => t.rule,
+            };
         } else if members
             .iter()
             .all(|&i| crate::map::Map::is_old(&s.dots[i], now))
@@ -2218,6 +2233,7 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     // Each cluster's anchor, at the middle of what of it is drawn: a label's
     // in its hue, one not yet a label tinted, with its words.
     let mut taken: Vec<(u16, u16, u16)> = Vec::new();
+    let mut target: Option<(u16, u16)> = None;
     for g in &s.groups {
         let cells: Vec<(u16, u16)> = g
             .core
@@ -2230,8 +2246,30 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let n = cells.len() as f32;
         let mx = cells.iter().map(|c| f32::from(c.0)).sum::<f32>() / n;
         let my = cells.iter().map(|c| f32::from(c.1)).sum::<f32>() / n;
-        let name = clip(&g.name(), 22);
-        let width = (3 + 1 + name.width()) as u16;
+        // Where the Inbox goes, how many go to it; where the one picked
+        // goes, its words too, those it shares with it lit.
+        let going = heading
+            .as_ref()
+            .and_then(|h| h.to.get(&g.id))
+            .map_or(0, crate::app::Going::all);
+        let bound_here = heading
+            .as_ref()
+            .is_some_and(|h| h.picked == Some(crate::app::Bound::To(g.id)));
+        let mut name = clip(&g.name(), 22);
+        if going > 0 {
+            name = format!("{name} ← {going}");
+        }
+        let words: Vec<(String, bool)> = match picked {
+            Some(p) if bound_here && !g.words.is_empty() => {
+                let d = &s.dots[p];
+                let lit = crate::map::shared(&format!("{} {}", d.subject, d.preview), &g.words);
+                g.words.iter().cloned().zip(lit).take(4).collect()
+            }
+            _ => Vec::new(),
+        };
+        let said_words: usize = words.iter().map(|(w, _)| w.width() + 1).sum();
+        let width =
+            (3 + 1 + name.width() + if words.is_empty() { 0 } else { 2 + said_words }) as u16;
         let left = (mx.round() as u16)
             .saturating_sub(1)
             .max(canvas.x)
@@ -2269,15 +2307,41 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::new().fg(t.soft).bg(t.page),
             ),
         };
-        let name_style = if dimmed {
-            Style::new().fg(t.dim).bg(t.page)
-        } else {
-            name_style
+        let (chip_style, name_style) = match &heading {
+            _ if dimmed => (chip_style, Style::new().fg(t.dim).bg(t.page)),
+            Some(_) if bound_here => (
+                Style::new().fg(ground).bg(t.flag).bold(),
+                Style::new().fg(ground).bg(t.flag).bold(),
+            ),
+            Some(h) if going > 0 => (
+                Style::new().fg(ground).bg(heated(&t, h.heat(g.id))).bold(),
+                Style::new().fg(t.flag).bg(t.page).bold(),
+            ),
+            Some(_) => (
+                Style::new().fg(t.dim).bg(t.row),
+                Style::new().fg(t.dim).bg(t.page),
+            ),
+            None => (chip_style, name_style),
         };
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(chip, chip_style),
             Span::styled(format!(" {name}"), name_style),
-        ]);
+        ];
+        if !words.is_empty() {
+            spans.push(Span::styled(" ·", Style::new().fg(t.faint).bg(t.page)));
+            for (w, lit) in words {
+                let style = if lit {
+                    Style::new().fg(t.flag).bg(t.page).bold().underlined()
+                } else {
+                    Style::new().fg(t.dim).bg(t.page)
+                };
+                spans.push(Span::styled(format!(" {w}"), style));
+            }
+        }
+        if bound_here {
+            target = Some((left + 1, y));
+        }
+        let line = Line::from(spans);
         let spot = Rect {
             x: left,
             y,
@@ -2294,8 +2358,34 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             Target::Anchor(g.id),
         ));
     }
+    // From the message picked to where it goes, a trail, over what is
+    // empty.
+    if let (Some(p), Some(to)) = (picked, target)
+        && let Some(&from) = app.map.cells.get(&p)
+    {
+        let buf = f.buffer_mut();
+        let trail = Style::new().fg(t.flag).bg(t.page);
+        let steps = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
+        for k in 1..steps {
+            let along = f32::from(k) / f32::from(steps);
+            let between = |a: u16, b: u16| {
+                (f32::from(a) + along * (f32::from(b) - f32::from(a))).round() as u16
+            };
+            let (x, y) = (between(from.0, to.0), between(from.1, to.1));
+            if buf[(x, y)].symbol() == " " {
+                buf[(x, y)].set_char('·').set_style(trail);
+            }
+        }
+    }
     // The message picked, named beside it: its sender, or whom it was
-    // sent to, and its subject.
+    // sent to, and its subject; where it goes, the words it shares with it
+    // lit.
+    let words_there: Vec<String> = match heading.as_ref().and_then(|h| h.picked) {
+        Some(crate::app::Bound::To(id)) => s.group(id).map_or(Vec::new(), |g| {
+            g.words.iter().cloned().chain(g.label.clone()).collect()
+        }),
+        _ => Vec::new(),
+    };
     if let Some(p) = picked
         && let Some(&(x, y)) = app.map.cells.get(&p)
     {
@@ -2320,8 +2410,14 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let w = said.width() as u16;
         if w > 0 {
+            let base = Style::new().fg(t.title).bg(t.page);
             f.render_widget(
-                Paragraph::new(Span::styled(said, Style::new().fg(t.title).bg(t.page))),
+                Paragraph::new(Line::from(lit_words(
+                    &said,
+                    &words_there,
+                    base,
+                    base.fg(t.flag).bold().underlined(),
+                ))),
                 Rect {
                     x: left,
                     y,
@@ -2331,6 +2427,63 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             );
         }
     }
+}
+
+/// From grey to orange, as `heat` goes from none to the most.
+fn heated(t: &Theme, heat: f32) -> ratatui::style::Color {
+    crate::theme::mix(t.faint, t.flag, 0.3 + 0.7 * heat)
+}
+
+/// Where the Inbox looked through goes, said: to each label, the most
+/// first, to the Trash, and kept.
+fn heading_said(h: &crate::app::Heading, s: &crate::map::Snapshot) -> String {
+    let n = |w: &crate::app::Going| match w.chosen {
+        0 => format!("{}", w.all()),
+        c => format!("{} ({c} chosen)", w.all()),
+    };
+    let mut to: Vec<(&u32, &crate::app::Going)> = h.to.iter().collect();
+    to.sort_by_key(|(id, w)| (std::cmp::Reverse(w.all()), **id));
+    let mut said: Vec<String> = to
+        .into_iter()
+        .filter_map(|(id, w)| Some(format!("{} {}", s.group(*id)?.name(), n(w))))
+        .collect();
+    for (what, w) in [
+        ("a new label", &h.elsewhere),
+        ("the Trash", &h.trash),
+        ("kept", &h.kept),
+    ] {
+        if w.all() > 0 {
+            said.push(format!("{what} {}", n(w)));
+        }
+    }
+    format!(" where the Inbox goes: {}", said.join(", "))
+}
+
+/// `text` as spans, each of its words among `words`, as tokens are made of
+/// them, in `lit`, the rest in `base`.
+fn lit_words(text: &str, words: &[String], base: Style, lit: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut alnum = false;
+    let flush = |run: &mut String, alnum: bool, spans: &mut Vec<Span<'static>>| {
+        if run.is_empty() {
+            return;
+        }
+        let shared = alnum && crate::map::shared(run, words).contains(&true);
+        spans.push(Span::styled(
+            std::mem::take(run),
+            if shared { lit } else { base },
+        ));
+    };
+    for c in text.chars() {
+        if c.is_alphanumeric() != alnum {
+            flush(&mut run, alnum, &mut spans);
+            alnum = c.is_alphanumeric();
+        }
+        run.push(c);
+    }
+    flush(&mut run, alnum, &mut spans);
+    spans
 }
 
 /// A cluster opened as its tree, from the left: the cluster, its parts,
@@ -2562,6 +2715,7 @@ fn cluster_nodes(
     let t = app.theme;
     let query = app.query.clone();
     let found = app.map.hits(&query).map(|h| h.matched.clone());
+    let heading = app.heading();
     struct Node {
         id: u32,
         at: usize,
@@ -2707,6 +2861,12 @@ fn cluster_nodes(
         let g = &s.groups[n.at];
         let colour = if !lit(n) {
             t.rule
+        } else if let Some(h) = &heading {
+            // Each as much of the Inbox looked through goes to it.
+            match h.heat(g.id) {
+                heat if heat > 0.0 => heated(&t, heat),
+                _ => t.rule,
+            }
         } else if n.unread == 0 {
             crate::theme::mix(t.hue(g.hue), t.page, 0.5)
         } else {
@@ -2754,7 +2914,12 @@ fn cluster_nodes(
     for n in &nodes {
         let g = &s.groups[n.at];
         let mut said = format!(" {} {}", clip(&g.name(), 22), n.n);
+        let going = heading
+            .as_ref()
+            .and_then(|h| h.to.get(&g.id))
+            .map_or(0, crate::app::Going::all);
         match n.hits {
+            _ if going > 0 => said.push_str(&format!(" ← {going} of the Inbox")),
             Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
             // Only what is not yet filed: where it would go, if anywhere.
             _ if app.map.unfiled_only && g.label.is_some() => said.push_str(" · would go here"),
@@ -2813,8 +2978,16 @@ fn cluster_nodes(
             continue;
         };
         taken.push((x, y, width));
-        let style = if picked == Some(n.id) {
+        let bound_here = heading
+            .as_ref()
+            .is_some_and(|h| h.picked == Some(crate::app::Bound::To(n.id)));
+        let style = if bound_here {
+            // Where the one picked goes.
+            Style::new().fg(t.ground()).bg(t.flag).bold()
+        } else if picked == Some(n.id) {
             Style::new().fg(t.title).bg(t.focus).bold()
+        } else if heading.is_some() && going > 0 {
+            Style::new().fg(t.flag).bg(t.page).bold()
         } else if !lit(n) {
             Style::new().fg(t.dim).bg(t.page)
         } else if n.unread > 0 {
