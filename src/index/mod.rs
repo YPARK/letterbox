@@ -266,6 +266,33 @@ pub struct Index {
     pub version: u64,
     /// What went wrong reading the journals, to say on the screen.
     pub fault: Option<String>,
+    /// Held while it is written to: one letterbox writes it at a time.
+    held: Option<std::fs::File>,
+}
+
+/// The index's lock, as asked for.
+enum Hold {
+    /// Held, by the file it is, or by none where it cannot be made.
+    Held(Option<std::fs::File>),
+    /// Held by another.
+    Busy,
+}
+
+/// Hold the lock of the index in `dir`, if no other letterbox does.
+fn hold(dir: &Path) -> Hold {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("lock"));
+    let Ok(file) = file else {
+        return Hold::Held(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Hold::Held(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Hold::Busy,
+        Err(_) => Hold::Held(None),
+    }
 }
 
 impl Index {
@@ -281,6 +308,7 @@ impl Index {
             taught: None,
             version: 0,
             fault: None,
+            held: None,
         }
     }
 
@@ -327,6 +355,19 @@ impl Index {
         if let Some(why) = taught.fault() {
             faults.push(format!("{why}; nothing more is learnt until it can be"));
         }
+        // Written by another letterbox, as open: read, not written.
+        let held = match write.then(|| hold(dir)) {
+            Some(Hold::Busy) => {
+                faults.push(
+                    "open in another letterbox, which writes it; nothing is written here".into(),
+                );
+                None
+            }
+            Some(Hold::Held(file)) => Some(file),
+            None => None,
+        };
+        let write = write && held.is_some();
+        index.held = held.flatten();
         index.fault = (!faults.is_empty()).then(|| faults.join("; "));
         if write {
             index.cache = Some(cache);
@@ -335,6 +376,12 @@ impl Index {
             index.compact();
         }
         index
+    }
+
+    /// Whether what is new is written down: not in memory alone, nor read
+    /// while another letterbox writes it.
+    pub fn writes(&self) -> bool {
+        self.taught.is_some()
     }
 
     /// The index in `dir` read only, as `read_only` reads it, its key found

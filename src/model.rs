@@ -856,8 +856,6 @@ impl Corpus {
         }
     }
 
-    /// The model of what is read, taught by the labels of `messages` and
-    /// by `not_it`, each message and label, folded, it was said not to be.
     /// Each message's direction before labels teach it.
     pub fn base(&self) -> &[Vector] {
         &self.base
@@ -990,6 +988,8 @@ impl Corpus {
         labels
     }
 
+    /// The model of what is read, taught by the labels of `messages` and
+    /// by `not_it`, each message and label, folded, it was said not to be.
     pub fn model(&mut self, messages: &[Given], not_it: &BTreeSet<(Key, String)>) -> Model {
         let n = self.len();
         let mut labels: Vec<Vec<String>> = vec![Vec::new(); n];

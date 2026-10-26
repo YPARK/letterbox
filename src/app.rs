@@ -678,6 +678,9 @@ pub enum Dialog {
 /// paperstack, once it has said; the one picked; what is under way.
 #[derive(Clone, Debug)]
 pub struct PapersView {
+    /// Which asking of paperstack it is: what it says of another is not
+    /// its.
+    pub asked: u64,
     pub papers: Vec<crate::papers::Paper>,
     pub standing: Vec<Option<crate::paperstack::Standing>>,
     pub at: usize,
@@ -928,6 +931,8 @@ pub struct App {
     pub filter_file: Option<PathBuf>,
     /// paperstack, once asked: run as it is first wanted, and kept.
     pub library: Arc<Mutex<Option<Box<dyn crate::paperstack::Library>>>>,
+    /// How many lists of papers paperstack has been asked of.
+    papers_asked: u64,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -1137,6 +1142,7 @@ impl App {
             auto: Default::default(),
             filter_file: None,
             library: Default::default(),
+            papers_asked: 0,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1299,8 +1305,12 @@ impl App {
         if let Answer::Relaid { lens, keys, at } = reply.answer {
             return self.relaid(lens, &keys, &at);
         }
-        if let Answer::Standings(said) = reply.answer {
-            if let Dialog::Papers(p) = &mut self.dialog {
+        if let Answer::Standings { asked, said } = reply.answer {
+            // Of the papers listed, as they still are, alone.
+            if let Dialog::Papers(p) = &mut self.dialog
+                && p.asked == asked
+                && said.as_ref().map_or(true, |s| s.len() == p.papers.len())
+            {
                 match said {
                     Ok(standing) => {
                         p.standing = standing.into_iter().map(Some).collect();
@@ -1311,10 +1321,11 @@ impl App {
             }
             return;
         }
-        if let Answer::Shelved { at, found } = reply.answer {
+        if let Answer::Shelved { asked, at, found } = reply.answer {
             let said = match found {
                 Ok(f) => {
                     if let Dialog::Papers(p) = &mut self.dialog
+                        && p.asked == asked
                         && let Some(s) = p.standing.get_mut(at)
                     {
                         *s = Some(crate::paperstack::Standing::Have {
@@ -1327,7 +1338,7 @@ impl App {
                 Err(e) => first_line(&e).to_string(),
             };
             match &mut self.dialog {
-                Dialog::Papers(p) => p.note = Some(said),
+                Dialog::Papers(p) if p.asked == asked => p.note = Some(said),
                 _ => self.status = said,
             }
             return;
@@ -1411,7 +1422,7 @@ impl App {
             | Answer::Waiting(_)
             | Answer::Address(_)
             | Answer::Fetched(_)
-            | Answer::Standings(_)
+            | Answer::Standings { .. }
             | Answer::Shelved { .. }
             | Answer::Mapping(_)
             | Answer::Drawn(_)
@@ -2109,6 +2120,10 @@ impl App {
     /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     fn open_folder(&mut self) {
+        // What was marked in the list was of what it listed.
+        if self.map.mode == Mode::List {
+            self.map.region = None;
+        }
         let view = match self.rows.get(self.row) {
             Some(&Row::Folder(a, i)) => {
                 let Some(folder) = self.accounts[a].folders.get(i) else {
@@ -2700,7 +2715,16 @@ impl App {
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
             Act::Mark if self.map.mode == Mode::List => self.list_mark(),
             Act::Mark => self.mark_cluster(),
-            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt => self.list_file(act),
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt
+                if self.map.mode == Mode::List =>
+            {
+                self.list_file(act)
+            }
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt => {
+                self.status =
+                    "on the map, tab to it: m, N, y and - act on the message picked there"
+                        .to_string();
+            }
             Act::FileAll if self.map.mode == Mode::List => self.list_file_all(),
             Act::FileAll
             | Act::View
@@ -2957,6 +2981,9 @@ impl App {
         let Some(l) = &self.listing else { return };
         if self.query.trim().is_empty() {
             return;
+        }
+        if self.map.mode == Mode::List {
+            self.map.region = None;
         }
         let parts = l.keys();
         self.status = format!("searching {} on the server…", self.folder_name());
@@ -4316,7 +4343,9 @@ impl App {
             index
                 .records
                 .values()
+                // New, and never read: mail read and left is yours.
                 .filter(|r| r.first_seen >= self.auto.since && !decided.contains(&r.key))
+                .filter(|r| !r.flags.seen)
                 .filter(|r| index.system(&r.key).inbox)
                 .filter(|r| {
                     let tokens = crate::filter::Filter::tokens(r, &known);
@@ -4471,7 +4500,10 @@ impl App {
             self.status = "no papers found in it".to_string();
             return;
         }
+        self.papers_asked += 1;
+        let asked = self.papers_asked;
         self.dialog = Dialog::Papers(Box::new(PapersView {
+            asked,
             standing: vec![None; papers.len()],
             papers: papers.clone(),
             at: 0,
@@ -4488,7 +4520,10 @@ impl App {
             });
             let _ = replies.send(Reply {
                 account: usize::MAX,
-                answer: Answer::Standings(said.map_err(worker::text)),
+                answer: Answer::Standings {
+                    asked,
+                    said: said.map_err(worker::text),
+                },
             });
         });
     }
@@ -4523,7 +4558,7 @@ impl App {
         let Some(paper) = p.papers.get(at).cloned() else {
             return;
         };
-        let have = match &p.standing[at] {
+        let have = match p.standing.get(at).and_then(Option::as_ref) {
             Some(crate::paperstack::Standing::Have { starred: true, .. }) => {
                 p.note = Some("in your library, starred already".to_string());
                 return;
@@ -4532,6 +4567,7 @@ impl App {
             _ => None,
         };
         p.note = Some(format!("putting it in paperstack: {}", paper.what));
+        let asked = p.asked;
         let (lib, replies) = (self.library.clone(), self.replies_to.clone());
         self.pending += 1;
         std::thread::spawn(move || {
@@ -4550,6 +4586,7 @@ impl App {
             let _ = replies.send(Reply {
                 account: usize::MAX,
                 answer: Answer::Shelved {
+                    asked,
                     at,
                     found: found.map_err(worker::text),
                 },
@@ -4620,9 +4657,14 @@ impl App {
                 self.row = i;
             }
         }
-        // A move or a mark begun on the map is the map's: let go.
-        if self.map.moving.take().is_some() || self.map.region.take().is_some() {
-            self.status = "what was moving or marked on the map, let go".to_string();
+        // A move or a mark begun on the map is the map's: let go; one made
+        // in the list, kept.
+        if self.map.mode == Mode::Map {
+            let moving = self.map.moving.take().is_some();
+            let marked = self.map.region.take().is_some();
+            if moving || marked {
+                self.status = "what was moving or marked on the map, let go".to_string();
+            }
         }
         if let Some(r) = &mut self.review {
             r.relabel = None;
@@ -5904,7 +5946,10 @@ impl App {
                 Some(Pick::OnMap) => {
                     self.show_map();
                     self.map.cursor = Some(menu.key.clone());
-                    self.map.moving = Some(vec![menu.key]);
+                    let mut keys = vec![menu.key];
+                    keys.extend(menu.with);
+                    self.map.region = None;
+                    self.map.moving = Some(keys);
                     self.status =
                         "where it goes: a click on a cluster, or ⏎ on one; N a new label; esc stops"
                             .to_string();
@@ -6266,8 +6311,6 @@ fn open(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Keep `bytes`, an attachment or a document downloaded, of the message
-/// `uid`, in a private folder of the cache, to be opened from there.
 /// Do `f` with paperstack, run first if it is not yet: what it gives.
 fn with_library<T>(
     lib: &Mutex<Option<Box<dyn crate::paperstack::Library>>>,
@@ -6278,30 +6321,50 @@ fn with_library<T>(
         *held = Some(crate::paperstack::connect()?);
     }
     let done = f(held.as_mut().expect("run").as_mut());
-    // One that stopped answering is run again next time.
+    // What paperstack said no to, it said; anything else, as one gone or
+    // that answered what is not its, is run again next time.
     if done
         .as_ref()
-        .is_err_and(|e| format!("{e:#}").contains("stopped answering"))
+        .is_err_and(|e| !e.to_string().starts_with("paperstack: "))
     {
         *held = None;
     }
     done
 }
 
+/// `html` with each image it shows from its own parts, `images`, by
+/// Content-ID, MIME type and bytes, put in it.
+pub(crate) fn inline_images(html: &str, images: &[(String, String, Vec<u8>)]) -> String {
+    use base64::Engine;
+    let mut html = html.to_string();
+    for (id, mime, bytes) in images {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let (needle, url) = (format!("cid:{id}"), format!("data:{mime};base64,{data}"));
+        // Its name whole, not the start of another's.
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find(&needle) {
+            let after = &rest[at + needle.len()..];
+            let longer = after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || "._-@$%+".contains(c));
+            out.push_str(&rest[..at]);
+            out.push_str(if longer { &needle } else { &url });
+            rest = after;
+        }
+        out.push_str(rest);
+        html = out;
+    }
+    html
+}
+
 /// The message as a page, written where only you may read it: its HTML,
 /// the images it shows from its own parts put in it, or its text; and the
 /// file it is in.
 fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
-    use base64::Engine;
     let body = match &m.html {
-        Some(html) => {
-            let mut html = html.clone();
-            for (id, mime, bytes) in mail::inline_images(&m.raw) {
-                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                html = html.replace(&format!("cid:{id}"), &format!("data:{mime};base64,{data}"));
-            }
-            html
-        }
+        Some(html) => inline_images(html, &mail::inline_images(&m.raw)),
         None => format!(
             "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
             escape(&m.text)
@@ -6320,6 +6383,8 @@ fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+/// Keep `bytes`, an attachment or a document downloaded, of the message
+/// `uid`, in a private folder of the cache, to be opened from there.
 fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
     let dir = cache().join("files");
     private_dir(&dir)?;

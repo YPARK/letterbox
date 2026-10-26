@@ -212,13 +212,18 @@ fn clean(s: &str) -> String {
 }
 
 /// `s` with HTML's entities read: named ones mail uses, and numbered ones.
-fn decode(s: &str) -> String {
+pub(crate) fn decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // A name of a dozen letters at most, each of however many bytes.
+        let near = rest
+            .char_indices()
+            .nth(12)
+            .map_or(rest, |(at, _)| &rest[..at]);
+        let Some(end) = near.find(';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
