@@ -2236,10 +2236,11 @@ impl App {
         self.shown.get(self.list.selected()?)
     }
 
-    /// The message picked: on the map, where it is looked at, else in the
-    /// list.
+    /// The message picked: on the map, the map's, where it is looked at,
+    /// read, or looked through in the Inbox; else in the list. Never the
+    /// list's behind the map.
     fn picked(&self) -> Option<Listed> {
-        if self.map.mode == Mode::Map && self.focus == Focus::List {
+        if self.map.mode == Mode::Map {
             return self.listed_dot(&self.dot()?);
         }
         self.current().cloned()
@@ -6405,6 +6406,12 @@ impl App {
                 Act::Trash | Act::Move | Act::FileFirst | Act::NewLabel => {
                     r.reading = false;
                     return self.review_act(act);
+                }
+                // Nothing is done till $, read or not.
+                Act::Archive => {
+                    self.status =
+                        "here, m moves it, space keeps it, d discards it; $ does those chosen"
+                            .to_string()
                 }
                 _ => return false,
             }

@@ -7928,6 +7928,41 @@ fn the_inbox_looked_through_takes_emacs_keys() {
     assert!(app.review.is_some());
 }
 
+#[test]
+fn a_message_read_on_the_map_is_the_one_answered_forwarded_and_archived() {
+    let mut app = demo_map();
+    let listed = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    // One of the Inbox looked through, read: not the list's, behind the map.
+    press(&mut app, &["j", "j", "<enter>"]);
+    assert!(app.review.as_ref().unwrap().reading);
+    let subject = s.dots[rows[2]].subject.clone();
+    assert_ne!(subject, listed);
+    let said = |app: &App| app.compose.as_ref().unwrap().buffer.text();
+    press(&mut app, &["r"]);
+    let reply = format!("Subject: {}", crate::compose::reply_subject(&subject));
+    assert!(said(&app).contains(&reply), "{}", said(&app));
+    press(&mut app, &["<c-c>", "<c-k>"]);
+    press(&mut app, &["f"]);
+    let forward = format!("Subject: {}", crate::compose::forward_subject(&subject));
+    assert!(said(&app).contains(&forward), "{}", said(&app));
+    press(&mut app, &["<c-c>", "<c-k>"]);
+    // e, reading it, does nothing yet, as beside the rest: neither it nor
+    // the list's is taken out of the Inbox.
+    press(&mut app, &["e"]);
+    assert!(dot_labels(&app, &subject).1, "{subject} still in the Inbox");
+    assert!(dot_labels(&app, &listed).1, "{listed} still in the Inbox");
+    // The map's message read, the triage closed: answered, too.
+    press(&mut app, &["i", "<esc>"]);
+    let p = app.map.picked().unwrap();
+    let other = app.map.snapshot.as_ref().unwrap().dots[p].subject.clone();
+    press(&mut app, &["<enter>", "<tab>", "r"]);
+    let reply = format!("Subject: {}", crate::compose::reply_subject(&other));
+    assert!(said(&app).contains(&reply), "{}", said(&app));
+}
+
 // ---- What you throw away, learnt ----
 
 /// A message from `address` about `subject`, by `id`.
