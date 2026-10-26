@@ -3711,6 +3711,26 @@ fn a_reply_to_all_of_your_own_message_is_to_whom_it_went() {
 }
 
 #[test]
+fn a_reply_to_a_name_with_a_comma_is_to_one_address() {
+    let raw = b"From: \"Yan, Joseph\" <joseph.yan@emory.example>\r\n\
+        To: you@example.com\r\nCc: \"Lee, \\\"Jo, Ann\\\"\" <ann@example.com>\r\n\
+        Subject: Plans\r\n\r\nHi\r\n"
+        .to_vec();
+    let message = mail::message(1, raw).unwrap();
+    let (text, _) = crate::compose::reply_all(&message, "you@example.com");
+    assert!(
+        text.starts_with(
+            "To: \"Yan, Joseph\" <joseph.yan@emory.example>\n\
+             Cc: \"Lee, \\\"Jo, Ann\\\"\" <ann@example.com>\n"
+        ),
+        "{text}"
+    );
+    let draft = crate::compose::parse(&text).unwrap();
+    assert_eq!(draft.to.len(), 1, "{:?}", draft.to);
+    assert_eq!(draft.cc.len(), 1, "{:?}", draft.cc);
+}
+
+#[test]
 fn a_reply_is_to_every_address_the_message_asks_replies_go_to() {
     let raw = b"From: Ada <ada@analytical.example>\r\n\
         Reply-To: a@x.example, b@y.example\r\nTo: you@example.com\r\n\
