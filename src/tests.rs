@@ -1642,6 +1642,36 @@ fn ctrl_o_opens_the_page_an_app_password_is_made_on() {
 }
 
 #[test]
+fn what_is_pasted_in_the_form_is_typed_in_its_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = empty_app(dir.path().join("accounts.toml"));
+    press(&mut app, &["A"]);
+    app.paste("me@gmail.com");
+    let form = app.dialog.form().unwrap();
+    assert_eq!(form.fields[app::EMAIL], "me@gmail.com");
+    assert_eq!(
+        form.fields[app::NAME],
+        "gmail.com",
+        "filled from the address"
+    );
+    while app.dialog.form().unwrap().at != app::PASSWORD {
+        press(&mut app, &["<tab>"]);
+    }
+    // A password as copied, with the line it ended.
+    app.paste("x7#Qv!9z L$2p\r\n");
+    assert_eq!(
+        app.dialog.form().unwrap().fields[app::PASSWORD],
+        "x7#Qv!9z L$2p"
+    );
+    // Nothing is written where nothing is typed.
+    while app.dialog.form().unwrap().at != app::SIGN_IN {
+        press(&mut app, &["<tab>"]);
+    }
+    app.paste("abc");
+    assert_eq!(app.dialog.form().unwrap().fields[app::SIGN_IN], "");
+}
+
+#[test]
 fn the_demos_account_is_not_changed() {
     let mut app = demo();
     app.fix_accounts();

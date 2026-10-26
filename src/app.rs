@@ -2190,6 +2190,30 @@ impl App {
                 }
             }
         }
+        self.form_changed(before);
+    }
+
+    /// Typed into the form's field, as one: its lines run together, as a
+    /// password copied ends with one.
+    fn form_paste(&mut self, text: &str) {
+        let Some(form) = self.dialog.form_mut() else {
+            return;
+        };
+        if form.checking || form.at == KEEP || form.at == SIGN_IN {
+            return;
+        }
+        let text: String = text.chars().filter(|c| !matches!(c, '\r' | '\n')).collect();
+        if text.is_empty() {
+            return;
+        }
+        form.fields[form.at].push_str(&text);
+        form.typed[form.at] = true;
+        let at = form.at;
+        self.form_changed(at);
+    }
+
+    /// What follows from the form changed, from the field `before` it.
+    fn form_changed(&mut self, before: usize) {
         let Some(form) = self.dialog.form_mut() else {
             return;
         };
@@ -4058,9 +4082,11 @@ impl App {
 
     /// What was pasted, or dropped onto the terminal as the paths of its
     /// files: attached, if the message being written takes them and each
-    /// is a file; else written in, or typed into the search.
+    /// is a file; else written in, or typed into the search or the form.
     pub fn paste(&mut self, text: &str) {
-        if self.compose.is_some() && !self.dialog.is_open() {
+        if self.dialog.form().is_some() {
+            self.form_paste(text);
+        } else if self.compose.is_some() && !self.dialog.is_open() {
             let paths = dropped(text);
             if !paths.is_empty() {
                 return self.attach(&paths);
