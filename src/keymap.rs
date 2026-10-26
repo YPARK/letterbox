@@ -585,6 +585,13 @@ pub const KEYS: &[Binding] = &[
     },
     Binding {
         keys: &[],
+        name: "tab S-tab",
+        hint: "",
+        foot: &[],
+        help: "in the message being written, from field to field, To, Cc, Subject, then what is written, and round; S-tab back",
+    },
+    Binding {
+        keys: &[],
         name: "M-$",
         hint: "",
         foot: &[],
