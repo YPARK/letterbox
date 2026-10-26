@@ -131,6 +131,9 @@ pub const PASSPHRASE: usize = 8;
 pub const AGAIN: usize = 9;
 pub const OUTGOING: usize = 10;
 
+/// How many messages of the Inbox looked through a page goes past.
+const REVIEW_PAGE: isize = 10;
+
 /// Why the form could not add its account: a mistake in what is typed, or
 /// the server refused to sign in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2741,9 +2744,33 @@ impl App {
             }
             return;
         }
-        if let Some(act) = keymap::act(key) {
+        if let Some(act) = self.review_emacs(key).or_else(|| keymap::act(key)) {
             self.act(act);
         }
+    }
+
+    /// What one of Emacs's keys does in the Inbox looked through, with the
+    /// focus on it, as in the labels dropped down over it: `C-n` and `C-p`
+    /// down and up, `C-f` and `C-b` round what may be done with one, `C-v`
+    /// and `M-v` a page, `M-<` and `M->` to either end, and `C-g` as esc.
+    fn review_emacs(&self, key: KeyEvent) -> Option<Act> {
+        if self.review.is_none() || self.focus != Focus::Reader || self.map.mode != Mode::Map {
+            return None;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let meta = key.modifiers.contains(KeyModifiers::ALT);
+        Some(match key.code {
+            KeyCode::Char('n') if ctrl => Act::Down,
+            KeyCode::Char('p') if ctrl => Act::Up,
+            KeyCode::Char('f') if ctrl => Act::Right,
+            KeyCode::Char('b') if ctrl => Act::Left,
+            KeyCode::Char('v') if ctrl => Act::PageDown,
+            KeyCode::Char('v') if meta => Act::PageUp,
+            KeyCode::Char('<') if meta => Act::Top,
+            KeyCode::Char('>') if meta => Act::End,
+            KeyCode::Char('g') if ctrl => Act::Back,
+            _ => return None,
+        })
     }
 
     /// Do what a key in the table does, where the focus is.
@@ -6365,6 +6392,8 @@ impl App {
             (Act::Up, _) => self.review_step(-1),
             (Act::Top, _) => self.review_step(isize::MIN / 2),
             (Act::End, _) => self.review_step(isize::MAX / 2),
+            (Act::PageDown, _) => self.review_step(REVIEW_PAGE),
+            (Act::PageUp, _) => self.review_step(-REVIEW_PAGE),
             (Act::Left | Act::Right, Some(i)) => {
                 let label = match self.choice(i) {
                     Choice::Move(l) => Some(l),

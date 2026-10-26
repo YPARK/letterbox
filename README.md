@@ -324,7 +324,7 @@ of them, and offers a new label by that name; the last picks where on the
 map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
-`←` and `→` go round them, and back to none chosen; a click picks one, and
+`←` and `→` go round them, and back to none chosen; Emacs's keys do too: `C-n` and `C-p` down and up, `C-f` and `C-b` round, `C-v` and `M-v` a page, `M-<` and `M->` to either end, and `C-g` as `esc`; a click picks one, and
 again leaves it. Nothing is done until `$`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the

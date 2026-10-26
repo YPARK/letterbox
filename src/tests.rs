@@ -7821,6 +7821,50 @@ fn the_keys_of_the_inbox_looked_through_lose_nothing_and_act_on_the_one_picked()
     assert_ne!(s.dots[picked].flags.seen, seen);
 }
 
+#[test]
+fn the_inbox_looked_through_takes_emacs_keys() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let at = |app: &App| {
+        app.map
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .find(app.review.as_ref().unwrap().picked.as_ref().unwrap())
+    };
+    assert_eq!(at(&app), Some(rows[0]));
+    // C-n and C-p, down and up; new mail is not begun.
+    press(&mut app, &["<c-n>", "<c-n>"]);
+    assert_eq!(at(&app), Some(rows[2]));
+    assert!(app.compose.is_none());
+    press(&mut app, &["<c-p>"]);
+    assert_eq!(at(&app), Some(rows[1]));
+    // M-> the last, M-< the first; C-v a page down, M-v back up.
+    let meta = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+    app.key(meta('>'));
+    assert_eq!(at(&app), rows.last().copied());
+    app.key(meta('<'));
+    assert_eq!(at(&app), Some(rows[0]));
+    press(&mut app, &["<c-v>"]);
+    let paged = rows.iter().position(|&r| Some(r) == at(&app)).unwrap();
+    assert!(paged > 1, "{paged}");
+    app.key(meta('v'));
+    assert_eq!(at(&app), Some(rows[0]));
+    // C-f and C-b round what may be done with it, as → and ←; nothing is
+    // forwarded.
+    press(&mut app, &["<c-f>"]);
+    assert_ne!(app.chosen(rows[0]), None);
+    assert!(app.compose.is_none());
+    press(&mut app, &["<c-b>"]);
+    assert_eq!(app.chosen(rows[0]), None);
+    // C-g, as esc: back to the map, all of it kept.
+    press(&mut app, &["<c-g>"]);
+    assert_eq!(app.focus, app::Focus::List);
+    assert!(app.review.is_some());
+}
+
 // ---- What you throw away, learnt ----
 
 /// A message from `address` about `subject`, by `id`.
