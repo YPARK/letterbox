@@ -74,11 +74,9 @@ pub enum Act {
     SwitchView,
     PreviousCluster,
     NextCluster,
-    /// The map laid out by another lens, back as far as another time, or
-    /// coloured another way.
+    /// The map laid out by another lens, or back as far as another time.
     Lens,
     Since,
-    Colours,
     /// The areas with nothing new dimmed, or not.
     NewOnly,
     /// The cluster of the message picked marked, or let go.
@@ -143,7 +141,6 @@ use Pane::{Attaching, List, Map, Picking, Reader, Review as Reviewing, Side, Vie
 pub const VIEW: &[(char, Act, &str)] = &[
     ('w', Lens, "lens"),
     ('t', Since, "since"),
-    ('c', Colours, "colour"),
     ('r', ShowRead, "read mail"),
     ('s', ShowSent, "sent mail"),
     ('f', Unfiled, "not yet filed"),
@@ -451,8 +448,8 @@ pub const KEYS: &[Binding] = &[
         keys: &[("z", ZoomIn), ("Z", ZoomOut), ("0", ZoomAll)],
         name: "z Z 0",
         hint: "z/Z",
-        foot: &[(Map, "zoom")],
-        help: "in the map, look nearer, about the message picked, or farther; 0 all of it. Farther than all of it, the clusters are a mosaic, each a block as big as how many it holds, beside those it lies by: ⏎ or a click goes into it, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; esc goes out a level. The wheel zooms about where it is; what is seen follows the message picked",
+        foot: &[(Map, "in/out")],
+        help: "in the map, a mosaic of the clusters, each a block as big as how many it holds, beside those it lies by: z, ⏎ or a click goes into the block picked, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; Z or esc goes out a level, 0 to all the clusters. The wheel up over a block goes into it, and down out a level",
     },
     Binding {
         keys: &[("i", Review)],
@@ -473,14 +470,14 @@ pub const KEYS: &[Binding] = &[
         name: ",",
         hint: ",",
         foot: &[(Map, "view")],
-        help: "in the map, what it shows and how: w its lens, t how far back, c its colours, r read mail, s sent mail, f only the mail not yet filed, n the areas with nothing new dimmed, l lay it out again",
+        help: "in the map, what it shows and how: w its lens, t how far back, r read mail, s sent mail, f only the mail not yet filed, n the areas with nothing new dimmed, l lay it out again",
     },
     Binding {
         keys: &[("v", Mark)],
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go; m, d, e, u and s then act on all of it, and esc lets it go",
+        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go; m, d, e, u and s then act on all of it, and esc lets it go",
     },
     // The message being written: edit's keys.
     Binding {

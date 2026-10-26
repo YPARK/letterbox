@@ -761,17 +761,11 @@ fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (Rect, Target
     use crate::keymap::Act;
     let on = |b: bool| if b { "on" } else { "off" };
     let shown = |hidden: bool| if hidden { "hidden" } else { "shown" };
-    let colour = match map.colour {
-        crate::map::Colour::Angle => "what it is about",
-        crate::map::Colour::Cursor => "how near the one picked",
-        crate::map::Colour::State => "its state",
-    };
     let mut lines = vec![Line::raw("")];
     for &(key, act, what) in keymap::VIEW {
         let now = match act {
             Act::Lens => map.lens.name(),
             Act::Since => map.since.name(),
-            Act::Colours => colour,
             Act::ShowRead => shown(map.hide_read),
             Act::ShowSent => shown(map.hide_sent),
             Act::Unfiled => {
@@ -1848,23 +1842,21 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// The map, in the list's place: a legend above, each message a cell, the
-/// clusters' anchors, the message picked named beside it, and what the
-/// colour says below.
+/// The map, in the list's place: a legend above, the clusters as a
+/// mosaic, or one gone into, its parts as one or its threads as a tree,
+/// and how faithful it is below.
 fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
-    use crate::map::{Colour, Focused};
+    use crate::map::Focused;
     let t = app.theme;
     f.render_widget(Block::new().style(Style::new().bg(t.page)), area);
     app.targets.push((area, Target::List));
-    app.map.cells.clear();
-    app.map.drawn.clear();
-    app.map.places.clear();
-    app.map.anchors.clear();
     if area.height == 0 || area.width == 0 {
         return;
     }
     let dim = Style::new().fg(t.dim);
-    let foot_h = u16::from(area.height >= 4);
+    // Below the map, the message picked, and how faithful it is: a line
+    // each, or the second alone where there is little room.
+    let foot_h = u16::from(area.height >= 4) + u16::from(area.height >= 10);
     let [legend, canvas, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -1923,10 +1915,8 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some((root, _, level)) = &level {
         let (crate::forest::Level::Mosaic(way) | crate::forest::Level::Tree(way)) = level;
         what = format!(" · {}{what}", root.names(way).join(" › "));
-    } else if app.map.clusters {
+    } else {
         what = format!(" · its clusters{what}");
-    } else if app.map.scale() > 1.0 {
-        what = format!(" · ×{:.1} nearer{what}", app.map.scale());
     }
     if unread > 0 {
         what.push_str(&format!(", {unread} unread"));
@@ -1950,11 +1940,9 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     } else if app.map.tree.is_some() {
         "   h out  l in  j/k along  ⏎ read  esc out  • one  ● more"
     } else if heading.is_some() {
-        "   orange where the Inbox goes, the more the brighter  ··· where the one picked goes"
-    } else if app.map.clusters {
-        "   ▦ a block each, as big as it holds, by those alike  ▀ unread  ◆ label  ◇ cluster"
+        "   orange where the Inbox goes, the more the brighter"
     } else {
-        "   • one  ● a few  ⬤ many  ▹ sent  ⚑ flag  ▪ yours  ◆ label  ◇ cluster"
+        "   ▦ a block each, as big as it holds, by those alike  ⏎ in  ▀ unread  ◆ label  ◇ cluster"
     };
     let used: usize = head.iter().map(|h| h.content.width()).sum();
     if used + key.width() <= legend.width as usize {
@@ -1964,36 +1952,45 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let explained = match s.faithfulness {
         _ if heading.is_some() => heading_said(heading.as_ref().unwrap(), &s),
         Some(_) if app.map.preview.is_some() => {
-            " laid out again, a trail from where each was: ⏎ keeps it, esc drops it".to_string()
+            " laid out again, the blocks where they would be: ⏎ keeps it, esc drops it".to_string()
         }
         Some(faith) if faith < 0.7 => format!(
-            " {:.0}% faithful: M-r lays it out again · {}",
-            faith * 100.0,
-            app.map.colour.explain()
+            " {:.0}% faithful: M-r lays it out again, so the blocks lie by those alike",
+            faith * 100.0
         ),
         Some(faith) => format!(
-            " {:.0}% faithful · {}",
-            faith * 100.0,
-            app.map.colour.explain()
+            " {:.0}% faithful: the blocks lie by those alike",
+            faith * 100.0
         ),
-        None => format!(" {}", app.map.colour.explain()),
+        None => String::new(),
     };
-    if foot_h > 0 {
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                clip(&explained, foot.width as usize),
-                Style::new().fg(t.faint),
-            )),
-            foot,
-        );
+    let room = foot.width as usize;
+    let mut lines = Vec::new();
+    // The message picked, what the keys act on.
+    if foot_h > 1 {
+        let picked = app.map.picked().map(|i| &s.dots[i]).map(|d| {
+            let who = if d.from.is_empty() {
+                &d.address
+            } else {
+                &d.from
+            };
+            format!(" ▸ {who} — {}", d.subject)
+        });
+        lines.push(Line::styled(
+            clip(&picked.unwrap_or_default(), room),
+            Style::new().fg(t.title),
+        ));
     }
-    let Some(old) = &s.at else {
+    if foot_h > 0 {
+        lines.push(Line::styled(
+            clip(&explained, room),
+            Style::new().fg(t.faint),
+        ));
+        f.render_widget(Paragraph::new(lines), foot);
+    }
+    if s.at.is_none() {
         return say(f, "laying the map out…");
-    };
-    // Laid out again and not yet kept, it is drawn where it would be, with
-    // a trail from where each message was.
-    let preview = app.map.preview.clone().filter(|p| p.len() == old.len());
-    let at = preview.as_ref().unwrap_or(old);
+    }
     if shown.is_empty() {
         return say(
             f,
@@ -2008,429 +2005,23 @@ fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     app.targets.push((canvas, Target::Map));
-    // Where each message goes: the bounds of what is shown, laid onto the
-    // canvas, a column clear at each side.
-    let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-    for &i in &shown {
-        for p in std::iter::once(at[i]).chain(preview.as_ref().map(|_| old[i])) {
-            x0 = x0.min(p[0]);
-            x1 = x1.max(p[0]);
-            y0 = y0.min(p[1]);
-            y1 = y1.max(p[1]);
-        }
-    }
-    let (w, h) = (canvas.width.saturating_sub(2).max(1), canvas.height.max(1));
-    let view = crate::map::View {
-        x: canvas.x + 1,
-        y: canvas.y,
-        w,
-        h,
-        bounds: [x0, x1, y0, y1],
-    };
-    app.map.view = Some(view);
-    let picked = app.map.picked();
-    // Zoomed in, what is seen follows the message picked.
-    if let Some(p) = picked.filter(|p| shown.contains(p)) {
-        app.map.follow(view.share(at[p]));
-    }
-    let (scale, centre) = app
-        .map
-        .zoom
-        .map_or((1.0, [0.5, 0.5]), |z| (z.scale, z.centre));
-    // Each place as a cell, on the screen or past it, as zoomed.
-    let place = |p: [f32; 2]| -> (i32, i32) {
-        let f = view.share(p);
-        let seen = |a: usize| (f[a] - centre[a]) * scale + 0.5;
-        (
-            i32::from(view.x) + (seen(0) * f32::from(w - 1)).round() as i32,
-            i32::from(view.y) + (seen(1) * f32::from(h - 1)).round() as i32,
-        )
-    };
-    let on_screen = |(x, y): (i32, i32)| -> Option<(u16, u16)> {
-        let inside = x >= i32::from(view.x)
-            && x < i32::from(view.x + w)
-            && y >= i32::from(view.y)
-            && y < i32::from(view.y + h);
-        inside.then_some((x as u16, y as u16))
-    };
-    let cell = |p: [f32; 2]| on_screen(place(p));
-    for &i in &shown {
-        let at_cell = place(at[i]);
-        app.map.places.insert(i, at_cell);
-        if let Some(c) = on_screen(at_cell) {
-            app.map.cells.insert(i, c);
-            app.map.drawn.entry(c).or_default().push(i);
-        }
-    }
     if app.map.tree.is_some() {
-        app.map.drawn.clear();
         return tree_pane(f, app, &s, canvas, now);
     }
-    if app.map.clusters {
-        app.map.drawn.clear();
-        return cluster_mosaic(f, app, &s, &shown, canvas, now);
-    }
-    // What has anything new, by cluster: the rest dimmed, when asked.
-    let lively: std::collections::BTreeSet<usize> = shown
-        .iter()
-        .filter(|&&i| app.map.is_new(&s.dots[i], now))
-        .filter_map(|&i| s.clustering.of.get(i).copied())
-        .collect();
-    let ground = t.ground();
-    let found: Option<Vec<bool>> = {
-        let query = app.query.clone();
-        app.map.hits(&query).map(|h| h.matched.clone())
-    };
-    let marked: std::collections::BTreeSet<usize> = app
-        .map
-        .region
-        .iter()
-        .flat_map(|r| r.keys.iter().filter_map(|k| s.find(k)))
-        .collect();
-    let buf = f.buffer_mut();
-    if preview.is_some() {
-        let trail = Style::new().fg(t.rule).bg(t.page);
-        for &i in &shown {
-            let (Some(from), Some(to)) = (cell(old[i]), cell(at[i])) else {
-                continue;
-            };
-            let steps = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
-            for k in 1..steps {
-                let along = f32::from(k) / f32::from(steps);
-                let between = |a: u16, b: u16| {
-                    (f32::from(a) + along * (f32::from(b) - f32::from(a))).round() as u16
-                };
-                let (x, y) = (between(from.0, to.0), between(from.1, to.1));
-                if !app.map.drawn.contains_key(&(x, y)) {
-                    buf[(x, y)].set_char('·').set_style(trail);
-                }
-            }
-        }
-    }
-    for (&(x, y), members) in &app.map.drawn {
-        let first = picked.filter(|p| members.contains(p)).unwrap_or(members[0]);
-        let d = &s.dots[first];
-        // A dot as big as how many it holds; one alone flagged, labelled by
-        // you or sent, by its own mark.
-        let glyph = match members.len() {
-            1 if d.flags.flagged => '⚑',
-            1 if d.mine => '▪',
-            1 if d.system.sent => '▹',
-            1 => '•',
-            2..=4 => '●',
-            _ => '⬤',
-        };
-        let unread = members.iter().any(|&i| !s.dots[i].flags.seen);
-        let mut colour = match app.map.colour {
-            Colour::Angle => t.hue(s.hues[first]),
-            Colour::Cursor => match picked {
-                Some(p) => {
-                    let deg = crate::model::degrees(&s.model.vectors[first], &s.model.vectors[p]);
-                    crate::theme::mix(t.accent, t.rule, deg / 90.0)
-                }
-                None => t.dim,
-            },
-            Colour::State if !d.flags.seen => t.accent,
-            Colour::State if d.flags.flagged => t.flag,
-            Colour::State => t.dim,
-        };
-        let in_focus = members.iter().any(|&i| app.map.in_focus(i));
-        let quiet = app.map.new_only
-            && !members
-                .iter()
-                .any(|i| s.clustering.of.get(*i).is_some_and(|c| lively.contains(c)));
-        // Searched for, what holds it is lit and the rest let fade.
-        let hit = found.as_ref().map(|m| members.iter().any(|&i| m[i]));
-        if !in_focus || quiet || hit == Some(false) {
-            colour = t.rule;
-        } else if let Some(h) = &heading {
-            // The Inbox, blue, and each cluster as much of it goes there.
-            let inbox = members
-                .iter()
-                .any(|&i| s.dots[i].system.inbox && !s.dots[i].system.sent);
-            colour = match s.group_of(first).map(|g| h.heat(g.id)) {
-                _ if inbox => t.accent,
-                Some(heat) if heat > 0.0 => heated(&t, heat),
-                _ => t.rule,
-            };
-        } else if members
-            .iter()
-            .all(|&i| crate::map::Map::is_old(&s.dots[i], now))
-        {
-            colour = t.faint;
-        } else if !unread && app.map.colour != Colour::State {
-            // Read, softer: unread is what stands out.
-            colour = crate::theme::mix(colour, t.page, 0.4);
-        }
-        let new_here = in_focus && members.iter().any(|&i| app.map.is_new(&s.dots[i], now));
-        let mut style = if new_here {
-            Style::new().fg(ground).bg(colour)
-        } else {
-            Style::new().fg(colour).bg(t.page)
-        };
-        if !new_here && members.iter().any(|i| marked.contains(i)) {
-            style = style.bg(t.row);
-        }
-        if hit == Some(true) || unread {
-            style = style.bold();
-        }
-        if picked.is_some_and(|p| members.contains(&p)) {
-            style = Style::new().fg(t.title).bg(t.focus).bold();
-        }
-        buf[(x, y)].set_char(glyph).set_style(style);
-    }
-    // A box being drawn, or what is marked, drawn round.
-    let corners = |(a, b): ((u16, u16), (u16, u16))| {
-        ((a.0.min(b.0), a.1.min(b.1)), (a.0.max(b.0), a.1.max(b.1)))
-    };
-    let round = app
-        .map
-        .drag
-        .filter(|(a, b)| a != b)
-        .map(corners)
-        .or_else(|| app.map.region.as_ref().and_then(|r| r.boxed))
-        .or_else(|| {
-            let cells: Vec<(u16, u16)> = marked
-                .iter()
-                .filter_map(|i| app.map.cells.get(i).copied())
-                .collect();
-            let x0 = cells.iter().map(|c| c.0).min()?;
-            let x1 = cells.iter().map(|c| c.0).max()?;
-            let y0 = cells.iter().map(|c| c.1).min()?;
-            let y1 = cells.iter().map(|c| c.1).max()?;
-            Some((
-                (
-                    x0.saturating_sub(1).max(canvas.x),
-                    y0.saturating_sub(1).max(canvas.y),
-                ),
-                (
-                    (x1 + 1).min(canvas.right() - 1),
-                    (y1 + 1).min(canvas.bottom() - 1),
-                ),
-            ))
-        });
-    if let Some(((x0, y0), (x1, y1))) = round {
-        let edge = Style::new().fg(t.accent).bg(t.page);
-        let inside = |x: u16, y: u16| {
-            x >= canvas.x && x < canvas.right() && y >= canvas.y && y < canvas.bottom()
-        };
-        for x in x0..=x1 {
-            for (y, glyph) in [(y0, '─'), (y1, '─')] {
-                if inside(x, y) && !app.map.drawn.contains_key(&(x, y)) {
-                    buf[(x, y)].set_char(glyph).set_style(edge);
-                }
-            }
-        }
-        for y in y0..=y1 {
-            for x in [x0, x1] {
-                if inside(x, y) && !app.map.drawn.contains_key(&(x, y)) {
-                    buf[(x, y)].set_char('│').set_style(edge);
-                }
-            }
-        }
-        for (x, y, glyph) in [(x0, y0, '┌'), (x1, y0, '┐'), (x0, y1, '└'), (x1, y1, '┘')] {
-            if inside(x, y) {
-                buf[(x, y)].set_char(glyph).set_style(edge);
-            }
-        }
-    }
-    // Each cluster's anchor, at the middle of what of it is drawn: a label's
-    // in its hue, one not yet a label tinted, with its words.
-    let mut taken: Vec<(u16, u16, u16)> = Vec::new();
-    let mut target: Option<(u16, u16)> = None;
-    for g in &s.groups {
-        let cells: Vec<(u16, u16)> = g
-            .core
-            .iter()
-            .filter_map(|i| app.map.cells.get(i).copied())
-            .collect();
-        if cells.is_empty() {
-            continue;
-        }
-        let n = cells.len() as f32;
-        let mx = cells.iter().map(|c| f32::from(c.0)).sum::<f32>() / n;
-        let my = cells.iter().map(|c| f32::from(c.1)).sum::<f32>() / n;
-        // Where the Inbox goes, how many go to it; where the one picked
-        // goes, its words too, those it shares with it lit.
-        let going = heading
-            .as_ref()
-            .and_then(|h| h.to.get(&g.id))
-            .map_or(0, crate::app::Going::all);
-        let bound_here = heading
-            .as_ref()
-            .is_some_and(|h| h.picked == Some(crate::app::Bound::To(g.id)));
-        let mut name = clip(&g.name(), 22);
-        if going > 0 {
-            name = format!("{name} ← {going}");
-        }
-        let words: Vec<(String, bool)> = match picked {
-            Some(p) if bound_here && !g.words.is_empty() => {
-                let d = &s.dots[p];
-                let lit = crate::map::shared(&format!("{} {}", d.subject, d.preview), &g.words);
-                g.words.iter().cloned().zip(lit).take(4).collect()
-            }
-            _ => Vec::new(),
-        };
-        let said_words: usize = words.iter().map(|(w, _)| w.width() + 1).sum();
-        let width =
-            (3 + 1 + name.width() + if words.is_empty() { 0 } else { 2 + said_words }) as u16;
-        let left = (mx.round() as u16)
-            .saturating_sub(1)
-            .max(canvas.x)
-            .min(canvas.right().saturating_sub(width.min(canvas.width)));
-        let mut row = None;
-        for dy in [0i32, 1, -1, 2, -2, 3, -3] {
-            let y = my.round() as i32 + dy;
-            if y < i32::from(canvas.y) || y >= i32::from(canvas.bottom()) {
-                continue;
-            }
-            let y = y as u16;
-            let clear = taken
-                .iter()
-                .all(|&(tx, ty, tw)| ty != y || left + width <= tx || tx + tw <= left);
-            if clear {
-                row = Some(y);
-                break;
-            }
-        }
-        let Some(y) = row else {
-            continue;
-        };
-        taken.push((left, y, width));
-        let dimmed = !matches!(app.map.focused, Focused::All | Focused::Cluster(_))
-            || matches!(app.map.focused, Focused::Cluster(id) if id != g.id);
-        let (chip, chip_style, name_style) = match &g.label {
-            Some(_) => (
-                " ◆ ",
-                Style::new().fg(ground).bg(t.hue(g.hue)).bold(),
-                Style::new().fg(t.title).bg(t.page).bold(),
-            ),
-            None => (
-                " ◇ ",
-                Style::new().fg(t.hue(g.hue)).bg(t.row),
-                Style::new().fg(t.soft).bg(t.page),
-            ),
-        };
-        let (chip_style, name_style) = match &heading {
-            _ if dimmed => (chip_style, Style::new().fg(t.dim).bg(t.page)),
-            Some(_) if bound_here => (
-                Style::new().fg(ground).bg(t.flag).bold(),
-                Style::new().fg(ground).bg(t.flag).bold(),
-            ),
-            Some(h) if going > 0 => (
-                Style::new().fg(ground).bg(heated(&t, h.heat(g.id))).bold(),
-                Style::new().fg(t.flag).bg(t.page).bold(),
-            ),
-            Some(_) => (
-                Style::new().fg(t.dim).bg(t.row),
-                Style::new().fg(t.dim).bg(t.page),
-            ),
-            None => (chip_style, name_style),
-        };
-        let mut spans = vec![
-            Span::styled(chip, chip_style),
-            Span::styled(format!(" {name}"), name_style),
-        ];
-        if !words.is_empty() {
-            spans.push(Span::styled(" ·", Style::new().fg(t.faint).bg(t.page)));
-            for (w, lit) in words {
-                let style = if lit {
-                    Style::new().fg(t.flag).bg(t.page).bold().underlined()
-                } else {
-                    Style::new().fg(t.dim).bg(t.page)
-                };
-                spans.push(Span::styled(format!(" {w}"), style));
-            }
-        }
-        if bound_here {
-            target = Some((left + 1, y));
-        }
-        let line = Line::from(spans);
-        let spot = Rect {
-            x: left,
-            y,
-            width: width.min(canvas.right().saturating_sub(left)),
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(line), spot);
-        app.map.anchors.push((spot.x, spot.y, spot.width, g.id));
-        app.targets.push((
-            Rect {
-                width: 3.min(spot.width),
-                ..spot
-            },
-            Target::Anchor(g.id),
-        ));
-    }
-    // From the message picked to where it goes, a trail, over what is
-    // empty.
-    if let (Some(p), Some(to)) = (picked, target)
-        && let Some(&from) = app.map.cells.get(&p)
-    {
-        let buf = f.buffer_mut();
-        let trail = Style::new().fg(t.flag).bg(t.page);
-        let steps = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
-        for k in 1..steps {
-            let along = f32::from(k) / f32::from(steps);
-            let between = |a: u16, b: u16| {
-                (f32::from(a) + along * (f32::from(b) - f32::from(a))).round() as u16
-            };
-            let (x, y) = (between(from.0, to.0), between(from.1, to.1));
-            if buf[(x, y)].symbol() == " " {
-                buf[(x, y)].set_char('·').set_style(trail);
-            }
-        }
-    }
-    // The message picked, named beside it: its sender, or whom it was
-    // sent to, and its subject; where it goes, the words it shares with it
-    // lit.
-    let words_there: Vec<String> = match heading.as_ref().and_then(|h| h.picked) {
-        Some(crate::app::Bound::To(id)) => s.group(id).map_or(Vec::new(), |g| {
-            g.words.iter().cloned().chain(g.label.clone()).collect()
-        }),
-        _ => Vec::new(),
-    };
-    if let Some(p) = picked
-        && let Some(&(x, y)) = app.map.cells.get(&p)
-    {
-        let d = &s.dots[p];
-        let from = if d.system.sent {
-            format!("to {}", d.to.join(", "))
-        } else if d.from.is_empty() {
-            d.address.clone()
-        } else {
-            d.from.clone()
-        };
-        let said = format!(" {from} — {} ", d.subject);
-        let room_right = canvas.right().saturating_sub(x + 1) as usize;
-        let room_left = x.saturating_sub(canvas.x) as usize;
-        let (said, left) = if said.width() <= room_right || room_right >= room_left {
-            let said = clip(&said, room_right);
-            (said, x + 1)
-        } else {
-            let said = clip(&said, room_left);
-            let w = said.width() as u16;
-            (said, x.saturating_sub(w))
-        };
-        let w = said.width() as u16;
-        if w > 0 {
-            let base = Style::new().fg(t.title).bg(t.page);
-            f.render_widget(
-                Paragraph::new(Line::from(lit_words(
-                    &said,
-                    &words_there,
-                    base,
-                    base.fg(t.flag).bold().underlined(),
-                ))),
-                Rect {
-                    x: left,
-                    y,
-                    width: w,
-                    height: 1,
-                },
-            );
-        }
-    }
+    cluster_mosaic(f, app, &s, &shown, canvas, now);
+}
+
+/// Where each message lies on the map: as laid out again, while that is
+/// shown to be kept or dropped; else as it is.
+fn laid_out(app: &App, s: &crate::map::Snapshot) -> Option<Vec<crate::model::Point>> {
+    let at = s.at.as_ref()?;
+    Some(
+        app.map
+            .preview
+            .clone()
+            .filter(|p| p.len() == at.len())
+            .unwrap_or_else(|| at.clone()),
+    )
 }
 
 /// From grey to orange, as `heat` goes from none to the most.
@@ -2461,33 +2052,6 @@ fn heading_said(h: &crate::app::Heading, s: &crate::map::Snapshot) -> String {
         }
     }
     format!(" where the Inbox goes: {}", said.join(", "))
-}
-
-/// `text` as spans, each of its words among `words`, as tokens are made of
-/// them, in `lit`, the rest in `base`.
-fn lit_words(text: &str, words: &[String], base: Style, lit: Style) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut run = String::new();
-    let mut alnum = false;
-    let flush = |run: &mut String, alnum: bool, spans: &mut Vec<Span<'static>>| {
-        if run.is_empty() {
-            return;
-        }
-        let shared = alnum && crate::map::shared(run, words).contains(&true);
-        spans.push(Span::styled(
-            std::mem::take(run),
-            if shared { lit } else { base },
-        ));
-    };
-    for c in text.chars() {
-        if c.is_alphanumeric() != alnum {
-            flush(&mut run, alnum, &mut spans);
-            alnum = c.is_alphanumeric();
-        }
-        run.push(c);
-    }
-    flush(&mut run, alnum, &mut spans);
-    spans
 }
 
 /// A cluster opened as its tree, from the left: the cluster, its parts,
@@ -2750,7 +2314,7 @@ fn cluster_mosaic(
     now: i64,
 ) {
     use crate::map::Focused;
-    let Some(at) = s.at.as_ref() else {
+    let Some(at) = laid_out(app, s) else {
         return;
     };
     let heading = app.heading();
@@ -2779,7 +2343,7 @@ fn cluster_mosaic(
             target: Target::Anchor(g.id),
             chip: if g.label.is_some() { "◆ " } else { "◇ " },
             name: g.name(),
-            centre: middle_of(at, middle),
+            centre: middle_of(&at, middle),
             hue: g.hue,
             colour: heading.as_ref().map(|h| match h.heat(g.id) {
                 heat if heat > 0.0 => heated(&app.theme, heat),
@@ -2819,7 +2383,7 @@ fn parts_mosaic(
     canvas: Rect,
     now: i64,
 ) {
-    let (Some(at), Some(parent)) = (s.at.as_ref(), root.at(above)) else {
+    let (Some(at), Some(parent)) = (laid_out(app, s), root.at(above)) else {
         return;
     };
     let mut tiles = Vec::new();
@@ -2837,7 +2401,7 @@ fn parts_mosaic(
             chip: "",
             name: b.name.clone(),
             members: b.messages.clone(),
-            centre: middle_of(at, &b.messages),
+            centre: middle_of(&at, &b.messages),
             hue: sin.atan2(cos).to_degrees().rem_euclid(360.0),
             colour: None,
             focus: true,
@@ -2908,25 +2472,40 @@ fn mosaic(
         .iter()
         .map(|b| found.as_ref().map(|m| count(&b.members, &|i| m[i])))
         .collect();
+    // What each holds that is marked, to act on all of it.
+    let region: std::collections::HashSet<usize> = app
+        .map
+        .region
+        .iter()
+        .flat_map(|r| r.keys.iter().filter_map(|k| s.find(k)))
+        .collect();
+    let marks: Vec<usize> = tiles
+        .iter()
+        .map(|b| count(&b.members, &|i| region.contains(&i)))
+        .collect();
     let lit: Vec<bool> = (0..tiles.len())
         .map(|k| tiles[k].focus && hits[k] != Some(0) && !(app.map.new_only && new[k] == 0))
         .collect();
     // Tiled again only when what is shown, or the canvas, has changed: a
     // message to a half of a cell, as square as a terminal's cells halved.
-    let items: Vec<(usize, usize, [f32; 2])> = match s.at.as_ref() {
-        Some(at) => tiles
-            .iter()
-            .enumerate()
-            .flat_map(|(k, b)| b.members.iter().map(move |&i| (i, k, at[i])))
-            .collect(),
-        None => return,
+    let Some(at) = laid_out(app, s) else {
+        return;
     };
+    let items: Vec<(usize, usize, [f32; 2])> = tiles
+        .iter()
+        .enumerate()
+        .flat_map(|(k, b)| {
+            let at = &at;
+            b.members.iter().map(move |&i| (i, k, at[i]))
+        })
+        .collect();
     let tiled = (
         s as *const crate::map::Snapshot as usize,
         items.iter().map(|it| it.0).collect::<Vec<_>>(),
         canvas.width,
         canvas.height,
         level,
+        app.map.preview.as_ref().map(|p| p.as_ptr() as usize),
     );
     let mosaic = match &app.map.mosaic {
         Some((was, m)) if *was == tiled => m.clone(),
@@ -2975,7 +2554,8 @@ fn mosaic(
         ]
     };
     let gutters = w as f32 / cols >= 3.0 && h as f32 / rows >= 3.0;
-    // Of a half cell: none, a message read, or one lit up.
+    // Of a half cell: none, a message read, one lit up, or the one picked.
+    let picked_one = app.map.picked();
     let tone = |col: i64, half: i64| -> u8 {
         if marked[half as usize * w + col as usize] {
             return 2;
@@ -2987,7 +2567,11 @@ fn mosaic(
         if gutters && (grid(col + 1, half)[0] != at[0] || grid(col, half + 1)[1] != at[1]) {
             return 0;
         }
-        if lit_up(i) { 2 } else { 1 }
+        match () {
+            _ if Some(i) == picked_one => 3,
+            _ if lit_up(i) => 2,
+            _ => 1,
+        }
     };
     // Each block's colour: its own, or its hue; grey where it is not lit.
     // Its cells in a faint pastel of it, less faint picked, its edge a box
@@ -3012,7 +2596,11 @@ fn mosaic(
         .zip(&strong)
         .map(|(b, &c)| mix(c, paper, if picked == Some(b.id) { 0.45 } else { 0.7 }))
         .collect();
-    let edges: Vec<_> = strong.iter().map(|&c| mix(c, paper, 0.4)).collect();
+    let edges: Vec<_> = strong
+        .iter()
+        .zip(&marks)
+        .map(|(&c, &m)| if m > 0 { t.title } else { mix(c, paper, 0.4) })
+        .collect();
     let colour = |col: i64, half: i64| {
         let Some(b) = block_at(col, half) else {
             return t.page;
@@ -3022,6 +2610,7 @@ fn mosaic(
             .all(|(dx, dy)| block_at(col + dx, half + dy) == Some(b));
         match tone(col, half) {
             _ if !inner => edges[b],
+            3 => t.accent,
             2 => strong[b],
             1 => reads[b],
             _ => fills[b],
@@ -3100,6 +2689,8 @@ fn mosaic(
         let mut said = format!("{}", b.members.len());
         match hits[k] {
             _ if b.going > 0 => said.push_str(&format!(" ← {} of the Inbox", b.going)),
+            _ if marks[k] == b.members.len() => said.push_str(" · all marked"),
+            _ if marks[k] > 0 => said.push_str(&format!(" · {} marked", marks[k])),
             Some(h) if h > 0 => said.push_str(&format!(" · {h} found")),
             _ if b.unfiled.is_some() => said.push_str(&format!(" · {}", b.unfiled.unwrap_or(""))),
             _ if new[k] > 0 => said.push_str(&format!(" · {} new", new[k])),

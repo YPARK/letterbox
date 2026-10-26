@@ -5325,12 +5325,12 @@ fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
 
 // ---- the map, on the screen ----
 
-/// A click on the map at `x`, `y`: pressed and let go in the same cell.
-fn map_click(app: &mut App, x: u16, y: u16) {
-    let _ = app::screen(app, 120, 40);
-    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
-    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x, y));
-    app.settle(Duration::from_secs(5));
+/// Read the message picked on the map: its cluster gone into, and its
+/// parts, down to it.
+fn read_on_map(app: &mut App) {
+    for _ in 0..8 {
+        press(app, &["<enter>"]);
+    }
 }
 
 /// The demo, its map shown.
@@ -5388,16 +5388,18 @@ fn the_map_lays_out_every_message_with_its_clusters() {
         s.dots.len()
     );
     let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains("Map · words and people"), "{screen}");
-    assert!(screen.contains("◆  Grant"), "{screen}");
+    assert!(
+        screen.contains("Map · its clusters · words and people"),
+        "{screen}"
+    );
+    assert!(screen.contains("◆ Grant"), "{screen}");
     // No sidebar beside it: what it would say, the map says itself.
     assert!(
         !screen.contains(" DEMO") && !screen.contains("Every cluster"),
         "{screen}"
     );
     assert!(screen.contains("% faithful"), "{screen}");
-    let wide = app::screen(&mut app, 220, 45);
-    assert!(wide.contains("colour is what it is about"), "{wide}");
+    assert!(screen.contains("blocks lie by those alike"), "{screen}");
     // The newest new message is picked, named beside it, and read beside
     // the map once the cursor rests.
     assert_eq!(
@@ -5413,29 +5415,6 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     assert!(
         foot.contains("/ search") && foot.contains("m move to"),
         "{foot}"
-    );
-}
-
-#[test]
-fn the_cursor_moves_to_the_nearest_message_that_way_and_reads_it() {
-    let mut app = demo_map();
-    let _ = app::screen(&mut app, 150, 45);
-    let first = picked_subject(&app);
-    let (x0, _) = app.map.cells[&app.map.picked().unwrap()];
-    press(&mut app, &["l"]);
-    let (x1, _) = app.map.cells[&app.map.picked().unwrap()];
-    assert!(x1 >= x0, "right: {x0} to {x1}");
-    assert_ne!(picked_subject(&app), first);
-    // Read beside the map, once the cursor rests.
-    let read = app.message().map(|m| m.subject.clone());
-    assert_eq!(read, Some(picked_subject(&app)));
-    press(&mut app, &["h"]);
-    let (x2, _) = app.map.cells[&app.map.picked().unwrap()];
-    assert!(x2 <= x1, "left: {x1} to {x2}");
-    let screen = app::screen(&mut app, 150, 45);
-    assert!(
-        screen.contains("Here") && screen.contains("Near it, by angle"),
-        "{screen}"
     );
 }
 
@@ -5489,7 +5468,7 @@ fn the_map_is_narrowed_to_a_cluster_and_listed() {
 }
 
 #[test]
-fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
+fn the_lens_the_time_and_read_mail_are_turned() {
     let mut app = demo_map();
     let all = app.map.shown(jiff::Timestamp::now().as_second()).len();
     // From the view menu, which stays open to change more.
@@ -5515,11 +5494,7 @@ fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
     press(&mut app, &["r"]);
     let unread = app.map.shown(now).len();
     assert_eq!(unread, UNREAD as usize);
-    press(&mut app, &["r", "c"]);
-    assert_eq!(app.map.colour, crate::map::Colour::Cursor);
-    let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains("how near the one picked"), "{screen}");
-    press(&mut app, &["c", "c", "n"]);
+    press(&mut app, &["r", "n"]);
     assert!(app.map.new_only);
     press(&mut app, &["s"]);
     assert!(app.map.hide_sent);
@@ -5529,40 +5504,6 @@ fn the_lens_the_time_the_colour_and_read_mail_are_turned() {
     press(&mut app, &[",", "l"]);
     assert!(matches!(app.dialog, app::Dialog::Closed));
     assert!(app.map.preview.is_some(), "{}", app.status);
-}
-
-#[test]
-fn a_click_on_the_map_picks_and_a_click_on_an_anchor_narrows() {
-    let mut app = demo_map();
-    let _ = app::screen(&mut app, 120, 40);
-    // A cell of several messages: each click picks the next of them.
-    let (&(x, y), members) = app
-        .map
-        .drawn
-        .iter()
-        .find(|(_, m)| m.len() > 1)
-        .or_else(|| app.map.drawn.iter().next())
-        .map(|(c, m)| (c, m.clone()))
-        .unwrap();
-    map_click(&mut app, x, y);
-    assert_eq!(app.map.picked(), Some(members[0]));
-    if members.len() > 1 {
-        map_click(&mut app, x, y);
-        assert_eq!(app.map.picked(), Some(members[1]));
-    }
-    let _ = app::screen(&mut app, 120, 40);
-    let &(_, id) = app
-        .targets
-        .iter()
-        .filter_map(|(r, t)| match t {
-            app::Target::Anchor(id) => Some((r, *id)),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .first()
-        .unwrap();
-    click_at(&mut app, app::Target::Anchor(id));
-    assert_eq!(app.map.focused, crate::map::Focused::Cluster(id));
 }
 
 #[test]
@@ -5691,8 +5632,9 @@ fn v_marks_the_cluster_and_u_marks_it_all_read() {
     let cluster = s.group_of(picked).unwrap();
     assert_eq!(region.keys.len(), cluster.members.len());
     assert!(app.status.contains("marked"), "{}", app.status);
+    // Said on its block.
     let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains('┌') && screen.contains('│'), "{screen}");
+    assert!(screen.contains("· all marked"), "{screen}");
     press(&mut app, &["u"]);
     let seen = map_seen(&app);
     for &i in &cluster.members {
@@ -5715,35 +5657,6 @@ fn v_marks_the_cluster_and_u_marks_it_all_read() {
 }
 
 #[test]
-fn a_box_dragged_on_the_map_marks_what_is_in_it() {
-    let mut app = demo_map();
-    let _ = app::screen(&mut app, 120, 40);
-    let (&first, _) = app.map.drawn.iter().next().unwrap();
-    let (&last, _) = app.map.drawn.iter().next_back().unwrap();
-    let ((x0, y0), (x1, y1)) = (first, last);
-    let (left, right) = (x0.min(x1), x0.max(x1));
-    let (top, bottom) = (y0.min(y1), y0.max(y1));
-    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), left, top));
-    app.mouse(mouse(
-        MouseEventKind::Drag(MouseButton::Left),
-        right,
-        bottom,
-    ));
-    let screen = app::screen(&mut app, 120, 40);
-    assert!(screen.contains('┌'), "drawn as it goes: {screen}");
-    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), right, bottom));
-    let inside = app
-        .map
-        .cells
-        .values()
-        .filter(|&&(x, y)| (left..=right).contains(&x) && (top..=bottom).contains(&y))
-        .count();
-    let region = app.map.region.clone().expect("marked");
-    assert_eq!(region.keys.len(), inside);
-    assert!(inside >= 2);
-}
-
-#[test]
 fn what_is_marked_is_trashed_or_archived_at_once() {
     let mut app = demo_map();
     let s = app.map.snapshot.clone().unwrap();
@@ -5754,10 +5667,7 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
         .map(|d| d.key.clone())
         .collect();
     assert_eq!(builds.len(), 3);
-    app.map.region = Some(crate::map::Region {
-        keys: builds,
-        boxed: None,
-    });
+    app.map.region = Some(crate::map::Region { keys: builds });
     press(&mut app, &["d"]);
     assert!(app.map.region.is_none());
     let s = app.map.snapshot.clone().unwrap();
@@ -5776,10 +5686,7 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
         .filter(|d| d.address == "stay@hotel.example" || d.address == "travel@uni.example")
         .map(|d| d.key.clone())
         .collect();
-    app.map.region = Some(crate::map::Region {
-        keys: hotel,
-        boxed: None,
-    });
+    app.map.region = Some(crate::map::Region { keys: hotel });
     press(&mut app, &["e"]);
     let s = app.map.snapshot.clone().unwrap();
     for d in s
@@ -5794,11 +5701,6 @@ fn what_is_marked_is_trashed_or_archived_at_once() {
             d.subject
         );
     }
-    // A click, pressed and let go in one cell, is no box.
-    let _ = app::screen(&mut app, 120, 40);
-    let (&(x, y), _) = app.map.drawn.iter().next().unwrap();
-    map_click(&mut app, x, y);
-    assert!(app.map.region.is_none());
 }
 
 // ---- filing, from the map ----
@@ -6002,48 +5904,6 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
     assert_eq!(divider(&mut app), narrowest);
 }
 
-#[test]
-fn the_map_zooms_by_keys_and_wheel_and_follows_the_message_picked() {
-    let mut app = demo_map();
-    let _ = app::screen(&mut app, 150, 45);
-    let all = app.map.cells.len();
-    assert_eq!(all, app.map.places.len(), "all of it in sight");
-    let cells_together = app.map.drawn.len();
-    press(&mut app, &["z", "z", "z"]);
-    let _ = app::screen(&mut app, 150, 45);
-    assert!(app.map.scale() > 3.0);
-    assert!(
-        app.map.cells.len() < app.map.places.len(),
-        "some out of sight"
-    );
-    let picked = app.map.picked().unwrap();
-    assert!(
-        app.map.cells.contains_key(&picked),
-        "the one picked in sight"
-    );
-    let screen = app::screen(&mut app, 150, 45);
-    assert!(screen.contains("nearer"), "{screen}");
-    // Moving on past the edge, what is seen follows.
-    for _ in 0..12 {
-        press(&mut app, &["l"]);
-        let _ = app::screen(&mut app, 150, 45);
-        let p = app.map.picked().unwrap();
-        assert!(app.map.cells.contains_key(&p), "followed");
-    }
-    // 0: all of it again.
-    press(&mut app, &["0"]);
-    let _ = app::screen(&mut app, 150, 45);
-    assert!(app.map.zoom.is_none());
-    assert_eq!(app.map.drawn.len(), cells_together);
-    // The wheel, up on the map: nearer, about where it is; down, back.
-    let v = app.map.view.unwrap();
-    let (x, y) = (v.x + v.w / 2, v.y + v.h / 2);
-    app.mouse(mouse(MouseEventKind::ScrollUp, x, y));
-    assert!(app.map.scale() > 1.0);
-    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
-    assert!(app.map.zoom.is_none());
-}
-
 /// How many of the group `id`'s messages the map shows.
 fn shown_of(app: &App, id: u32) -> usize {
     let s = app.map.snapshot.as_ref().unwrap();
@@ -6137,12 +5997,9 @@ fn a_mosaic_gives_each_message_a_cell_and_each_cluster_a_block() {
 #[test]
 fn farther_than_all_of_it_the_clusters_are_a_mosaic_each_a_block_as_big_as_it_holds() {
     let mut app = demo_map();
-    let _ = app::screen(&mut app, 150, 45);
-    press(&mut app, &["Z"]);
     let screen = app::screen(&mut app, 150, 45);
-    assert!(app.map.clusters);
+    assert!(app.map.tree.is_none());
     assert!(screen.contains("its clusters"), "{screen}");
-    assert!(app.map.drawn.is_empty(), "no dots, only blocks");
     let s = app.map.snapshot.clone().unwrap();
     let with_mail = s.groups.iter().filter(|g| shown_of(&app, g.id) > 0).count();
     assert_eq!(app.map.blocks.len(), with_mail, "one block each");
@@ -6150,13 +6007,11 @@ fn farther_than_all_of_it_the_clusters_are_a_mosaic_each_a_block_as_big_as_it_ho
     let areas = block_areas(&app);
     assert_eq!(areas.len(), with_mail, "{areas:?}");
     // Together they fill the map.
-    let v = app.map.view.unwrap();
+    let canvas = map_canvas(&app);
     let filled: u32 = areas.values().sum();
     assert!(
-        filled as f32 >= 0.7 * f32::from(v.w) * f32::from(v.h),
-        "{filled} of {}x{}",
-        v.w,
-        v.h
+        filled as f32 >= 0.7 * f32::from(canvas.width) * f32::from(canvas.height),
+        "{filled} of {canvas:?}"
     );
     for (&a, &area_a) in &areas {
         for (&b, &area_b) in &areas {
@@ -6193,26 +6048,32 @@ fn farther_than_all_of_it_the_clusters_are_a_mosaic_each_a_block_as_big_as_it_ho
     // ⏎ opens it, as its tree.
     press(&mut app, &["<enter>"]);
     let screen = app::screen(&mut app, 150, 45);
-    assert!(!app.map.clusters);
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
     assert_eq!(app.map.focused, crate::map::Focused::Cluster(other));
     let name = s.group(other).unwrap().name();
     assert!(screen.contains(&format!("Map · {name}")), "{screen}");
     assert_eq!(group(&app), other, "a message of it picked");
-    // 0, all of it; z from its clusters, all of it again.
-    press(&mut app, &["0", "Z", "z"]);
-    assert!(!app.map.clusters);
-    assert!(app.map.zoom.is_none());
+    // 0, all of it again.
+    press(&mut app, &["0"]);
+    assert!(app.map.tree.is_none());
+}
+
+/// Where the map was drawn: the canvas clicks on it land in.
+fn map_canvas(app: &App) -> ratatui::layout::Rect {
+    app.targets
+        .iter()
+        .find_map(|&(r, t)| (t == app::Target::Map).then_some(r))
+        .unwrap()
 }
 
 #[test]
 fn a_block_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
     let mut app = demo_map();
     let _ = app::screen(&mut app, 150, 45);
-    let v = app.map.view.unwrap();
-    let (x, y) = (v.x + v.w / 2, v.y + v.h / 2);
+    let canvas = map_canvas(&app);
+    let (x, y) = (canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
     app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
-    assert!(app.map.clusters, "farther than all of it");
+    assert!(app.map.tree.is_none(), "no farther than all of it");
     let _ = app::screen(&mut app, 150, 45);
     let (r, id) = app
         .targets
@@ -6224,24 +6085,116 @@ fn a_block_is_clicked_open_and_the_wheel_goes_out_to_the_clusters_and_back() {
         })
         .unwrap();
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), r.x, r.y));
-    assert!(!app.map.clusters);
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(id));
     let p = app.map.picked().unwrap();
     assert!(app.map.snapshot.as_ref().unwrap().picked_by(id, p));
-    // The wheel out of the tree: the clusters again.
+    // Down to its threads: there the wheel goes along them.
+    let now = jiff::Timestamp::now().as_second();
+    while matches!(
+        app.map.level(now),
+        Some((_, _, crate::forest::Level::Mosaic(_)))
+    ) {
+        press(&mut app, &["<enter>"]);
+    }
     let _ = app::screen(&mut app, 150, 45);
+    let depth = app.map.tree_picked(now).unwrap().1.len();
     app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
-    let _ = app::screen(&mut app, 150, 45);
-    assert!(app.map.tree.is_some(), "the wheel goes along it");
+    assert_eq!(
+        app.map.tree_picked(now).unwrap().1.len(),
+        depth,
+        "along, not out"
+    );
+    // Z out to the clusters.
+    while app.map.tree.is_some() {
+        press(&mut app, &["Z"]);
+    }
+}
+
+#[test]
+fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
+    let mut app = demo_map();
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(app.map.tree.is_none());
+    assert!(screen.contains("its clusters"), "{screen}");
+    let group = |app: &App| {
+        let s = app.map.snapshot.as_ref().unwrap();
+        s.group_of(app.map.picked().unwrap()).unwrap().id
+    };
+    let now = jiff::Timestamp::now().as_second();
+    let depth = |app: &mut App| app.map.tree_picked(now).map(|t| t.1.len());
+    // z goes into the cluster picked, Grant, and deeper, into its parts;
+    // Z out, a level at a time.
+    let s = app.map.snapshot.clone().unwrap();
+    let grant = s
+        .groups
+        .iter()
+        .position(|g| g.label.as_deref() == Some("Grant"))
+        .unwrap();
+    app.map.cursor = Some(s.dots[s.central(grant).unwrap()].key.clone());
+    let id = group(&app);
+    press(&mut app, &["z"]);
+    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(id));
+    assert_eq!(depth(&mut app), Some(1));
+    press(&mut app, &["z"]);
+    assert_eq!(depth(&mut app), Some(2));
     press(&mut app, &["Z"]);
-    assert!(app.map.tree.is_none() && app.map.clusters);
-    // Out to the clusters by the wheel, and in again: all of it.
-    press(&mut app, &["0"]);
-    app.mouse(mouse(MouseEventKind::ScrollDown, x, y));
-    assert!(app.map.clusters);
-    app.mouse(mouse(MouseEventKind::ScrollUp, x, y));
-    assert!(!app.map.clusters);
-    assert!(app.map.zoom.is_none());
+    assert_eq!(depth(&mut app), Some(1));
+    press(&mut app, &["Z"]);
+    assert!(app.map.tree.is_none());
+    // Farther than all of it: the clusters still, never dots.
+    press(&mut app, &["Z", "Z"]);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(app.map.tree.is_none());
+    assert!(screen.contains("its clusters"), "{screen}");
+    assert!(!screen.contains("nearer"), "{screen}");
+    // 0, from deep in, all of it.
+    press(&mut app, &["z", "z", "0"]);
+    assert!(app.map.tree.is_none());
+    // The wheel: up over a block goes into it; down, out again, and no
+    // farther than all of it.
+    let _ = app::screen(&mut app, 150, 45);
+    let (r, other) = app
+        .targets
+        .iter()
+        .find_map(|&(r, t)| match t {
+            app::Target::Anchor(g) if g != id => Some((r, g)),
+            _ => None,
+        })
+        .unwrap();
+    app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
+    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
+    let _ = app::screen(&mut app, 150, 45);
+    app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
+    assert!(app.map.tree.is_none());
+    let _ = app::screen(&mut app, 150, 45);
+    app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
+    assert!(app.map.tree.is_none());
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("its clusters"), "{screen}");
+}
+
+#[test]
+fn the_map_follows_the_message_picked_into_its_cluster() {
+    let (mut app, grant) = grant_tree();
+    let s = app.map.snapshot.clone().unwrap();
+    // A message of another cluster picked, as a search's n picks one: its
+    // cluster gone into, and it picked still.
+    let other = s.groups.iter().position(|g| g.id != grant).unwrap();
+    let i = s.central(other).unwrap();
+    app.map.cursor = Some(s.dots[i].key.clone());
+    let _ = app::screen(&mut app, 150, 45);
+    assert_eq!(app.map.picked(), Some(i));
+    assert_eq!(
+        app.map.tree.as_ref().map(|t| t.id),
+        Some(s.groups[other].id)
+    );
+    // In a cluster, the Inbox looked through: the one read is answered.
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    press(&mut app, &["j", "j", "<enter>", "r"]);
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    let reply = crate::compose::reply_subject(&s.dots[rows[2]].subject);
+    assert!(text.contains(&format!("Subject: {reply}")), "{text}");
 }
 
 /// The demo's map, its Grant opened as its tree, drawn.
@@ -6372,7 +6325,6 @@ fn a_cluster_gone_into_is_a_mosaic_of_its_parts_and_a_part_its_threads() {
     assert!(root.parts);
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("Map · Grant ·"), "{screen}");
-    assert!(app.map.drawn.is_empty(), "no dots");
     assert_eq!(app.map.blocks.len(), root.branches.len(), "a block each");
     assert!(!screen.contains("├─"), "no tree yet\n{screen}");
     // The arrows go from part to part.
@@ -6401,7 +6353,7 @@ fn a_cluster_gone_into_is_a_mosaic_of_its_parts_and_a_part_its_threads() {
     assert_eq!(path(&mut app), other);
     assert!(!app.map.blocks.is_empty());
     press(&mut app, &["<esc>"]);
-    assert!(app.map.tree.is_none() && app.map.clusters);
+    assert!(app.map.tree.is_none());
 }
 
 #[test]
@@ -6440,11 +6392,11 @@ fn the_tree_is_gone_along_into_and_out_of_by_keys_and_clicks() {
     assert_eq!(path(&mut app).len(), 2, "into it");
     // esc out, and out again: the clusters.
     press(&mut app, &["<esc>", "<esc>"]);
-    assert!(app.map.tree.is_none() && app.map.clusters);
+    assert!(app.map.tree.is_none());
     press(&mut app, &["<enter>"]);
     assert!(app.map.tree.is_some());
     press(&mut app, &["<esc>"]);
-    assert!(app.map.tree.is_none() && app.map.clusters);
+    assert!(app.map.tree.is_none());
 }
 
 #[test]
@@ -6466,12 +6418,12 @@ fn letterbox_opens_as_it_was_left_the_list_or_the_map_and_its_clusters() {
     press(&mut app, &["Z"]);
     app.look_file = Some(look.clone());
     app.remember_look();
-    assert_eq!(std::fs::read_to_string(&look).unwrap(), "map clusters\n");
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), "map\n");
     let mut again = demo();
     again.look_file = Some(look.clone());
     again.recall_look();
     assert_eq!(again.map.mode, crate::map::Mode::Map);
-    assert!(again.map.clusters);
+    assert!(again.map.tree.is_none());
     // Left at the list, the list.
     press(&mut again, &["<m-l>"]);
     again.remember_look();
@@ -6523,10 +6475,7 @@ fn c_g_goes_back_as_esc_does_on_the_map_and_its_mosaic() {
     press(&mut app, &["Z", "<enter>"]);
     assert!(app.map.tree.is_some());
     press(&mut app, &["<c-g>"]);
-    assert!(
-        app.map.tree.is_none() && app.map.clusters,
-        "out to the clusters"
-    );
+    assert!(app.map.tree.is_none(), "out to the clusters");
     // A search let go.
     press(&mut app, &["/", "g", "r", "<c-g>"]);
     assert!(!app.searching);
@@ -6572,8 +6521,9 @@ fn m_moves_a_message_onto_a_cluster_and_files_it_under_its_label() {
         .find(|d| d.subject == "Aims page, third pass")
         .unwrap();
     assert!(aims.places.iter().any(|p| p.folder == "Archive"));
-    // Its like are suggested, beside it.
-    press(&mut app, &["<enter>"]);
+    // Its like are suggested, beside it, read: its cluster gone into, down
+    // to it.
+    read_on_map(&mut app);
     let screen = app::screen(&mut app, 150, 60);
     assert!(screen.contains("Would go to Grant too"), "{screen}");
 }
@@ -6588,10 +6538,7 @@ fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
         .filter(|d| d.address == "ci@runner.example")
         .map(|d| d.key.clone())
         .collect();
-    app.map.region = Some(crate::map::Region {
-        keys: builds,
-        boxed: None,
-    });
+    app.map.region = Some(crate::map::Region { keys: builds });
     press(&mut app, &["m", "N"]);
     let app::Dialog::Label(typed) = &app.dialog else {
         panic!("not asked: {}", app.status);
@@ -7412,7 +7359,7 @@ fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
         "{label}"
     );
     app.map.cursor = Some(s.dots[first].key.clone());
-    press(&mut app, &["<enter>"]);
+    read_on_map(&mut app);
     let screen = app::screen(&mut app, 150, 60);
     assert!(screen.contains(&format!("Would go to {label}")), "{screen}");
     // y: filed there.
@@ -7757,28 +7704,10 @@ fn as_the_inbox_is_looked_through_the_map_says_where_it_is_heading() {
     // Drawn: said under the map, and how many go to each label beside it.
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("where the Inbox goes"), "{screen}");
-    assert!(screen.contains("Grant ←"), "{screen}");
-}
-
-#[test]
-fn the_words_a_message_shares_with_where_it_goes_are_found() {
-    let words = vec![
-        "aims".to_string(),
-        "budget".to_string(),
-        "grant".to_string(),
-    ];
-    assert_eq!(
-        crate::map::shared("Re: the Aims page, third pass", &words),
-        vec![true, false, false]
-    );
-    assert_eq!(
-        crate::map::shared("Grant budget, again", &words),
-        vec![false, true, true]
-    );
-    // A word, not a part of one.
-    assert_eq!(
-        crate::map::shared("Disclaims", &words),
-        vec![false, false, false]
+    let going = h.to[&grant].all();
+    assert!(
+        screen.contains(&format!("← {going} of the Inbox")),
+        "{screen}"
     );
 }
 
@@ -8008,11 +7937,13 @@ fn a_message_read_on_the_map_is_the_one_answered_forwarded_and_archived() {
     press(&mut app, &["e"]);
     assert!(dot_labels(&app, &subject).1, "{subject} still in the Inbox");
     assert!(dot_labels(&app, &listed).1, "{listed} still in the Inbox");
-    // The map's message read, the triage closed: answered, too.
+    // The triage closed, a cluster gone into down to a message, read:
+    // that one answered, too.
     press(&mut app, &["i", "<esc>"]);
+    read_on_map(&mut app);
     let p = app.map.picked().unwrap();
     let other = app.map.snapshot.as_ref().unwrap().dots[p].subject.clone();
-    press(&mut app, &["<enter>", "<tab>", "r"]);
+    press(&mut app, &["r"]);
     let reply = format!("Subject: {}", crate::compose::reply_subject(&other));
     assert!(said(&app).contains(&reply), "{}", said(&app));
 }
@@ -10153,7 +10084,6 @@ fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
     let s = app.map.snapshot.clone().unwrap();
     app.map.region = Some(crate::map::Region {
         keys: vec![s.dots[0].key.clone()],
-        boxed: None,
     });
     app.map.moving = Some(vec![s.dots[1].key.clone()]);
     press(&mut app, &["<m-l>"]);

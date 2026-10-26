@@ -131,6 +131,10 @@ pub const PASSPHRASE: usize = 8;
 pub const AGAIN: usize = 9;
 pub const OUTGOING: usize = 10;
 
+/// How long a swipe of the wheel on the map is taken to go on: one level
+/// in or out for it.
+const WHEEL_SWIPE: Duration = Duration::from_millis(300);
+
 /// How many messages of the Inbox looked through a page goes past.
 const REVIEW_PAGE: isize = 10;
 
@@ -965,6 +969,8 @@ pub struct App {
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
     pub quit: bool,
+    /// When the wheel last went in or out a level on the map, and which way.
+    wheeled: Option<(Instant, isize)>,
     /// Whether C-x was pressed, the key after it waited for: C-c quits.
     c_x: bool,
     /// The index the map reads, shared with each account's sync.
@@ -1064,9 +1070,9 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
                 Event::Mouse(m) => {
                     app.mouse(m);
-                    // A box being drawn on the map is drawn as it goes.
-                    stale |= matches!(m.kind, MouseEventKind::Drag(_))
-                        && (app.map.drag.is_some() || app.resizing);
+                    // The line before the message read, dragged, is drawn
+                    // as it goes.
+                    stale |= matches!(m.kind, MouseEventKind::Drag(_)) && app.resizing;
                 }
                 Event::Paste(text) => app.paste(&text),
                 _ => {}
@@ -1219,6 +1225,7 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            wheeled: None,
             c_x: false,
             index: Arc::new(Mutex::new(index)),
             map_off,
@@ -2894,7 +2901,6 @@ impl App {
             Act::Flag => self.toggle(Flag::Flagged),
             Act::Lens
             | Act::Since
-            | Act::Colours
             | Act::NewOnly
             | Act::ShowRead
             | Act::ShowSent
@@ -3322,9 +3328,6 @@ impl App {
                     self.menu = None;
                     return;
                 }
-                if at == Some(Target::Map) && !self.dialog.is_open() {
-                    return self.map_press(m.column, m.row);
-                }
                 return self.click(at);
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
@@ -3336,8 +3339,6 @@ impl App {
                 self.remember_look();
                 return;
             }
-            MouseEventKind::Drag(MouseButton::Left) => return self.map_drag(m.column, m.row),
-            MouseEventKind::Up(MouseButton::Left) => return self.map_release(m.column, m.row),
             MouseEventKind::ScrollDown => 1,
             MouseEventKind::ScrollUp => -1,
             _ => return,
@@ -3357,18 +3358,8 @@ impl App {
             Some(Target::Reader) => self.scroll_by(3 * by),
             // The wheel on the Inbox looked through goes along it.
             Some(Target::ReviewRow(_) | Target::Choose(..)) => self.review_step(by),
-            // The wheel on a cluster's tree goes along it.
-            Some(Target::Map | Target::Branch(_)) if self.map.tree.is_some() => {
-                self.map_step(0, by.signum() as i32)
-            }
-            // The wheel on the map zooms, about where it is.
-            Some(Target::Map | Target::Anchor(_)) => {
-                let factor = if by < 0 {
-                    map::ZOOM_STEP
-                } else {
-                    1.0 / map::ZOOM_STEP
-                };
-                self.map.zoom_at(factor, m.column, m.row);
+            Some(t @ (Target::Map | Target::Anchor(_) | Target::Branch(_))) => {
+                self.map_wheel(t, by)
             }
             _ => {}
         }
@@ -3402,7 +3393,7 @@ impl App {
                     self.focus = Focus::List;
                 }
             }
-            Some(Target::List) => self.focus = Focus::List,
+            Some(Target::List | Target::Map) => self.focus = Focus::List,
             Some(Target::Anchor(id)) => self.anchor_click(id),
             Some(Target::Branch(row)) => self.branch_click(row),
             Some(Target::ReviewRow(row)) => self.review_click(row),
@@ -4302,27 +4293,26 @@ impl App {
                 self.map.tree_in(jiff::Timestamp::now().as_second());
                 return true;
             }
+            // From all of it, z goes into the cluster picked, as ⏎ does.
             Act::ZoomIn => {
-                self.map.zoom_picked(map::ZOOM_STEP);
+                self.open_picked_cluster();
+                return true;
+            }
+            Act::ZoomOut if self.map.tree.is_some() => {
+                self.map.tree_out();
                 return true;
             }
             Act::ZoomOut => {
-                self.map.zoom_picked(1.0 / map::ZOOM_STEP);
+                self.status = "all of it: every cluster, as far out as the map goes".to_string();
                 return true;
             }
             Act::ZoomAll => {
                 self.map.zoom_all();
                 return true;
             }
-            // From farther than all of it, a cluster's block is opened.
-            Act::Open if self.map.clusters => {
-                let id = self
-                    .map
-                    .picked()
-                    .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
-                if let Some(id) = id {
-                    self.map.open_block(id);
-                }
+            // From all of it, the block of the cluster picked is gone into.
+            Act::Open if self.map.tree.is_none() => {
+                self.open_picked_cluster();
                 return true;
             }
             // In a cluster's tree, ⏎ goes into the branch picked, or, a
@@ -4378,7 +4368,7 @@ impl App {
             Act::Trash => self.delete_dot(),
             Act::Archive => {
                 if let Some(dot) = self.dot() {
-                    self.mark(vec![dot.key], None);
+                    self.mark(vec![dot.key]);
                     self.region_archive();
                 }
             }
@@ -4434,10 +4424,6 @@ impl App {
             Act::Since => {
                 self.map.since = self.map.since.next();
                 format!("the map of {}", self.map.since.name())
-            }
-            Act::Colours => {
-                self.map.colour = self.map.colour.next();
-                self.map.colour.explain().to_string()
             }
             Act::ShowRead => {
                 self.map.hide_read = !self.map.hide_read;
@@ -4501,10 +4487,8 @@ impl App {
                 -1 => self.map.tree_out(),
                 _ => self.map.tree_along(dy as isize, now),
             }
-        } else if self.map.clusters {
-            self.map.step_block(dx, dy);
         } else {
-            self.map.step(dx, dy);
+            self.map.step_block(dx, dy);
         }
         if self.side_by_side {
             self.due = Some((Instant::now(), Due::Message));
@@ -4549,7 +4533,6 @@ impl App {
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
         else {
-            self.map.clusters = true;
             return;
         };
         let mut lines = said.lines();
@@ -4559,12 +4542,11 @@ impl App {
                 self.reader_width = w.trim().parse().ok();
             }
         }
-        let mut words = look.split_whitespace();
-        if words.next() != Some("map") || self.map_off.is_some() || self.map_later {
+        if look.split_whitespace().next() != Some("map") || self.map_off.is_some() || self.map_later
+        {
             return;
         }
         self.show_map();
-        self.map.clusters = words.next() == Some("clusters");
     }
 
     /// Throw away, on its own, each message come to an Inbox since it was
@@ -4948,7 +4930,6 @@ impl App {
             return;
         };
         let look = match self.map.mode {
-            Mode::Map if self.map.clusters || self.map.tree.is_some() => "map clusters",
             Mode::Map => "map",
             Mode::List => "list",
         };
@@ -5256,27 +5237,6 @@ impl App {
         self.map_due();
     }
 
-    /// Pick what is drawn in the map's cell at `column`, `row`: its
-    /// message, or, clicked again, the next of those in it.
-    fn map_click(&mut self, column: u16, row: u16) {
-        self.focus = Focus::List;
-        let Some(members) = self.map.drawn.get(&(column, row)).cloned() else {
-            return;
-        };
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        let next = match self.map.clicked {
-            Some((cell, at)) if cell == (column, row) => (at + 1) % members.len(),
-            _ => 0,
-        };
-        self.map.clicked = Some(((column, row), next));
-        self.map.cursor = Some(s.dots[members[next]].key.clone());
-        if self.side_by_side {
-            self.read_dot();
-        }
-    }
-
     /// Mark the cluster of the message picked on the map; or, marked, let
     /// what is marked go.
     fn mark_cluster(&mut self) {
@@ -5295,22 +5255,21 @@ impl App {
             return;
         };
         let keys = g.members.iter().map(|&i| s.dots[i].key.clone()).collect();
-        self.mark(keys, None);
+        self.mark(keys);
     }
 
-    /// Mark the messages `keys`, in the box `boxed` if they were drawn
-    /// round, and say what is done with them.
-    fn mark(&mut self, keys: Vec<crate::index::Key>, boxed: Option<((u16, u16), (u16, u16))>) {
+    /// Mark the messages `keys`, and say what is done with them.
+    fn mark(&mut self, keys: Vec<crate::index::Key>) {
         if keys.is_empty() {
             self.map.region = None;
-            self.status = "nothing marked: the box holds no message".to_string();
+            self.status = "nothing marked".to_string();
             return;
         }
         self.status = format!(
             "{} marked: d trashes them, a archives them, u and s mark them, v lets them go",
             keys.len()
         );
-        self.map.region = Some(map::Region { keys, boxed });
+        self.map.region = Some(map::Region { keys });
     }
 
     /// The messages marked on the map.
@@ -5419,43 +5378,6 @@ impl App {
         self.map.region = None;
         self.status = format!("{archived} archived, out of the Inbox");
         true
-    }
-
-    /// The mouse pressed on the map, at `column`, `row`: a box begun.
-    fn map_press(&mut self, column: u16, row: u16) {
-        self.map.drag = Some(((column, row), (column, row)));
-    }
-
-    /// The mouse moved, pressed, to `column`, `row`: the box drawn so far.
-    fn map_drag(&mut self, column: u16, row: u16) {
-        if let Some((start, _)) = self.map.drag {
-            self.map.drag = Some((start, (column, row)));
-        }
-    }
-
-    /// The mouse let go at `column`, `row`: where it was pressed, a click;
-    /// else what is in the box drawn, marked.
-    fn map_release(&mut self, column: u16, row: u16) {
-        let Some((start, _)) = self.map.drag.take() else {
-            return;
-        };
-        if start == (column, row) {
-            return self.map_click(column, row);
-        }
-        let (x0, x1) = (start.0.min(column), start.0.max(column));
-        let (y0, y1) = (start.1.min(row), start.1.max(row));
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        let keys = self
-            .map
-            .cells
-            .iter()
-            .filter(|&(_, &(x, y))| (x0..=x1).contains(&x) && (y0..=y1).contains(&y))
-            .map(|(&i, _)| s.dots[i].key.clone())
-            .collect();
-        self.focus = Focus::List;
-        self.mark(keys, Some(((x0, y0), (x1, y1))));
     }
 
     /// Begin moving the message picked, or what is marked, onto a cluster
@@ -5636,10 +5558,10 @@ impl App {
             self.status = "not on the map yet: it is marked once the map has read it".to_string();
             return;
         };
-        let region = self.map.region.get_or_insert_with(|| map::Region {
-            keys: Vec::new(),
-            boxed: None,
-        });
+        let region = self
+            .map
+            .region
+            .get_or_insert_with(|| map::Region { keys: Vec::new() });
         match region.keys.iter().position(|k| *k == key) {
             Some(at) => {
                 region.keys.remove(at);
@@ -5730,7 +5652,7 @@ impl App {
                 "{} would go to {label}, marked: Y files them, esc lets go",
                 keys.len()
             );
-            self.map.region = Some(map::Region { keys, boxed: None });
+            self.map.region = Some(map::Region { keys });
         }
     }
 
@@ -5820,7 +5742,7 @@ impl App {
                 "{} would go to {label}, marked: Y files them, esc lets go",
                 keys.len()
             );
-            self.map.region = Some(map::Region { keys, boxed: None });
+            self.map.region = Some(map::Region { keys });
         }
         true
     }
@@ -6584,10 +6506,7 @@ impl App {
             said = format!("{said} · {kept_n} kept");
         }
         if !discard.is_empty() {
-            self.map.region = Some(map::Region {
-                keys: discard,
-                boxed: None,
-            });
+            self.map.region = Some(map::Region { keys: discard });
             self.region_trash();
             said = format!("{said} · {}", self.status);
         }
@@ -6654,19 +6573,61 @@ impl App {
         }
     }
 
+    /// Go into the block of the cluster the message picked is in.
+    fn open_picked_cluster(&mut self) {
+        let id = self
+            .map
+            .picked()
+            .and_then(|i| self.map.snapshot.as_ref()?.group_of(i).map(|g| g.id));
+        if let Some(id) = id {
+            self.map.open_block(id);
+        }
+    }
+
+    /// The wheel on the map, over `at`: in the threads of a part, along
+    /// them; else up, into the block under it, and down, out a level, as
+    /// z and Z. A swipe says the same many times: a level each while it
+    /// goes on is enough.
+    fn map_wheel(&mut self, at: Target, by: isize) {
+        let now = jiff::Timestamp::now().as_second();
+        if matches!(
+            self.map.level(now),
+            Some((_, _, crate::forest::Level::Tree(_)))
+        ) {
+            return self.map_step(0, by.signum() as i32);
+        }
+        if self
+            .wheeled
+            .is_some_and(|(when, was)| was == by.signum() && when.elapsed() < WHEEL_SWIPE)
+        {
+            return;
+        }
+        self.wheeled = Some((Instant::now(), by.signum()));
+        self.focus = Focus::List;
+        if by > 0 {
+            if self.map.tree.is_some() {
+                self.map.tree_out();
+            }
+            return;
+        }
+        match at {
+            Target::Anchor(id) => self.map.open_block(id),
+            Target::Branch(row) => {
+                if let Some(path) = self.map.branches.get(row).cloned() {
+                    self.map.pick_branch(&path, now);
+                    self.map.tree_in(now);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn anchor_click(&mut self, id: u32) {
         self.focus = Focus::List;
         if self.map.moving.is_some() {
             return self.move_onto(id);
         }
-        if self.map.clusters {
-            return self.map.open_block(id);
-        }
-        self.map.focused = if self.map.focused == Focused::Cluster(id) {
-            Focused::All
-        } else {
-            Focused::Cluster(id)
-        };
+        self.map.open_block(id);
     }
 }
 

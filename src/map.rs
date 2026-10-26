@@ -1,8 +1,9 @@
-//! The map: every message of every account laid out in the middle pane,
-//! near what it is about and who it is from, in clusters, coloured by how
-//! they are related. What is drawn is a snapshot of the index, made off
-//! the screen's thread and made again as the index changes: clusters
-//! follow each change, and the layout moves only when asked to.
+//! The map: every message of every account in the middle pane, in its
+//! cluster, near what it is about and who it is from, the clusters a
+//! mosaic, each gone into as a mosaic of its parts. What is drawn is a
+//! snapshot of the index, made off the screen's thread and made again as
+//! the index changes: clusters follow each change, and the layout, which
+//! places each block by those it lies by, moves only when asked to.
 
 use crate::forest::{self, Branch, Level};
 use crate::index::labels::System;
@@ -16,8 +17,6 @@ use std::sync::Arc;
 
 /// The seed every layout and clustering is made with.
 pub const SEED: u64 = 1;
-/// How old read mail is to be drawn faintly, in seconds.
-const OLD: i64 = 30 * 24 * 60 * 60;
 /// How long ago new mail is taken to have come, the first time the map
 /// is looked at.
 const FIRST_LOOK: i64 = 24 * 60 * 60;
@@ -62,37 +61,6 @@ impl Since {
             Since::All => i64::MIN,
             Since::Week => now - 7 * 24 * 60 * 60,
             Since::Today => now - 24 * 60 * 60,
-        }
-    }
-}
-
-/// What a message's colour says.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Colour {
-    /// What it is about: the hue of its angle.
-    #[default]
-    Angle,
-    /// How near the message picked it is, by angle.
-    Cursor,
-    /// Whether it is unread, flagged, or read.
-    State,
-}
-
-impl Colour {
-    pub fn next(self) -> Colour {
-        match self {
-            Colour::Angle => Colour::Cursor,
-            Colour::Cursor => Colour::State,
-            Colour::State => Colour::Angle,
-        }
-    }
-
-    /// What the line under the map says of it.
-    pub fn explain(self) -> &'static str {
-        match self {
-            Colour::Angle => "colour is what it is about: near hues, near subjects",
-            Colour::Cursor => "colour is how near the message picked: strong is near, faint is far",
-            Colour::State => "colour is its state: unread, flagged, or read",
         }
     }
 }
@@ -165,20 +133,6 @@ impl Group {
             None => self.words.join(" "),
         }
     }
-}
-
-/// Which of `words`, a cluster's, `text` has, each as a word of it, as
-/// tokens are made of them: what a message shares with where it goes.
-pub fn shared(text: &str, words: &[String]) -> Vec<bool> {
-    let had = crate::model::words(text);
-    words
-        .iter()
-        .map(|w| {
-            crate::model::words(w)
-                .first()
-                .is_some_and(|w| had.contains(w))
-        })
-        .collect()
 }
 
 /// What the map is drawn from: the index as it was, by one lens.
@@ -710,7 +664,6 @@ pub struct Map {
     pub focused: Focused,
     pub lens: Lens,
     pub since: Since,
-    pub colour: Colour,
     pub hide_read: bool,
     pub hide_sent: bool,
     /// Whether only the mail not yet filed under a label is shown.
@@ -721,19 +674,8 @@ pub struct Map {
     pub looked: Option<i64>,
     /// Whether a snapshot is being made.
     pub computing: bool,
-    /// Where each message was drawn, by its place, as cells of the screen.
-    pub cells: BTreeMap<usize, (u16, u16)>,
-    /// What each cell drawn holds, by its place.
-    pub drawn: BTreeMap<(u16, u16), Vec<usize>>,
-    /// The anchors drawn, where they are, by their group's number.
-    pub anchors: Vec<(u16, u16, u16, u32)>,
-    /// The cell last clicked, and which of its messages it picked.
-    pub clicked: Option<((u16, u16), usize)>,
     /// What is marked, to act on all of it.
     pub region: Option<Region>,
-    /// A box being drawn with the mouse: where it was begun, and where the
-    /// mouse is now.
-    pub drag: Option<((u16, u16), (u16, u16))>,
     /// What is being moved onto a cluster or label, while it is.
     pub moving: Option<Vec<Key>>,
     /// The label last filed under, whose suggestions are shown.
@@ -745,17 +687,8 @@ pub struct Map {
     pub relaying: bool,
     /// The messages that hold what is searched for, as last found.
     pub hits: Option<Hits>,
-    /// How near the map is looked at; none for all of it.
-    pub zoom: Option<Zoom>,
-    /// Where the map was last drawn, and the bounds of all of it.
-    pub view: Option<View>,
-    /// Where each message shown is, as a cell, on the screen or past it.
-    pub places: BTreeMap<usize, (i32, i32)>,
-    /// Whether it is looked at from farther than all of it: the clusters
-    /// as a mosaic, each a block as big as how many it holds.
-    pub clusters: bool,
-    /// The blocks drawn, while it is: their group's number, their middle,
-    /// across and down in cells, and half their width, in columns.
+    /// The blocks drawn: a cluster's number, or a part's place, their
+    /// middle, across and down in cells, and half their width, in columns.
     pub blocks: Vec<(u32, [f32; 2], f32)>,
     /// The mosaic last tiled, and what of: the snapshot, the messages
     /// shown and the canvas's size; tiled again only when one changes.
@@ -771,9 +704,17 @@ pub struct Map {
 }
 
 /// What a mosaic was tiled from: the snapshot, by where it is, the
-/// messages tiled, the canvas, across and down, and, of a cluster gone
-/// into, the cluster and the way to the parts tiled.
-pub type Tiled = (usize, Vec<usize>, u16, u16, Option<(u32, Vec<usize>)>);
+/// messages tiled, the canvas, across and down, of a cluster gone into,
+/// the cluster and the way to the parts tiled, and the map laid out again,
+/// by where it is, while it is shown.
+pub type Tiled = (
+    usize,
+    Vec<usize>,
+    u16,
+    u16,
+    Option<(u32, Vec<usize>)>,
+    Option<usize>,
+);
 
 /// A cluster looked at as its tree.
 #[derive(Clone, Debug)]
@@ -787,45 +728,6 @@ pub struct Tree {
     grown: Option<(usize, usize, Arc<Branch>)>,
 }
 
-/// How near the map is looked at: how many times nearer than all of it,
-/// and the middle of what is seen, as shares of all of it, across and down.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Zoom {
-    pub scale: f32,
-    pub centre: [f32; 2],
-}
-
-/// Where the map was drawn: its first cell, how many across and down, and
-/// the bounds of all of it laid onto them, left, right, top and bottom.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct View {
-    pub x: u16,
-    pub y: u16,
-    pub w: u16,
-    pub h: u16,
-    pub bounds: [f32; 4],
-}
-
-impl View {
-    /// Where `p` is in all of the map, as shares across and down.
-    pub fn share(&self, p: Point) -> [f32; 2] {
-        let [x0, x1, y0, y1] = self.bounds;
-        let along = |v: f32, lo: f32, hi: f32| if hi > lo { (v - lo) / (hi - lo) } else { 0.5 };
-        [along(p[0], x0, x1), along(p[1], y0, y1)]
-    }
-}
-
-/// How much nearer, at most, the map is looked at than all of it.
-const NEAREST: f32 = 64.0;
-/// How much nearer each step of the zoom is.
-pub const ZOOM_STEP: f32 = 1.5;
-
-/// The middle of what is seen, kept so that what is seen is of the map.
-fn kept_in(centre: [f32; 2], scale: f32) -> [f32; 2] {
-    let half = 0.5 / scale;
-    centre.map(|c| c.clamp(half, 1.0 - half))
-}
-
 /// The messages of a snapshot that hold every word searched for.
 pub struct Hits {
     query: String,
@@ -836,64 +738,21 @@ pub struct Hits {
     pub count: usize,
 }
 
-/// What is marked on the map: the messages of a cluster, or those in a
-/// box drawn, and the box, by its corners, if it was drawn.
+/// What is marked on the map: the messages of a cluster.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Region {
     pub keys: Vec<Key>,
-    pub boxed: Option<((u16, u16), (u16, u16))>,
 }
 
 impl Map {
-    /// How many times nearer than all of it the map is looked at.
-    pub fn scale(&self) -> f32 {
-        self.zoom.map_or(1.0, |z| z.scale)
-    }
-
-    /// Look nearer by `factor`, or farther, below one, keeping the point
-    /// `fixed` of the map, as shares, where it is on the screen.
-    fn zoom_by(&mut self, factor: f32, fixed: [f32; 2]) {
-        // Farther, out of a cluster gone into a level.
-        if self.tree.is_some() {
-            if factor < 1.0 {
-                self.tree_out();
-            }
-            return;
-        }
-        // Farther than all of it, the clusters; nearer from them, all of it.
-        if self.clusters {
-            self.clusters = factor < 1.0;
-            return;
-        }
-        if self.zoom.is_none() && factor < 1.0 {
-            self.clusters = true;
-            return;
-        }
-        let z = self.zoom.unwrap_or(Zoom {
-            scale: 1.0,
-            centre: [0.5, 0.5],
-        });
-        let scale = (z.scale * factor).clamp(1.0, NEAREST);
-        if scale <= 1.0 {
-            self.zoom = None;
-            return;
-        }
-        let centre = [0, 1].map(|a| fixed[a] - (fixed[a] - z.centre[a]) * z.scale / scale);
-        self.zoom = Some(Zoom {
-            scale,
-            centre: kept_in(centre, scale),
-        });
-    }
-
-    /// All of the map, its messages, neither nearer nor farther.
+    /// All of the map: every cluster, out of any gone into.
     pub fn zoom_all(&mut self) {
-        self.zoom = None;
-        self.clusters = false;
         self.tree = None;
+        self.focused = Focused::All;
     }
 
-    /// Open the cluster `id` from its block, as its tree, its newest
-    /// message picked, and the part it is in.
+    /// Open the cluster `id` from its block, as its tree, the part picked
+    /// that the message picked is in, if it is in it; else its newest's.
     pub fn open_block(&mut self, id: u32) {
         let Some(s) = self.snapshot.clone() else {
             return;
@@ -901,8 +760,6 @@ impl Map {
         let Some(g) = s.group(id) else {
             return;
         };
-        self.clusters = false;
-        self.zoom = None;
         self.focused = Focused::Cluster(id);
         self.tree = Some(Tree {
             id,
@@ -910,6 +767,9 @@ impl Map {
             top: 0,
             grown: None,
         });
+        if self.picked().is_some_and(|i| g.members.contains(&i)) {
+            return;
+        }
         let newest = g.members.iter().copied().max_by_key(|&i| {
             let d = &s.dots[i];
             (d.date.unwrap_or(d.arrived), i)
@@ -920,7 +780,6 @@ impl Map {
     /// Back from a cluster's tree to the clusters, its block among them.
     pub fn close_tree(&mut self) {
         self.tree = None;
-        self.clusters = true;
         self.focused = Focused::All;
     }
 
@@ -965,6 +824,17 @@ impl Map {
     /// message picked is under, as far down as it is looked at. The newest
     /// message is picked if none of it is.
     pub fn tree_picked(&mut self, now: i64) -> Option<(Arc<Branch>, Vec<usize>)> {
+        // The message picked elsewhere, as by a search or the Inbox looked
+        // through: its cluster gone into instead, never another picked.
+        let s = self.snapshot.clone()?;
+        let elsewhere = self
+            .picked()
+            .and_then(|i| s.group_of(i))
+            .map(|g| g.id)
+            .filter(|&id| self.tree.as_ref().is_some_and(|t| t.id != id));
+        if let Some(id) = elsewhere {
+            self.open_block(id);
+        }
         let root = self.grown(now)?;
         let path = match self.picked().and_then(|i| root.path_to(i)) {
             Some(path) => path,
@@ -1096,53 +966,6 @@ impl Map {
         }
     }
 
-    /// Zoom by `factor` at the cell `column`, `row` of the map, as the
-    /// wheel does: what is under it stays under it.
-    pub fn zoom_at(&mut self, factor: f32, column: u16, row: u16) {
-        let Some(v) = self.view else {
-            return;
-        };
-        let z = self.zoom.unwrap_or(Zoom {
-            scale: 1.0,
-            centre: [0.5, 0.5],
-        });
-        let on = |c: u16, at: u16, n: u16| {
-            (f32::from(c.saturating_sub(at)) / f32::from(n.max(2) - 1)) - 0.5
-        };
-        let fixed = [
-            z.centre[0] + on(column, v.x, v.w) / z.scale,
-            z.centre[1] + on(row, v.y, v.h) / z.scale,
-        ];
-        self.zoom_by(factor, fixed);
-    }
-
-    /// Zoom by `factor` about the message picked, else the middle.
-    pub fn zoom_picked(&mut self, factor: f32) {
-        let fixed = (|| {
-            let (v, s, i) = (self.view?, self.snapshot.as_ref()?, self.picked()?);
-            Some(v.share(s.at.as_ref()?.get(i).copied()?))
-        })()
-        .or(self.zoom.map(|z| z.centre))
-        .unwrap_or([0.5, 0.5]);
-        self.zoom_by(factor, fixed);
-    }
-
-    /// Keep the message picked in sight: past the outer tenth of what is
-    /// seen, what is seen is moved to have it in the middle.
-    pub fn follow(&mut self, picked: [f32; 2]) {
-        let Some(z) = &mut self.zoom else {
-            return;
-        };
-        let mut centre = z.centre;
-        for a in 0..2 {
-            let seen = (picked[a] - z.centre[a]) * z.scale + 0.5;
-            if !(0.1..=0.9).contains(&seen) {
-                centre[a] = picked[a];
-            }
-        }
-        z.centre = kept_in(centre, z.scale);
-    }
-
     /// Which messages hold every word of `query`, in their subject, sender,
     /// address, first lines or labels, case let go: none for no words.
     /// Found again only once the query or the snapshot changes.
@@ -1243,11 +1066,6 @@ impl Map {
         dot.system.inbox && dot.arrived > self.since_look(now)
     }
 
-    /// Whether read mail more than a month old is the message `i`.
-    pub fn is_old(dot: &Dot, now: i64) -> bool {
-        dot.flags.seen && dot.date.is_some_and(|d| now - d > OLD)
-    }
-
     /// The messages drawn: all, but the read ones if they are hidden, the
     /// sent ones if they are, those filed under a label, and the sent, if
     /// only what is not yet filed is, and those older than how far back the
@@ -1293,64 +1111,6 @@ impl Map {
     /// The message picked, by its place in the snapshot.
     pub fn picked(&self) -> Option<usize> {
         self.snapshot.as_ref()?.find(self.cursor.as_ref()?)
-    }
-
-    /// Whether the message `i` is in what the map is narrowed to.
-    pub fn in_focus(&self, i: usize) -> bool {
-        let Some(s) = &self.snapshot else {
-            return true;
-        };
-        match self.focused {
-            Focused::All => true,
-            Focused::Cluster(id) => s.picked_by(id, i),
-            Focused::Loners => s.clustering.loner.get(i).copied().unwrap_or(false),
-        }
-    }
-
-    /// Move the cursor to the nearest message drawn that way, `dx` across
-    /// and `dy` down; to the one nearest the middle if none is picked.
-    pub fn step(&mut self, dx: i32, dy: i32) {
-        let Some(s) = self.snapshot.clone() else {
-            return;
-        };
-        let here = self.picked().and_then(|i| self.places.get(&i).copied());
-        let Some((x0, y0)) = here else {
-            // None picked: the message nearest the middle of what is drawn.
-            let n = self.cells.len().max(1) as f32;
-            let (mx, my) = self.cells.values().fold((0.0, 0.0), |(a, b), &(x, y)| {
-                (a + f32::from(x) / n, b + f32::from(y) / n)
-            });
-            let near = self
-                .cells
-                .iter()
-                .min_by(|a, b| {
-                    let d = |&(x, y): &(u16, u16)| {
-                        (f32::from(x) - mx).powi(2) + (2.0 * (f32::from(y) - my)).powi(2)
-                    };
-                    d(a.1).total_cmp(&d(b.1)).then(a.0.cmp(b.0))
-                })
-                .map(|(&i, _)| i);
-            self.cursor = near.map(|i| s.dots[i].key.clone());
-            return;
-        };
-        // Every message shown, on the screen or past it, zoomed in.
-        let picked = self.picked();
-        // A cell is about twice as tall as it is wide: rows count double.
-        let best = self
-            .places
-            .iter()
-            .filter(|(i, _)| Some(**i) != picked)
-            .filter_map(|(&i, &(x, y))| {
-                let (ex, ey) = ((x - x0) as f32, 2.0 * (y - y0) as f32);
-                let along = ex * dx as f32 + ey * dy as f32;
-                let across = (ex * dy as f32 - ey * dx as f32).abs();
-                let same = (x, y) == (x0, y0);
-                (along > 0.0 || same && along >= 0.0).then_some((along + 2.0 * across, i))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        if let Some((_, i)) = best {
-            self.cursor = Some(s.dots[i].key.clone());
-        }
     }
 
     /// Narrow the map to the cluster after the one it is narrowed to, or
