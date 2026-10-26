@@ -131,6 +131,14 @@ pub struct Dot {
     pub places: Vec<Place>,
     /// Whether another account has it too, by its `Message-ID`.
     pub twin: bool,
+    /// How likely it is to be thrown away, as learnt from what you threw
+    /// away, if it is in an Inbox and that is sure enough to say.
+    pub thrown: Option<f32>,
+    /// Whether it was kept, as chosen, filed or flagged: looked at before.
+    pub looked: bool,
+    /// What it answers, by message IDs, and Gmail's thread of it.
+    pub parents: Vec<String>,
+    pub thread: Option<u64>,
 }
 
 /// A cluster as the map and the sidebar show it.
@@ -178,6 +186,9 @@ pub struct Snapshot {
     pub fresh: Option<Vec<(Key, f32, f32)>>,
     /// Each message and label, folded, it was said not to be.
     pub not_it: std::collections::BTreeSet<(Key, String)>,
+    /// Where each message filed under no label would go, as the filed mail
+    /// nearest it votes, none turned down for it.
+    pub voted: Vec<Option<String>>,
     /// What the model has read, to be handed to the next snapshot.
     pub corpus: Option<Corpus>,
 }
@@ -232,18 +243,15 @@ impl Snapshot {
             .copied()
     }
 
-    /// Where the message `i`, filed under no label, would go: the label of
-    /// the cluster it is in, unless it was said not to be one for it.
+    /// Where the message `i`, filed under no label, would go: the label
+    /// the filed mail nearest it votes for, unless it was said not to be one
+    /// for it.
     pub fn suggestion(&self, i: usize) -> Option<&str> {
         let d = self.dots.get(i)?;
         if !d.labels.is_empty() || d.system.sent {
             return None;
         }
-        let label = self.group_of(i)?.label.as_deref()?;
-        let turned_down = self
-            .not_it
-            .contains(&(d.key.clone(), crate::index::fold(label)));
-        (!turned_down).then_some(label)
+        self.voted.get(i)?.as_deref()
     }
 
     pub fn group(&self, id: u32) -> Option<&Group> {
@@ -269,6 +277,11 @@ pub struct Input {
     layout_wanted: bool,
     last: Option<Last>,
     corpus: Option<Corpus>,
+    /// How likely each message in an Inbox is to be thrown away, where it
+    /// is sure enough to say.
+    thrown: BTreeMap<Key, f32>,
+    /// The messages taught as kept: looked at before.
+    looked: std::collections::BTreeSet<Key>,
 }
 
 /// A message as it is drawn from: its record, its labels, whether it has
@@ -310,6 +323,20 @@ pub fn input(
             (r.clone(), index.labels(&r.key), mine, index.system(&r.key))
         })
         .collect();
+    let known = index.known();
+    let thrown = index
+        .records
+        .values()
+        .filter(|r| index.system(&r.key).inbox)
+        .filter_map(|r| Some((r.key.clone(), index.filter.would_throw(r, &known)?)))
+        .collect();
+    let looked = index
+        .filter
+        .taught
+        .iter()
+        .filter(|t| !t.thrown)
+        .map(|t| t.key.clone())
+        .collect();
     let last = last.filter(|s| s.lens == lens);
     let before = last
         .map(|s| {
@@ -340,6 +367,8 @@ pub fn input(
             not_it: s.not_it.clone(),
         }),
         corpus,
+        thrown,
+        looked,
     }
 }
 
@@ -464,6 +493,8 @@ pub fn compute(input: Input) -> Snapshot {
         .map(|i| {
             let (r, labels, mine, system, twin) =
                 records[i].take().expect("each record a dot once");
+            let thrown = input.thrown.get(&r.key).copied();
+            let looked = input.looked.contains(&r.key);
             Dot {
                 key: r.key,
                 from: r.from,
@@ -481,6 +512,10 @@ pub fn compute(input: Input) -> Snapshot {
                 system,
                 places: r.places,
                 twin,
+                thrown,
+                looked,
+                parents: r.parents,
+                thread: r.thread,
             }
         })
         .collect();
@@ -544,9 +579,15 @@ pub fn compute(input: Input) -> Snapshot {
         })
         .collect();
 
+    let voted = model.voted(|i, l| {
+        input
+            .not_it
+            .contains(&(model.keys[i].clone(), l.to_string()))
+    });
     Snapshot {
         version: input.version,
         lens: input.lens,
+        voted,
         dots,
         model,
         clustering,

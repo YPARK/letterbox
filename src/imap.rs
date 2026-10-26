@@ -825,7 +825,7 @@ struct Caps {
 
 /// What the index fetches of each message: what is listed, and its
 /// `List-Id`; on Gmail, its IDs and labels too.
-fn indexed_items(gmail: bool) -> String {
+pub(crate) fn indexed_items(gmail: bool) -> String {
     let gmail = if gmail {
         " X-GM-MSGID X-GM-THRID X-GM-LABELS"
     } else {
@@ -833,7 +833,9 @@ fn indexed_items(gmail: bool) -> String {
     };
     format!(
         "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID \
-         LIST-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
+         IN-REPLY-TO REFERENCES LIST-ID LIST-UNSUBSCRIBE PRECEDENCE CONTENT-TYPE \
+         CONTENT-TRANSFER-ENCODING \
+         MIME-VERSION)] \
          BODY.PEEK[TEXT]<0.2048>{gmail})"
     )
 }

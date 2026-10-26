@@ -447,6 +447,24 @@ pub fn attachments(raw: &[u8]) -> Vec<(Attachment, Vec<u8>)> {
         .collect()
 }
 
+/// The images a message's HTML shows from its own parts, by `cid:`: each
+/// part's Content-ID, its type, and what it holds.
+pub fn inline_images(raw: &[u8]) -> Vec<(String, String, Vec<u8>)> {
+    let Some(m) = MessageParser::default().parse(raw) else {
+        return Vec::new();
+    };
+    m.parts
+        .iter()
+        .filter_map(|p| {
+            let id = p.content_id()?.trim_matches(['<', '>']).to_string();
+            let c = p.content_type()?;
+            let mime = format!("{}/{}", c.ctype(), c.subtype()?).to_lowercase();
+            mime.starts_with("image/")
+                .then(|| (id, mime, p.contents().to_vec()))
+        })
+        .collect()
+}
+
 /// An attachment as it is listed: its name, its type, its size. A part
 /// that says no type is taken as bytes.
 fn attachment(p: &mail_parser::MessagePart) -> Attachment {

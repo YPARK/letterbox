@@ -258,11 +258,41 @@ pub struct Index {
     pub keep: Keep,
     cache: Option<Journal<Cached>>,
     kept: Option<Journal<Kept>>,
+    /// What you throw away, as learnt, and its journal.
+    pub filter: crate::filter::Filter,
+    taught: Option<Journal<crate::filter::Taught>>,
     /// What changes with every event taken in, so that what is drawn from
     /// the index knows to look again.
     pub version: u64,
     /// What went wrong reading the journals, to say on the screen.
     pub fault: Option<String>,
+    /// Held while it is written to: one letterbox writes it at a time.
+    held: Option<std::fs::File>,
+}
+
+/// The index's lock, as asked for.
+enum Hold {
+    /// Held, by the file it is, or by none where it cannot be made.
+    Held(Option<std::fs::File>),
+    /// Held by another.
+    Busy,
+}
+
+/// Hold the lock of the index in `dir`, if no other letterbox does.
+fn hold(dir: &Path) -> Hold {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("lock"));
+    let Ok(file) = file else {
+        return Hold::Held(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Hold::Held(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Hold::Busy,
+        Err(_) => Hold::Held(None),
+    }
 }
 
 impl Index {
@@ -274,8 +304,11 @@ impl Index {
             keep: Keep::default(),
             cache: None,
             kept: None,
+            filter: crate::filter::Filter::default(),
+            taught: None,
             version: 0,
             fault: None,
+            held: None,
         }
     }
 
@@ -284,10 +317,27 @@ impl Index {
     /// cannot be read is kept as it is, and nothing is written to it.
     /// Journals with many logs are written again as one base each.
     pub fn open_with(dir: &Path, identity: &Identity) -> Index {
+        Self::opened(dir, identity, true)
+    }
+
+    /// The index in `dir`, read with `identity`, as `open_with` reads it,
+    /// and nothing ever written: for another program to read while
+    /// letterbox writes it.
+    pub fn read_only(dir: &Path, identity: &Identity) -> Index {
+        Self::opened(dir, identity, false)
+    }
+
+    /// The index in `dir` read, its journals kept to be written to if
+    /// `write`.
+    fn opened(dir: &Path, identity: &Identity, write: bool) -> Index {
         let recipient = identity.to_public();
         let (cache, cached) = Journal::open(dir, "cache", recipient.clone(), Some(identity));
-        let (kept, keeps) = Journal::open(dir, "keep", recipient, Some(identity));
+        let (kept, keeps) = Journal::open(dir, "keep", recipient.clone(), Some(identity));
+        let (taught, decisions) = Journal::open(dir, "taught", recipient, Some(identity));
         let mut index = Index::memory();
+        for t in decisions {
+            index.filter.learn(t);
+        }
         let mut faults = Vec::new();
         if let Some(why) = cache.fault() {
             faults.push(format!("{why}; the map is made again from the servers"));
@@ -302,11 +352,48 @@ impl Index {
         if let Some(why) = kept.fault() {
             faults.push(format!("{why}; nothing is written to it until it can be"));
         }
-        index.cache = Some(cache);
-        index.kept = Some(kept);
+        if let Some(why) = taught.fault() {
+            faults.push(format!("{why}; nothing more is learnt until it can be"));
+        }
+        // Written by another letterbox, as open: read, not written.
+        let held = match write.then(|| hold(dir)) {
+            Some(Hold::Busy) => {
+                faults.push(
+                    "open in another letterbox, which writes it; nothing is written here".into(),
+                );
+                None
+            }
+            Some(Hold::Held(file)) => Some(file),
+            None => None,
+        };
+        let write = write && held.is_some();
+        index.held = held.flatten();
         index.fault = (!faults.is_empty()).then(|| faults.join("; "));
-        index.compact();
+        if write {
+            index.cache = Some(cache);
+            index.kept = Some(kept);
+            index.taught = Some(taught);
+            index.compact();
+        }
         index
+    }
+
+    /// Whether what is new is written down: not in memory alone, nor read
+    /// while another letterbox writes it.
+    pub fn writes(&self) -> bool {
+        self.taught.is_some()
+    }
+
+    /// The index in `dir` read only, as `read_only` reads it, its key found
+    /// where `map.toml` says it is kept; none if the map was never begun.
+    pub fn read(
+        dir: &Path,
+        find: fn(Keeper, &str, &str) -> anyhow::Result<String>,
+    ) -> anyhow::Result<Option<Index>> {
+        let Some(card) = key::card(dir)? else {
+            return Ok(None);
+        };
+        Ok(Some(Index::read_only(dir, &key::identity(&card, find)?)))
     }
 
     /// The index in `dir`, written to with `recipient` alone: what is new
@@ -314,10 +401,12 @@ impl Index {
     #[cfg(test)]
     pub fn writer(dir: &Path, recipient: age::x25519::Recipient) -> Index {
         let (cache, _) = Journal::open(dir, "cache", recipient.clone(), None);
-        let (kept, _) = Journal::open(dir, "keep", recipient, None);
+        let (kept, _) = Journal::open(dir, "keep", recipient.clone(), None);
+        let (taught, _) = Journal::open(dir, "taught", recipient, None);
         Index {
             cache: Some(cache),
             kept: Some(kept),
+            taught: Some(taught),
             ..Index::memory()
         }
     }
@@ -379,6 +468,226 @@ impl Index {
         {
             self.fault = Some(format!("{e:#}"));
         }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+            && taught.logs() > journal::LOGS
+            && let Err(e) = taught.compact(&self.filter.taught)
+        {
+            self.fault = Some(format!("{e:#}"));
+        }
+    }
+
+    /// Learn from what was done with the message `key`: thrown away, or
+    /// kept; and write it down. Nothing is learnt of a message not indexed,
+    /// or while the journal could not be read.
+    pub fn teach(&mut self, key: &Key, thrown: bool) -> anyhow::Result<()> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            return Ok(());
+        }
+        let Some(r) = self.records.get(key) else {
+            return Ok(());
+        };
+        let t = crate::filter::Taught {
+            key: key.clone(),
+            thrown,
+            tokens: crate::filter::Filter::tokens(r, &self.known()),
+            message_id: r.message_id.clone(),
+            seeded: false,
+            ..Default::default()
+        };
+        self.learn(t)
+    }
+
+    fn learn(&mut self, mut t: crate::filter::Taught) -> anyhow::Result<()> {
+        if t.at == 0 {
+            t.at = jiff::Timestamp::now().as_second();
+        }
+        self.filter.learn(t.clone());
+        self.version += 1;
+        if let Some(taught) = &mut self.taught {
+            taught.push(t)?;
+        }
+        Ok(())
+    }
+
+    /// What is known beside each message: whom you wrote to, read from the
+    /// mail you sent.
+    pub fn known(&self) -> crate::filter::Known {
+        let written = self
+            .records
+            .values()
+            .filter(|r| self.system(&r.key).sent)
+            .flat_map(|r| r.to.iter().chain(&r.cc))
+            .map(|a| a.to_lowercase())
+            .collect();
+        crate::filter::Known { written }
+    }
+
+    /// A message of `account` put back from the Trash, by its `Message-ID`:
+    /// learnt as kept, as it was read when it was thrown away, since the
+    /// index has let it go. Whether it was known.
+    pub fn put_back(&mut self, account: &str, message_id: &str) -> anyhow::Result<bool> {
+        if message_id.is_empty() || self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            return Ok(false);
+        }
+        let Some(thrown) = self
+            .filter
+            .taught
+            .iter()
+            .rev()
+            .find(|t| t.key.account == account && t.message_id == message_id)
+            .filter(|t| t.thrown)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        self.learn(crate::filter::Taught {
+            thrown: false,
+            seeded: false,
+            auto: false,
+            at: 0,
+            ..thrown
+        })?;
+        Ok(true)
+    }
+
+    /// Throw away the message `key` on its own, sure enough: written down,
+    /// with who sent it, what about, and how sure it was, never learnt.
+    pub fn throw_on_its_own(&mut self, key: &Key) -> anyhow::Result<()> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read");
+        }
+        let Some(r) = self.records.get(key) else {
+            return Ok(());
+        };
+        let tokens = crate::filter::Filter::tokens(r, &self.known());
+        let t = crate::filter::Taught {
+            key: key.clone(),
+            thrown: true,
+            odds: self.filter.odds(&tokens),
+            tokens,
+            message_id: r.message_id.clone(),
+            auto: true,
+            from: r.from.clone(),
+            subject: r.subject.clone(),
+            ..Default::default()
+        };
+        self.learn(t)
+    }
+
+    /// What happened after `since`: what was thrown away on its own, each
+    /// put back since or not, and how many of your own decisions were
+    /// learnt.
+    pub fn debrief(&self, since: i64) -> crate::filter::Debrief {
+        let mut d = crate::filter::Debrief::default();
+        let taught = &self.filter.taught;
+        for (i, t) in taught.iter().enumerate().filter(|(_, t)| t.at > since) {
+            if t.auto {
+                let back = taught[i + 1..].iter().any(|u| {
+                    !u.auto
+                        && !u.thrown
+                        && u.key.account == t.key.account
+                        && u.message_id == t.message_id
+                });
+                d.thrown.push(crate::filter::Thrown {
+                    key: t.key.clone(),
+                    from: t.from.clone(),
+                    subject: t.subject.clone(),
+                    odds: t.odds,
+                    why: self.filter.why(&t.tokens),
+                    message_id: t.message_id.clone(),
+                    at: t.at,
+                    back,
+                });
+            } else if !t.seeded {
+                d.decided += 1;
+                if t.thrown {
+                    d.thrown_by_you += 1;
+                } else {
+                    d.kept += 1;
+                }
+            }
+        }
+        d
+    }
+
+    /// Learn from `seeds`, read from where mail already is, each not yet
+    /// learnt; how many were.
+    pub fn seed(&mut self, seeds: Vec<crate::filter::Taught>) -> anyhow::Result<usize> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read, so nothing more is learnt");
+        }
+        let known: std::collections::HashSet<Key> =
+            self.filter.taught.iter().map(|t| t.key.clone()).collect();
+        let mut n = 0;
+        for t in seeds {
+            if !known.contains(&t.key) {
+                self.learn(t)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// Forget what was read from the Trash and your labels: what is learnt
+    /// is learnt again from your own decisions alone, and written so. How
+    /// many were forgotten.
+    pub fn unseed(&mut self) -> anyhow::Result<usize> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read, so it is left as it is");
+        }
+        let all = std::mem::take(&mut self.filter.taught);
+        let n = all.iter().filter(|t| t.seeded).count();
+        self.filter = crate::filter::Filter::default();
+        for t in all.into_iter().filter(|t| !t.seeded) {
+            self.filter.learn(t);
+        }
+        self.version += 1;
+        if let Some(taught) = &mut self.taught {
+            taught.compact(&self.filter.taught)?;
+        }
+        Ok(n)
+    }
+
+    /// The mail you kept, filed under a label and out of the Inbox, as
+    /// seeds: the newest `limit`, each with when it was sent.
+    pub fn kept_seeds(&self, limit: usize) -> Vec<(i64, crate::filter::Taught)> {
+        let known = self.known();
+        let mut kept: Vec<(i64, crate::filter::Taught)> = self
+            .records
+            .values()
+            .filter(|r| {
+                let s = self.system(&r.key);
+                !s.inbox && !s.sent && !s.draft && !self.labels(&r.key).is_empty()
+            })
+            .map(|r| {
+                (
+                    r.date.unwrap_or(r.first_seen),
+                    crate::filter::Taught {
+                        key: r.key.clone(),
+                        thrown: false,
+                        tokens: crate::filter::Filter::tokens(r, &known),
+                        message_id: r.message_id.clone(),
+                        seeded: true,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        kept.sort_by_key(|(at, t)| (std::cmp::Reverse(*at), t.key.clone()));
+        kept.truncate(limit);
+        kept
+    }
+
+    /// The message of `account` at `uid` in `folder`, by its key.
+    pub fn key_at(&self, account: &str, folder: &str, uid: u32) -> Option<Key> {
+        self.records
+            .values()
+            .find(|r| {
+                r.key.account == account
+                    && r.places.iter().any(|p| p.folder == folder && p.uid == uid)
+            })
+            .map(|r| r.key.clone())
     }
 
     /// The cache, as events to write a base of.
@@ -452,6 +761,11 @@ impl Index {
         {
             kept.flush()?;
         }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+        {
+            taught.flush()?;
+        }
         Ok(())
     }
 
@@ -464,6 +778,11 @@ impl Index {
             && kept.fault().is_none()
         {
             kept.tick()?;
+        }
+        if let Some(taught) = &mut self.taught
+            && taught.fault().is_none()
+        {
+            taught.tick()?;
         }
         Ok(())
     }

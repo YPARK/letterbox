@@ -140,6 +140,18 @@ pub enum Answer {
     },
     /// A linked document downloaded, and where it is kept.
     Fetched(Result<std::path::PathBuf, String>),
+    /// Where each paper of the message read stands with paperstack.
+    /// Asked for the list of papers `asked`.
+    Standings {
+        asked: u64,
+        said: Result<Vec<crate::paperstack::Standing>, String>,
+    },
+    /// The paper `at` of those listed, put in paperstack, starred.
+    Shelved {
+        asked: u64,
+        at: usize,
+        found: Result<crate::paperstack::Found, String>,
+    },
     /// How far the map's sync of the account has got, as it goes; not an
     /// answer to what was asked.
     Mapping(String),

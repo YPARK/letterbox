@@ -160,22 +160,109 @@ pub fn thread_of(subject: &str) -> String {
         .join(" ")
 }
 
-/// The threads of `messages`, oldest first: those of a subject together,
-/// as `thread_of` tells them apart; a message alone is a leaf of its own.
-fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
-    let mut by: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for &i in messages {
-        let subject = thread_of(&s.dots[i].subject).to_lowercase();
-        let key = if subject.is_empty() {
-            format!("\0{i}")
-        } else {
-            subject
-        };
-        by.entry(key).or_default().push(i);
+/// A message as it is threaded: its ID, what it answers, Gmail's thread
+/// of it, and its subject.
+#[derive(Clone, Debug)]
+pub struct Threaded {
+    pub message_id: String,
+    pub parents: Vec<String>,
+    pub thread: Option<u64>,
+    pub subject: String,
+}
+
+/// The threads of `items`, by their places in it: who answered whom, by
+/// their headers, and Gmail's threads, whatever their subjects; answers to
+/// one not here together; and those that answer nothing and are answered
+/// by nothing, by subject, as `thread_of` tells them apart.
+pub fn thread_groups(items: &[Threaded]) -> Vec<Vec<usize>> {
+    fn root(up: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while up[r] != r {
+            r = up[r];
+        }
+        let mut i = i;
+        while up[i] != r {
+            let next = up[i];
+            up[i] = r;
+            i = next;
+        }
+        r
     }
+    let mut up: Vec<usize> = (0..items.len()).collect();
+    fn join(a: usize, b: usize, up: &mut [usize]) {
+        let (ra, rb) = (root(up, a), root(up, b));
+        if ra != rb {
+            up[ra.max(rb)] = ra.min(rb);
+        }
+    }
+    let id = |s: &str| s.trim().trim_matches(['<', '>']).to_lowercase();
+    let by_id: BTreeMap<String, usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !t.message_id.trim().is_empty())
+        .map(|(i, t)| (id(&t.message_id), i))
+        .collect();
+    let mut linked = vec![false; items.len()];
+    let mut missing: BTreeMap<String, usize> = BTreeMap::new();
+    let mut threads: BTreeMap<u64, usize> = BTreeMap::new();
+    for (i, t) in items.iter().enumerate() {
+        for p in t.parents.iter().map(|p| id(p)) {
+            linked[i] = true;
+            match by_id.get(&p) {
+                Some(&j) => {
+                    linked[j] = true;
+                    join(i, j, &mut up);
+                }
+                None => {
+                    let first = *missing.entry(p).or_insert(i);
+                    join(i, first, &mut up);
+                }
+            }
+        }
+        if let Some(g) = t.thread {
+            linked[i] = true;
+            let first = *threads.entry(g).or_insert(i);
+            join(i, first, &mut up);
+        }
+    }
+    let mut subjects: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, t) in items.iter().enumerate().filter(|(i, _)| !linked[*i]) {
+        let subject = thread_of(&t.subject).to_lowercase();
+        if !subject.is_empty() {
+            let first = *subjects.entry(subject).or_insert(i);
+            join(i, first, &mut up);
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..items.len() {
+        let r = root(&mut up, i);
+        groups.entry(r).or_default().push(i);
+    }
+    groups.into_values().collect()
+}
+
+/// The threads of `messages`, oldest first, as `thread_groups` tells them
+/// apart; a message alone is a leaf of its own.
+fn threads(s: &Snapshot, messages: &[usize]) -> Vec<Branch> {
+    let items: Vec<Threaded> = messages
+        .iter()
+        .map(|&i| {
+            let d = &s.dots[i];
+            Threaded {
+                message_id: d.message_id.clone(),
+                parents: d.parents.clone(),
+                thread: d.thread,
+                subject: d.subject.clone(),
+            }
+        })
+        .collect();
+    let by: Vec<Vec<usize>> = thread_groups(&items)
+        .into_iter()
+        .map(|g| g.into_iter().map(|k| messages[k]).collect())
+        .collect();
     let bare = |i: usize| model::bare_subject(&s.dots[i].subject).trim().to_string();
     let mut threads: Vec<Branch> = by
-        .into_values()
+        .into_iter()
         .map(|mut thread| {
             thread.sort_by_key(|&i| when(s, i));
             let first = thread[0];

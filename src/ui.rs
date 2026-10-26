@@ -152,6 +152,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
         Dialog::View => Some(view_dialog(f, &t, &app.map)),
+        Dialog::Debrief(d) => Some(debrief_dialog(f, &t, d)),
+        Dialog::Papers(p) => Some(papers_dialog(f, &t, p)),
         Dialog::StartMap => Some((
             question(
                 f,
@@ -530,6 +532,7 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     for (i, item) in files.items.iter().enumerate() {
         let (icon, name, what) = match item {
             Item::Page => ("◳", "this message".to_string(), "browser".to_string()),
+            Item::Present => ("◳", "this message".to_string(), "ohp".to_string()),
             Item::File {
                 name,
                 mime,
@@ -594,6 +597,158 @@ fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
     );
     let targets = (0..files.items.len())
         .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
+        .collect();
+    (area, targets)
+}
+
+/// The papers of the message read, two lines each: its title and where it
+/// stands with paperstack, then who wrote it where. A paper clicked is put
+/// in paperstack.
+fn papers_dialog(f: &mut Frame, t: &Theme, p: &crate::app::PapersView) -> (Rect, Targets) {
+    use crate::paperstack::Standing;
+    let width = f.area().width.min(100);
+    let room = (width as usize).saturating_sub(4);
+    let side = 30.min(room / 3);
+    let mut lines = vec![Line::raw("")];
+    let first = lines.len();
+    for (i, paper) in p.papers.iter().enumerate() {
+        let ground = if i == p.at { t.focus } else { t.page };
+        let (said, style) = match p.standing.get(i).and_then(Option::as_ref) {
+            None => ("…".to_string(), Style::new().fg(t.dim)),
+            Some(Standing::Have { starred: true, .. }) => (
+                "★ in your library".to_string(),
+                Style::new().fg(t.accent).bold(),
+            ),
+            Some(Standing::Have { .. }) => {
+                ("in your library".to_string(), Style::new().fg(t.accent))
+            }
+            Some(Standing::Like(title)) => (
+                format!("like: {}", clip(title, side.saturating_sub(6))),
+                Style::new().fg(t.title),
+            ),
+            Some(Standing::New) => ("new".to_string(), Style::new().fg(t.soft)),
+        };
+        let title_room = room.saturating_sub(side + 2);
+        let title = clip(&paper.title, title_room);
+        let pad = title_room.saturating_sub(title.width());
+        lines.push(
+            Line::from(vec![
+                Span::styled(format!(" {title}"), Style::new().fg(t.text)),
+                Span::raw(" ".repeat(pad + 1)),
+                Span::styled(format!("{said:>side$}"), style),
+            ])
+            .style(Style::new().bg(ground)),
+        );
+        lines.push(
+            Line::styled(
+                clip(&format!("   {}", paper.about), room),
+                Style::new().fg(t.dim),
+            )
+            .style(Style::new().bg(ground)),
+        );
+    }
+    if let Some(note) = &p.note {
+        lines.push(Line::raw(""));
+        lines.extend(
+            wrap(note, room)
+                .into_iter()
+                .map(|l| Line::styled(format!(" {l}"), Style::new().fg(t.soft))),
+        );
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            "Papers in it",
+            "⏎ put in paperstack, starred · o open · esc close",
+        )),
+        area,
+    );
+    let targets = (0..p.papers.len())
+        .map(|i| {
+            let mut r = spot(area, first + 2 * i, 0, room as u16);
+            r.height = 2;
+            (r, Target::Item(i))
+        })
+        .collect();
+    (area, targets)
+}
+
+/// What was thrown away on its own, two lines each: how sure, who, what
+/// about, and why; then what was learnt since, and how it does now. A
+/// message clicked is put back.
+fn debrief_dialog(f: &mut Frame, t: &Theme, d: &crate::filter::Debrief) -> (Rect, Targets) {
+    let width = f.area().width.min(96);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![
+        Line::raw(""),
+        Line::styled(
+            format!(" Thrown away on its own: {}", d.thrown.len()),
+            Style::new().fg(t.title).bold(),
+        ),
+        Line::raw(""),
+    ];
+    let first = lines.len();
+    for (i, th) in d.thrown.iter().enumerate() {
+        let here = i == d.at;
+        let ground = if here { t.focus } else { t.page };
+        let who = clip(&th.from, 24);
+        let head = format!(" {:>3.0}%  {who:<24}  ", th.odds * 100.0);
+        let said = room.saturating_sub(head.width() + 10);
+        let mut first_line = vec![
+            Span::styled(head, Style::new().fg(t.soft)),
+            Span::styled(clip(&th.subject, said), Style::new().fg(t.text)),
+        ];
+        if th.back {
+            first_line.push(Span::styled("  put back", Style::new().fg(t.accent).bold()));
+        }
+        lines.push(Line::from(first_line).style(Style::new().bg(ground)));
+        lines.push(
+            Line::styled(
+                clip(&format!("        {}", th.why.join(" · ")), room),
+                Style::new().fg(t.dim),
+            )
+            .style(Style::new().bg(ground)),
+        );
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!(
+            " Learnt since: {} of your decisions ({} kept, {} thrown away)",
+            d.decided, d.kept, d.thrown_by_you
+        ),
+        Style::new().fg(t.soft),
+    ));
+    if let Some(g) = d.grade {
+        let pct = |a: usize, b: usize| {
+            if b == 0 {
+                0.0
+            } else {
+                100.0 * a as f32 / b as f32
+            }
+        };
+        lines.push(Line::styled(
+            format!(
+                " At 95% sure, it catches {:.0}% of what you throw away, and would throw away {:.1}% of what you keep",
+                pct(g.caught, g.caught + g.missed),
+                pct(g.wrong, g.wrong + g.right)
+            ),
+            Style::new().fg(t.soft),
+        ));
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, &d.title, "⏎ put back · u put all back · esc ok")),
+        area,
+    );
+    let targets = (0..d.thrown.len())
+        .map(|i| {
+            let mut r = spot(area, first + 2 * i, 0, room as u16);
+            r.height = 2;
+            (r, Target::Item(i))
+        })
         .collect();
     (area, targets)
 }
@@ -1553,10 +1708,30 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     // its colour.
     let together = app.listing.as_ref().is_some_and(|l| l.mixed());
     let names: Vec<String> = app.accounts.iter().map(|a| clip(&a.name, 12)).collect();
+    // What is marked, by where each is: its account, folder and UID.
+    let marked: std::collections::HashSet<(String, String, u32)> =
+        match (&app.map.region, &app.map.snapshot) {
+            (Some(r), Some(s)) => r
+                .keys
+                .iter()
+                .filter_map(|k| s.find(k))
+                .flat_map(|i| {
+                    let d = &s.dots[i];
+                    d.places
+                        .iter()
+                        .map(|p| (d.key.account.clone(), p.folder.clone(), p.uid))
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            _ => Default::default(),
+        };
     let items: Vec<ListItem> = app.shown[top..end]
         .iter()
         .map(|m| {
             let unseen = !m.flags.seen;
+            let is_marked = app.accounts.get(m.account).is_some_and(|a| {
+                marked.contains(&(a.ident.clone(), m.folder.clone(), m.summary.uid))
+            });
             let date = m.date.map(|d| short_date(d, &now)).unwrap_or_default();
             let mut right = Vec::new();
             if m.flags.flagged {
@@ -1586,7 +1761,9 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
             );
             let pad = width.saturating_sub(3 + from.width() + right_w);
             let mut first = vec![
-                if unseen {
+                if is_marked {
+                    Span::styled(" ▪ ", Style::new().fg(t.on_accent).bg(t.accent).bold())
+                } else if unseen {
                     Span::styled(" ● ", Style::new().fg(t.accent))
                 } else {
                     Span::raw("   ")
@@ -1636,8 +1813,18 @@ fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
     *app.list.offset_mut() = top;
     let heights = vec![4; end - top];
+    let mut picked_at = None;
     for (at, row) in rows(inner, 0, &heights) {
+        if app.list.selected() == Some(top + at) {
+            picked_at = Some(row.y + 2);
+        }
         app.targets.push((row, Target::Message(top + at)));
+    }
+    // The labels it may be moved to, dropped down under it.
+    if app.menu.is_some()
+        && let Some(under) = picked_at
+    {
+        label_menu(f, app, area, under);
     }
 }
 
@@ -2228,10 +2415,7 @@ fn tree_pane(f: &mut Frame, app: &mut App, s: &crate::map::Snapshot, canvas: Rec
         (said, newest, unread, hits)
     };
     rows.sort_by(|a, b| a.path.cmp(&b.path));
-    let said: Vec<_> = rows
-        .iter()
-        .map(|r| root.at(&r.path).map(&said_of))
-        .collect();
+    let said: Vec<_> = rows.iter().map(|r| root.at(&r.path).map(said_of)).collect();
     // Each level as wide as what its open branch says, to a point, and a
     // line's room after it.
     let levels = root.levels();
@@ -2720,17 +2904,19 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .and_then(|r| r.picked.as_ref())
         .and_then(|k| s.find(k));
-    let (filed, discarded, kept) =
-        rows.iter()
-            .fold((0, 0, 0), |(a, b, c), &i| match app.choice(i) {
-                Choice::Move(_) => (a + 1, b, c),
-                Choice::Discard => (a, b + 1, c),
-                Choice::Keep => (a, b, c + 1),
-            });
+    let (filed, discarded, kept, _) = app.review_counts();
+    let before = rows.iter().filter(|&&i| s.dots[i].looked).count();
     // Its heading: how many, what will be done, and the button that does it.
     let x = area.x + 1;
     let width = area.width.saturating_sub(2);
-    let head = format!(" Inbox · {} to look through ", rows.len());
+    let head = if before > 0 {
+        format!(
+            " Inbox · {} to look through · {before} kept before ",
+            rows.len() - before
+        )
+    } else {
+        format!(" Inbox · {} to look through ", rows.len())
+    };
     let button = " Apply  $ ";
     let buf = f.buffer_mut();
     buf.set_stringn(
@@ -2756,7 +2942,12 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
     }
-    let counts = format!(" {filed} to file · {discarded} to discard · {kept} to keep");
+    // Only those chosen are done; the rest are left as they are.
+    let counts = if filed + discarded + kept == 0 {
+        " none chosen: look through as many as you like; $ does only those".to_string()
+    } else {
+        format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left")
+    };
     buf.set_stringn(
         x,
         area.y + 1,
@@ -2795,11 +2986,7 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let now = Zoned::now();
     let mut y = area.y + 3;
-    let menu_for = app
-        .review
-        .as_ref()
-        .and_then(|r| r.menu.as_ref())
-        .and_then(|m| s.find(&m.key));
+    let menu_for = app.menu.as_ref().and_then(|m| s.find(&m.key));
     let mut menu_at = None;
     for (row, &i) in rows.iter().enumerate().skip(top).take(room) {
         if Some(i) == menu_for {
@@ -2831,7 +3018,9 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let mark = if d.flags.seen { "  " } else { "● " };
         let said = format!("{mark}{} — {}", clip(from, 22), d.subject);
         let room_said = usize::from(width).saturating_sub(date.width() + 2);
-        let style = if d.flags.seen {
+        let style = if d.looked {
+            Style::new().fg(t.dim).bg(ground)
+        } else if d.flags.seen {
             Style::new().fg(t.soft).bg(ground)
         } else {
             Style::new().fg(t.title).bg(ground).bold()
@@ -2845,10 +3034,12 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         );
         app.targets
             .push((Rect::new(x, y, width, 1), Target::ReviewRow(row)));
-        // What may be done with it, what will be done lit.
-        let chosen = app.choice(i);
+        // What may be done with it: what was chosen lit, else what is
+        // suggested in its colour.
+        let chosen = app.chosen(i);
         let suggested = crate::app::App::suggested(&s, i);
-        let label = match &chosen {
+        let shown = chosen.clone().unwrap_or_else(|| suggested.clone());
+        let label = match &shown {
             Choice::Move(l) => Some(l.clone()),
             _ => s.suggestion(i).map(str::to_string),
         };
@@ -2858,31 +3049,36 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
                     Some(l) => format!("→ {}", clip(l, 18)),
                     None => "move to…".to_string(),
                 },
-                matches!(chosen, Choice::Move(_)),
+                matches!(chosen, Some(Choice::Move(_))),
                 t.accent,
                 t.on_accent,
-                matches!(suggested, Choice::Move(_)),
+                chosen.is_none() && matches!(suggested, Choice::Move(_)),
             ),
             (
                 "keep".to_string(),
-                chosen == Choice::Keep,
+                chosen == Some(Choice::Keep),
                 t.title,
                 t.page,
-                suggested == Choice::Keep,
+                chosen.is_none() && suggested == Choice::Keep,
             ),
             (
-                "discard".to_string(),
-                chosen == Choice::Discard,
+                match s.dots[i].thrown {
+                    Some(p) => format!("discard {:.0}%", p * 100.0),
+                    None => "discard".to_string(),
+                },
+                chosen == Some(Choice::Discard),
                 t.error,
                 t.on_accent,
-                suggested == Choice::Discard,
+                chosen.is_none() && suggested == Choice::Discard,
             ),
             ("new…".to_string(), false, t.accent, t.on_accent, false),
         ];
         let mut cx = x + 2;
-        for (k, (what, on, bg, fg, _)) in options.iter().enumerate() {
+        for (k, (what, on, bg, fg, hint)) in options.iter().enumerate() {
             let chip = if *on {
                 format!(" ✓ {what} ")
+            } else if *hint {
+                format!(" [?] {what} ")
             } else {
                 format!(" [ ] {what} ")
             };
@@ -2892,6 +3088,8 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             }
             let style = if *on {
                 Style::new().fg(*fg).bg(*bg).bold()
+            } else if *hint {
+                Style::new().fg(*bg).bg(ground)
             } else {
                 Style::new().fg(t.dim).bg(ground)
             };
@@ -2907,15 +3105,15 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// The labels a message looked through may be moved to, dropped down under
-/// the line of what may be done with it, or over it where there is no room
+/// The labels a message may be moved to, dropped down under it in the
+/// list, or under the line of what may be done with it looked through, or over it where there is no room
 /// below: what is typed, then each label with how far it is by angle, the
 /// one picked lit.
 fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
     use crate::app::Pick;
     let t = app.theme;
     let items = app.menu_items();
-    let Some(menu) = app.review.as_ref().and_then(|r| r.menu.clone()) else {
+    let Some(menu) = app.menu.clone() else {
         return;
     };
     let width = area.width.saturating_sub(4).min(40);

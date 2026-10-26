@@ -98,6 +98,19 @@ impl Ledger {
             .map(|e| e.origin.clone())
     }
 
+    /// Where the message of `account` by `message_id` is in a Trash, if
+    /// letterbox moved it there.
+    pub fn find(&self, account: &str, message_id: &str) -> Option<Entry> {
+        if message_id.is_empty() {
+            return None;
+        }
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| e.account == account && e.message_id == message_id)
+            .cloned()
+    }
+
     pub fn record(&mut self, entry: Entry) -> anyhow::Result<()> {
         self.writable()?;
         self.entries.retain(|e| {

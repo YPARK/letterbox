@@ -7,6 +7,7 @@ mod compose;
 mod config;
 mod demo;
 mod edit;
+mod filter;
 mod forest;
 mod imap;
 mod index;
@@ -17,6 +18,8 @@ mod mcp;
 mod model;
 mod net;
 mod oauth;
+mod papers;
+mod paperstack;
 mod pick;
 mod secret;
 mod setup;
@@ -28,7 +31,7 @@ mod ui;
 mod vault;
 mod worker;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -131,6 +134,12 @@ enum Command {
         #[command(subcommand)]
         action: MapAction,
     },
+    /// What letterbox has learnt of the mail you throw away: how well it
+    /// would have done, or learnt from the Trash and your labels too
+    Filter {
+        #[command(subcommand)]
+        action: FilterAction,
+    },
     /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
     /// program, as Cursor or Claude Code, runs `letterbox mcp`
     Mcp,
@@ -196,6 +205,47 @@ enum VaultAction {
     Passphrase,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Subcommand)]
+enum FilterAction {
+    /// How it would have done: each decision said before it was learnt,
+    /// from those before it alone; what it caught, and what you kept that
+    /// it would have thrown away
+    Check {
+        /// How much of each weight is kept a decision, to try another
+        #[arg(long, hide = true)]
+        decay: Option<f32>,
+    },
+    /// Learn from mail already in each account's Trash, thrown away
+    /// unread, as thrown away, and filed under your labels, as kept, the
+    /// newest of each; then check
+    Learn {
+        /// How many of each, at most, from each place
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    /// Forget what was learnt from the Trash and your labels: only your
+    /// own decisions are kept; then check
+    Forget,
+    /// Throw new mail away on its own, when 95% sure, or not: told of as
+    /// letterbox opens, and by B, never learnt from
+    Auto {
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+    /// What was thrown away on its own, and why, and what was learnt since
+    Debrief {
+        /// As far back as this many days
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
+}
+
 #[derive(Subcommand)]
 enum MapAction {
     /// Lay the map out again by every lens, from nothing, as its seed has
@@ -206,6 +256,9 @@ enum MapAction {
         #[arg(long)]
         from_servers: bool,
     },
+    /// How well the map would file what you filed: each message under a
+    /// label, its own hidden, put back by the label nearest it
+    Check,
     /// The map's key: where it is kept
     Key {
         /// Print its secret, as age and rage read a key file
@@ -390,6 +443,286 @@ fn stores(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn Store>)>> {
         .collect())
 }
 
+/// How well the map would file what was filed, as `letterbox map check`
+/// says it: by each way of reading the mail.
+fn map_check(index: &index::Index) -> String {
+    let given: Vec<(&index::Record, Vec<String>, bool)> = index
+        .records
+        .values()
+        .map(|r| (r, index.labels(&r.key), index.system(&r.key).sent))
+        .collect();
+    let corpus = model::Corpus::read(&given, index::Lens::Both);
+    let said = |c: model::LabelCheck| {
+        let pct = if c.total == 0 {
+            0.0
+        } else {
+            100.0 * c.hits as f32 / c.total as f32
+        };
+        let right = if c.said == 0 {
+            0.0
+        } else {
+            100.0 * c.hits as f32 / c.said as f32
+        };
+        format!(
+            "{} of {} ({pct:.0}%), said for {} and right for {right:.0}% of those",
+            c.hits, c.total, c.said
+        )
+    };
+    let mut out = format!(
+        "{} messages; each filed one put back under a label of its own, its own hidden:\n",
+        given.len()
+    );
+    let within = |deg: f32| corpus.label_check_nearest(&given, corpus.base(), model::VOTERS, deg);
+    for (how, check) in [
+        (
+            format!(
+                "the nearest filed mail voting, within {}° (as it is)",
+                model::VOTED_WITHIN
+            ),
+            within(model::VOTED_WITHIN),
+        ),
+        ("  within 30°".to_string(), within(30.0)),
+        ("  within 60°".to_string(), within(60.0)),
+        ("  at any distance".to_string(), within(90.0)),
+        (
+            "the label whose mean is nearest".to_string(),
+            corpus.label_check(&given, corpus.base()),
+        ),
+        (
+            "always the commonest label".to_string(),
+            model::commonest_label_check(&given),
+        ),
+    ] {
+        out.push_str(&format!("  {how}: {}\n", said(check)));
+    }
+    out
+}
+
+/// The map's index, its key found where it is kept: the vault opened
+/// first if an account keeps its password there.
+fn open_index(args: &Args) -> anyhow::Result<index::Index> {
+    if args.demo {
+        return Ok(index::Index::memory());
+    }
+    if config::load(&args.config)?.iter().any(in_vault) {
+        open_vault(false)?;
+    }
+    index::Index::open(
+        &index::key::dir(),
+        secret::keepers,
+        secret::find,
+        secret::store,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Learn from what each of `stores` has in its Trash, never read, and from
+/// what you filed under your labels, read again first as the index now
+/// reads a message; how many were thrown away, kept, and not learnt before.
+fn learn(
+    index: &mut index::Index,
+    stores: &mut [(String, Box<dyn Store>)],
+    limit: usize,
+    now: i64,
+) -> anyhow::Result<(usize, usize, usize)> {
+    let keys: Vec<index::Key> = index
+        .kept_seeds(limit)
+        .into_iter()
+        .map(|(_, t)| t.key)
+        .collect();
+    let shared = std::sync::Mutex::new(std::mem::replace(index, index::Index::memory()));
+    let mut thrown = Vec::new();
+    for (name, store) in stores.iter_mut() {
+        if let Err(e) = index::sync::refresh(store.as_mut(), &shared, &keys, now) {
+            eprintln!("{name}: what you filed cannot be read again: {e:#}");
+        }
+        let known = shared.lock().unwrap_or_else(|e| e.into_inner()).known();
+        match trash_seeds(store.as_mut(), &known, limit, now) {
+            Ok(found) => thrown.extend(found),
+            Err(e) => eprintln!("{name}: its Trash cannot be read: {e:#}"),
+        }
+    }
+    *index = shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut seeds = index.kept_seeds(limit);
+    let (kept, n_thrown) = (seeds.len(), thrown.len());
+    seeds.extend(thrown);
+    // Oldest first, as if decided as they came.
+    seeds.sort_by_key(|(at, t)| (*at, t.key.clone()));
+    let learnt = index.seed(seeds.into_iter().map(|(_, t)| t).collect())?;
+    Ok((n_thrown, kept, learnt))
+}
+
+/// The newest `limit` messages of the account's Trash never read, as thrown
+/// away, each with when it was sent. Mail read and then thrown away was
+/// dealt with, not unwanted: it is left out.
+fn trash_seeds(
+    store: &mut dyn Store,
+    known: &filter::Known,
+    limit: usize,
+    now: i64,
+) -> anyhow::Result<Vec<(i64, filter::Taught)>> {
+    let trash = store
+        .folders()?
+        .into_iter()
+        .find(|f| f.role == mail::Role::Trash)
+        .map(|f| f.path)
+        .or_else(|| store.trash().map(str::to_string));
+    let Some(trash) = trash else {
+        return Ok(Vec::new());
+    };
+    let ident = store.ident();
+    let uids = store.uids(&trash)?;
+    let mut seeds = Vec::new();
+    // Newest first, as far back as it takes to find `limit` never read.
+    for chunk in uids.rchunks(100) {
+        if seeds.len() >= limit {
+            break;
+        }
+        for got in store.fetch_index(&trash, chunk)? {
+            if got.flags.seen {
+                continue;
+            }
+            let r = index::Record::of(&ident, &trash, 0, &got, now);
+            seeds.push((
+                r.date.unwrap_or(now),
+                filter::Taught {
+                    key: r.key.clone(),
+                    thrown: true,
+                    tokens: filter::Filter::tokens(&r, known),
+                    message_id: r.message_id.clone(),
+                    seeded: true,
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+    seeds.truncate(limit);
+    Ok(seeds)
+}
+
+/// Turn throwing new mail away on its own on, for mail come from `now`, or
+/// off, as the file at `path` keeps it.
+fn set_auto(path: &std::path::Path, on: bool, now: i64) -> anyhow::Result<()> {
+    let mut a = filter::Auto::read(&std::fs::read_to_string(path).unwrap_or_default(), now);
+    if on && !a.on {
+        a.since = now;
+    }
+    a.on = on;
+    std::fs::write(path, a.to_string()).with_context(|| format!("writing {}", path.display()))
+}
+
+/// What was thrown away on its own after `since`, and why, and what was
+/// learnt since, as `letterbox filter debrief` says it.
+fn debrief_text(index: &index::Index, since: i64) -> String {
+    use std::fmt::Write;
+    let d = index.debrief(since);
+    let mut out = String::new();
+    let _ = writeln!(out, "thrown away on its own: {}", d.thrown.len());
+    let now = jiff::Zoned::now();
+    for t in &d.thrown {
+        let back = if t.back { "  · put back" } else { "" };
+        let _ = writeln!(
+            out,
+            "  {:>8}  {:>3.0}%  {}  {}{back}",
+            ui::short_date(t.at, &now),
+            t.odds * 100.0,
+            mail::clean(&t.from),
+            mail::clean(&t.subject)
+        );
+        let _ = writeln!(out, "                   {}", t.why.join(" · "));
+    }
+    let _ = writeln!(
+        out,
+        "\n{} of your decisions learnt since: {} kept, {} thrown away",
+        d.decided, d.kept, d.thrown_by_you
+    );
+    out
+}
+
+/// How what was learnt would have done, as `letterbox filter check` says it.
+fn check(index: &index::Index, decay: f32) -> String {
+    use std::fmt::Write;
+    let taught = &index.filter.taught;
+    let said = filter::Filter::check_with(taught, decay);
+    let mut out = String::new();
+    let seeded = taught.iter().filter(|t| t.seeded).count();
+    let _ = writeln!(
+        out,
+        "{} decisions: {} thrown away, {} kept; {} of them yours, {} read from the Trash and your labels",
+        taught.len(),
+        taught.iter().filter(|t| t.thrown).count(),
+        taught.iter().filter(|t| !t.thrown).count(),
+        taught.len() - seeded,
+        seeded,
+    );
+    if said.is_empty() {
+        let _ = writeln!(
+            out,
+            "nothing to grade yet: it says nothing until it has learnt {} of each",
+            filter::READY
+        );
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "{} graded, each before it was learnt, by what was learnt before it\n",
+        said.len()
+    );
+    let pct = |a: usize, b: usize| {
+        if b == 0 {
+            0.0
+        } else {
+            100.0 * a as f32 / b as f32
+        }
+    };
+    for level in [0.7, 0.8, 0.9, 0.95] {
+        let g = filter::grade(&said, level);
+        let mark = if level == filter::SURE {
+            "  (as it is)"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            out,
+            "sure to {:.0}%: caught {} of {} thrown away ({:.0}%); would have thrown away {} of {} kept ({:.1}%){mark}",
+            level * 100.0,
+            g.caught,
+            g.caught + g.missed,
+            pct(g.caught, g.caught + g.missed),
+            g.wrong,
+            g.wrong + g.right,
+            pct(g.wrong, g.wrong + g.right),
+        );
+    }
+    let mut wrong: Vec<&filter::Said> = said
+        .iter()
+        .filter(|s| !s.thrown && s.odds >= filter::SURE)
+        .collect();
+    wrong.sort_by(|a, b| b.odds.total_cmp(&a.odds));
+    if !wrong.is_empty() {
+        let _ = writeln!(out, "\nkept, but it would have thrown away:");
+        for s in wrong.iter().take(30) {
+            let subject = index
+                .records
+                .get(&s.key)
+                .map(|r| r.subject.clone())
+                .unwrap_or_else(|| "(no longer here)".to_string());
+            let _ = writeln!(
+                out,
+                "  {:>3.0}%  {}  {}{}",
+                s.odds * 100.0,
+                s.from,
+                mail::clean(&subject),
+                if s.seeded { "  · from a label" } else { "" }
+            );
+        }
+        if wrong.len() > 30 {
+            let _ = writeln!(out, "  and {} more", wrong.len() - 30);
+        }
+    }
+    out
+}
+
 fn in_vault(a: &config::Account) -> bool {
     a.keep == secret::Keeper::Vault && a.password_command.is_none()
 }
@@ -554,6 +887,16 @@ fn command(args: &Args) -> anyhow::Result<()> {
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
+                // Thrown away on its own, unless turned off: told of first.
+                let path = args.config.with_file_name("filter");
+                let now = jiff::Timestamp::now().as_second();
+                app.auto =
+                    filter::Auto::read(&std::fs::read_to_string(&path).unwrap_or_default(), now);
+                app.filter_file = Some(path);
+                // Written at once, so that the first time it is for mail
+                // come from now on.
+                app.remember_auto();
+                app.debrief_on_start();
             }
             app::run(&mut app)
         }
@@ -698,23 +1041,84 @@ fn command(args: &Args) -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
+        Some(Command::Filter {
+            action: FilterAction::Auto { state },
+        }) => {
+            let on = matches!(state, OnOff::On);
+            set_auto(
+                &args.config.with_file_name("filter"),
+                on,
+                jiff::Timestamp::now().as_second(),
+            )?;
+            println!(
+                "{}",
+                if on {
+                    "new mail it is 95% sure of is thrown away on its own: told of as letterbox opens, and by B"
+                } else {
+                    "nothing is thrown away on its own"
+                }
+            );
+            Ok(())
+        }
+        Some(Command::Filter {
+            action: FilterAction::Debrief { days },
+        }) => {
+            let index = open_index(args)?;
+            let since = jiff::Timestamp::now().as_second() - days * 24 * 60 * 60;
+            print!("{}", debrief_text(&index, since));
+            Ok(())
+        }
+        Some(Command::Filter { action }) => {
+            let mut index = open_index(args)?;
+            // Learnt or forgotten while letterbox is open, what either
+            // writes would be lost.
+            if matches!(action, FilterAction::Learn { .. } | FilterAction::Forget)
+                && !args.demo
+                && !index.writes()
+            {
+                bail!(
+                    "letterbox is open, and writes what is learnt: close it, then run this again"
+                );
+            }
+            if let FilterAction::Forget = action {
+                let n = index.unseed()?;
+                index.flush()?;
+                println!("{n} read from the Trash and your labels, forgotten\n");
+            }
+            if let FilterAction::Learn { limit } = action {
+                let now = jiff::Timestamp::now().as_second();
+                let (thrown, kept, learnt) = learn(&mut index, &mut stores(args)?, *limit, now)?;
+                index.flush()?;
+                println!(
+                    "{thrown} in the Trash and {kept} under your labels read; {learnt} not learnt before, learnt\n"
+                );
+            }
+            let decay = match action {
+                FilterAction::Check { decay } => decay.unwrap_or(filter::DECAY),
+                _ => filter::DECAY,
+            };
+            print!("{}", check(&index, decay));
+            Ok(())
+        }
+        Some(Command::Map {
+            action: MapAction::Check,
+        }) => {
+            let index = if args.demo {
+                open_index(args)?
+            } else {
+                if config::load(&args.config)?.iter().any(in_vault) && !vault::is_open() {
+                    let _ = vault::unlock_by_key();
+                }
+                index::Index::read(&index::key::dir(), secret::find)?
+                    .context("the map is not begun: open letterbox and press M to begin it")?
+            };
+            print!("{}", map_check(&index));
+            Ok(())
+        }
         Some(Command::Map {
             action: MapAction::Rebuild { from_servers },
         }) => {
-            let mut index = if args.demo {
-                index::Index::memory()
-            } else {
-                if config::load(&args.config)?.iter().any(in_vault) {
-                    open_vault(false)?;
-                }
-                index::Index::open(
-                    &index::key::dir(),
-                    secret::keepers,
-                    secret::find,
-                    secret::store,
-                )
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-            };
+            let mut index = open_index(args)?;
             if *from_servers {
                 index.forget_cache()?;
             }

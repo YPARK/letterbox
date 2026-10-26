@@ -37,6 +37,12 @@ pub enum Act {
     ReplyAll,
     Forward,
     Files,
+    /// The message read, presented by ohp.
+    Present,
+    /// What was thrown away on its own, and why.
+    Debrief,
+    /// The papers the message read tells of, to put in paperstack.
+    Papers,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -63,6 +69,8 @@ pub enum Act {
     /// The map, or the list, in the middle pane.
     MapView,
     ListView,
+    /// The map, from the list; the list, from the map.
+    SwitchView,
     PreviousCluster,
     NextCluster,
     /// The map laid out by another lens, back as far as another time, or
@@ -282,6 +290,27 @@ pub const KEYS: &[Binding] = &[
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
     },
     Binding {
+        keys: &[("P", Papers)],
+        name: "P",
+        hint: "P",
+        foot: &[(Reader, "papers")],
+        help: "the papers the message read tells of, a Scholar alert's or a journal's, each said to be in your paperstack, like what you starred there, or new: ⏎ puts the one picked there, starred, o opens it",
+    },
+    Binding {
+        keys: &[("B", Debrief)],
+        name: "B",
+        hint: "B",
+        foot: &[],
+        help: "what was thrown away on its own in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. Told of as letterbox opens too",
+    },
+    Binding {
+        keys: &[("O", Present)],
+        name: "O",
+        hint: "O",
+        foot: &[(Reader, "ohp")],
+        help: "present the message read with ohp, typeset as a page, its images in it; quit ohp to come back",
+    },
+    Binding {
         keys: &[("e", Archive)],
         name: "e",
         hint: "e",
@@ -337,10 +366,17 @@ pub const KEYS: &[Binding] = &[
     },
     // The map.
     Binding {
+        keys: &[("M", SwitchView)],
+        name: "M",
+        hint: "M",
+        foot: &[(Side, "map"), (List, "map"), (Map, "list")],
+        help: "the map, or back to the list from it, in any terminal: as M-g and M-l",
+    },
+    Binding {
         keys: &[("M-g", MapView), ("s-g", MapView)],
         name: "M-g s-g",
         hint: "M-g",
-        foot: &[(Side, "map"), (List, "map")],
+        foot: &[],
         help: "the map: every account's mail laid out by what it is about and who it is from",
     },
     Binding {
@@ -397,14 +433,14 @@ pub const KEYS: &[Binding] = &[
         name: "i",
         hint: "i",
         foot: &[(Map, "review"), (Reviewing, "close")],
-        help: "the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
+        help: "the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
     },
     Binding {
         keys: &[("$", Apply)],
         name: "$",
         hint: "$",
         foot: &[(Reviewing, "apply")],
-        help: "in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded",
+        help: "in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are",
     },
     Binding {
         keys: &[(",", View)],
@@ -418,7 +454,7 @@ pub const KEYS: &[Binding] = &[
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, or drag a box over some; m, d, e, u and s then act on all of it, and v again lets it go",
+        help: "in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go; m, d, e, u and s then act on all of it, and esc lets it go",
     },
     // The message being written: edit's keys.
     Binding {

@@ -140,6 +140,18 @@ type Kept = (i64, Vec<u8>, Flags);
 
 const PLAIN: &str = "Content-Type: text/plain; charset=utf-8\r\n";
 
+/// A Google Scholar alert, as Scholar writes one: each paper's title a link
+/// sent on through Scholar, who wrote it where under it, then its snippet.
+const SCHOLAR_ALERT: &str = "<html><body>\
+<h3><a href=\"https://scholar.google.com/scholar_url?url=https://www.nature.com/articles/s41586-026-11078-2&amp;hl=en&amp;oi=scholaralrt\" class=\"gse_alrt_title\">Population-scale immune <b>multiome</b> atlas reveals regulatory disease mechanisms</a></h3>\
+<div style=\"color:#006621\">M Kanai, TM Delorey, J Honkanen - Nature, 2026</div>\
+<div class=\"gse_alrt_sni\">An atlas of immune cells across a population, read by genotype&hellip;</div>\
+<h3><a href=\"https://scholar.google.com/scholar_url?url=https://arxiv.org/abs/2410.01234&amp;hl=en&amp;oi=scholaralrt\" class=\"gse_alrt_title\">Learning gene programs from single-cell data with transformers</a></h3>\
+<div style=\"color:#006621\">A Author, B Author - arXiv preprint, 2026</div>\
+<div class=\"gse_alrt_sni\">Gene programs, learnt across cells&hellip;</div>\
+<p><a href=\"https://scholar.google.com/scholar_alerts?view_op=cancel_alert_options\">Cancel alert</a></p>\
+</body></html>\n";
+
 fn inbox() -> Vec<Kept> {
     let unread = Flags::default();
     let read = Flags {
@@ -447,6 +459,7 @@ fn labs() -> Vec<(&'static str, Kept)> {
             }
             if let Some(list) = list_id(l.from, l.subject) {
                 head.push_str(&format!("List-Id: {list}\r\n"));
+                head.push_str("List-Unsubscribe: <mailto:unsubscribe@lists.example>\r\n");
             }
             let (name, _, signs) = person(l.from);
             let body = if signs {
@@ -540,7 +553,18 @@ impl Demo {
         let mut sent = vec![(sent.0, sent.1, read)];
         sent.extend(answers());
         file("Sent", sent);
-        file("Archive", take("Archive"));
+        // A Scholar alert, its papers to put in paperstack with P.
+        let mut archive = take("Archive");
+        let alert = letter(
+            2900,
+            "Google Scholar Alerts <scholaralerts-noreply@google.com>",
+            "You <you@example.com>",
+            "Kanai M - new related research",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            SCHOLAR_ALERT,
+        );
+        archive.push((alert.0, alert.1, read));
+        file("Archive", archive);
         file("Projects/Grant", take("Projects/Grant"));
         let draft = letter(
             2,

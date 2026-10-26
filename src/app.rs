@@ -380,6 +380,9 @@ impl Listing {
     }
 
     pub fn total(&self) -> u32 {
+        if let Some(fixed) = &self.fixed {
+            return fixed.len() as u32;
+        }
         self.parts.iter().map(|p| p.total).sum()
     }
 
@@ -503,6 +506,8 @@ pub enum Button {
 pub enum Item {
     /// The message itself, as its HTML, in the browser.
     Page,
+    /// The message itself, presented by ohp.
+    Present,
     File {
         at: usize,
         name: String,
@@ -584,14 +589,15 @@ pub struct Files {
 /// scrolled so far; the form to add an account; the message's files and
 /// links; which folder is Trash; whether to remove an account; what to
 /// call one, as typed so far.
-/// The Inbox looked through beside the map, each message given what to do
-/// with it: what is suggested, unless another was chosen; all of it done at
-/// once, when asked.
+/// The Inbox looked through beside the map, each message shown what is
+/// suggested for it: what was chosen for those looked at done at once,
+/// when asked, and the rest left as they are.
 #[derive(Default)]
 pub struct Review {
     /// The message picked in it.
     pub picked: Option<crate::index::Key>,
-    /// What was chosen for each message, where it is not what is suggested.
+    /// What was chosen for each message looked at; those not in it are
+    /// left as they are.
     pub chosen: std::collections::BTreeMap<crate::index::Key, Choice>,
     /// The first message shown.
     pub top: usize,
@@ -601,15 +607,16 @@ pub struct Review {
     pub asking: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
-    /// The labels it may be moved to, dropped down under it.
-    pub menu: Option<Menu>,
 }
 
-/// The labels a message looked through may be moved to, dropped down
-/// under it: narrowed by what is typed, the one picked lit.
+/// The labels a message may be moved to, dropped down under it, in the
+/// list or the Inbox looked through: narrowed by what is typed, the one
+/// picked lit.
 #[derive(Clone, Debug, Default)]
 pub struct Menu {
     pub key: crate::index::Key,
+    /// Those to be moved with it, as many as are marked.
+    pub with: Vec<crate::index::Key>,
     pub typed: String,
     pub at: usize,
 }
@@ -660,6 +667,24 @@ pub enum Dialog {
     View,
     /// Whether to begin the map, asked the first time it is wanted.
     StartMap,
+    /// What was thrown away on its own, and why, to put back.
+    Debrief(Box<crate::filter::Debrief>),
+    /// The papers of the message read, each where it stands with
+    /// paperstack, to put there.
+    Papers(Box<PapersView>),
+}
+
+/// The papers of the message read, as listed: where each stands with
+/// paperstack, once it has said; the one picked; what is under way.
+#[derive(Clone, Debug)]
+pub struct PapersView {
+    /// Which asking of paperstack it is: what it says of another is not
+    /// its.
+    pub asked: u64,
+    pub papers: Vec<crate::papers::Paper>,
+    pub standing: Vec<Option<crate::paperstack::Standing>>,
+    pub at: usize,
+    pub note: Option<String>,
 }
 
 impl Dialog {
@@ -737,7 +762,7 @@ pub enum Launch {
 /// Markdown, which it typesets.
 pub fn ohp_reads(name: &str) -> bool {
     let name = name.to_lowercase();
-    [".pdf", ".md", ".markdown", ".rmd"]
+    [".pdf", ".md", ".markdown", ".rmd", ".html", ".htm"]
         .iter()
         .any(|e| name.ends_with(e))
 }
@@ -868,6 +893,8 @@ pub struct App {
     pub map_later: bool,
     /// The Inbox, being looked through beside the map.
     pub review: Option<Review>,
+    /// The labels the message picked may be moved to, dropped down.
+    pub menu: Option<Menu>,
     /// What was chosen in it, kept while it is closed, till it is done.
     pub review_kept: std::collections::BTreeMap<crate::index::Key, Choice>,
     /// Each account's second connection, kept for its sync while the map
@@ -898,6 +925,14 @@ pub struct App {
     /// Where it is written down how the mail was looked at, the list or
     /// the map, to open as it was left; none to keep nothing.
     pub look_file: Option<PathBuf>,
+    /// Whether new mail is thrown away on its own, and when what it did
+    /// was last told of; and where that is kept, if anywhere.
+    pub auto: crate::filter::Auto,
+    pub filter_file: Option<PathBuf>,
+    /// paperstack, once asked: run as it is first wanted, and kept.
+    pub library: Arc<Mutex<Option<Box<dyn crate::paperstack::Library>>>>,
+    /// How many lists of papers paperstack has been asked of.
+    papers_asked: u64,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -1091,6 +1126,7 @@ impl App {
             map_later,
             review: None,
             review_kept: Default::default(),
+            menu: None,
             twins: Vec::new(),
             open_map: open_map_index,
             syncs: Vec::new(),
@@ -1103,6 +1139,10 @@ impl App {
             panes_right: 0,
             read_width: 0,
             look_file: None,
+            auto: Default::default(),
+            filter_file: None,
+            library: Default::default(),
+            papers_asked: 0,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1265,6 +1305,44 @@ impl App {
         if let Answer::Relaid { lens, keys, at } = reply.answer {
             return self.relaid(lens, &keys, &at);
         }
+        if let Answer::Standings { asked, said } = reply.answer {
+            // Of the papers listed, as they still are, alone.
+            if let Dialog::Papers(p) = &mut self.dialog
+                && p.asked == asked
+                && said.as_ref().map_or(true, |s| s.len() == p.papers.len())
+            {
+                match said {
+                    Ok(standing) => {
+                        p.standing = standing.into_iter().map(Some).collect();
+                        p.note = None;
+                    }
+                    Err(e) => p.note = Some(first_line(&e).to_string()),
+                }
+            }
+            return;
+        }
+        if let Answer::Shelved { asked, at, found } = reply.answer {
+            let said = match found {
+                Ok(f) => {
+                    if let Dialog::Papers(p) = &mut self.dialog
+                        && p.asked == asked
+                        && let Some(s) = p.standing.get_mut(at)
+                    {
+                        *s = Some(crate::paperstack::Standing::Have {
+                            key: f.key.clone(),
+                            starred: true,
+                        });
+                    }
+                    format!("in paperstack, starred, as {}", f.key)
+                }
+                Err(e) => first_line(&e).to_string(),
+            };
+            match &mut self.dialog {
+                Dialog::Papers(p) if p.asked == asked => p.note = Some(said),
+                _ => self.status = said,
+            }
+            return;
+        }
         if let Answer::Fetched(got) = reply.answer {
             match got {
                 Ok(path) => {
@@ -1344,6 +1422,8 @@ impl App {
             | Answer::Waiting(_)
             | Answer::Address(_)
             | Answer::Fetched(_)
+            | Answer::Standings { .. }
+            | Answer::Shelved { .. }
             | Answer::Mapping(_)
             | Answer::Drawn(_)
             | Answer::Relaid { .. }
@@ -1660,6 +1740,10 @@ impl App {
             messages.iter_mut().for_each(&mut set);
         }
         self.index_flag(account, folder, uid, flag, on);
+        // Flagged, it is kept: learnt as not thrown away.
+        if changed && flag == Flag::Flagged && on {
+            self.teach_at(account, folder, uid, false);
+        }
         if changed
             && flag == Flag::Seen
             && let Some(f) = self.folder_mut(account, folder)
@@ -2019,6 +2103,8 @@ impl App {
             self.status = "in Archive already".to_string();
             return;
         }
+        // Archived, it is kept: learnt as not thrown away.
+        self.teach_at(account, &folder, summary.uid, false);
         self.drop_listed(account, &folder, summary.uid);
         self.status = "archived, out of the Inbox".to_string();
         self.ask(
@@ -2034,6 +2120,10 @@ impl App {
     /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     fn open_folder(&mut self) {
+        // What was marked in the list was of what it listed.
+        if self.map.mode == Mode::List {
+            self.map.region = None;
+        }
         let view = match self.rows.get(self.row) {
             Some(&Row::Folder(a, i)) => {
                 let Some(folder) = self.accounts[a].folders.get(i) else {
@@ -2455,7 +2545,7 @@ impl App {
         if self.dialog.is_open() {
             return self.dialog_key(key);
         }
-        if self.review.as_ref().is_some_and(|r| r.menu.is_some()) {
+        if self.menu.is_some() {
             return self.menu_key(key);
         }
         if let Some(r) = self.review.as_mut().filter(|r| r.asking) {
@@ -2513,6 +2603,9 @@ impl App {
             return;
         }
         if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
+            return;
+        }
+        if self.map.mode == Mode::List && self.focus != Focus::Side && self.list_marked_act(act) {
             return;
         }
         let page = self.height.saturating_sub(2).max(1) as isize;
@@ -2620,18 +2713,26 @@ impl App {
             | Act::ShowSent
             | Act::Unfiled => self.view(act),
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
+            Act::Mark if self.map.mode == Mode::List => self.list_mark(),
             Act::Mark => self.mark_cluster(),
-            Act::Move
-            | Act::NewLabel
-            | Act::FileFirst
-            | Act::FileAll
-            | Act::NotIt
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt
+                if self.map.mode == Mode::List =>
+            {
+                self.list_file(act)
+            }
+            Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt => {
+                self.status =
+                    "on the map, tab to it: m, N, y and - act on the message picked there"
+                        .to_string();
+            }
+            Act::FileAll if self.map.mode == Mode::List => self.list_file_all(),
+            Act::FileAll
             | Act::View
             | Act::ZoomIn
             | Act::ZoomOut
             | Act::ZoomAll
             | Act::Relayout => {
-                self.status = "M-g shows the map, where mail is filed".to_string();
+                self.status = "that is the map's: M or M-g shows it".to_string();
             }
             Act::Wider | Act::Narrower if self.read_width > 0 => {
                 let by: i16 = if act == Act::Wider { 4 } else { -4 };
@@ -2639,10 +2740,15 @@ impl App {
             }
             Act::Wider | Act::Narrower => {}
             Act::MapView => self.show_map(),
+            Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
+            Act::SwitchView => self.show_map(),
             Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
+            Act::Debrief => self.debrief(),
+            Act::Papers => self.list_papers(),
+            Act::Present => self.present(),
             Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),
             Act::Remove => self.ask_to_remove(),
@@ -2666,6 +2772,8 @@ impl App {
             Dialog::Files(_) => self.files_key(key),
             Dialog::Attach(_) => self.attach_key(key),
             Dialog::View => self.view_key(key),
+            Dialog::Debrief(_) => self.debrief_key(key),
+            Dialog::Papers(_) => self.papers_key(key),
             Dialog::StartMap => match key.code {
                 KeyCode::Char('y' | 'Y') => self.start_map(),
                 _ => {
@@ -2694,6 +2802,11 @@ impl App {
             Dialog::Label(typed) => match key.code {
                 KeyCode::Esc => {
                     self.dialog = Dialog::Closed;
+                    // Named in the list: let go.
+                    if self.map.mode == Mode::List {
+                        self.map.moving = None;
+                        self.status = "not moved".to_string();
+                    }
                     // Named for a message looked through: back to it.
                     if let Some(r) = &mut self.review
                         && r.relabel.take().is_some()
@@ -2769,6 +2882,16 @@ impl App {
                 }
             }
             (Dialog::View, _) => self.dialog = Dialog::Closed,
+            (Dialog::Debrief(d), Some(Target::Item(i))) => {
+                d.at = i;
+                self.put_back_thrown(&[i]);
+            }
+            (Dialog::Debrief(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::Papers(p), Some(Target::Item(i))) => {
+                p.at = i;
+                self.shelve();
+            }
+            (Dialog::Papers(_), _) => self.dialog = Dialog::Closed,
             (Dialog::StartMap, _) => {
                 self.dialog = Dialog::Closed;
                 self.status = "the map is not begun: M-g asks again".to_string();
@@ -2858,6 +2981,9 @@ impl App {
         let Some(l) = &self.listing else { return };
         if self.query.trim().is_empty() {
             return;
+        }
+        if self.map.mode == Mode::List {
+            self.map.region = None;
         }
         let parts = l.keys();
         self.status = format!("searching {} on the server…", self.folder_name());
@@ -2979,10 +3105,8 @@ impl App {
                     return;
                 }
                 // The labels dropped down: a click elsewhere puts them away.
-                if let Some(r) = self.review.as_mut().filter(|r| r.menu.is_some())
-                    && !matches!(at, Some(Target::MenuItem(_)))
-                {
-                    r.menu = None;
+                if self.menu.is_some() && !matches!(at, Some(Target::MenuItem(_))) {
+                    self.menu = None;
                     return;
                 }
                 if at == Some(Target::Map) && !self.dialog.is_open() {
@@ -3097,28 +3221,24 @@ impl App {
             self.status = "nothing to open: ⏎ reads the message picked".to_string();
             return;
         };
-        let body = m.html.clone().unwrap_or_else(|| {
-            format!(
-                "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
-                escape(&m.text)
-            )
-        });
-        // Mail is from strangers: its scripts, plugins and forms are not run
-        // from a file that could reach this machine's other files.
-        let html = format!(
-            "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
-             object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
-        );
-        let dir = cache().join("html");
-        let path = dir.join(format!("{}.html", m.uid));
-        let done = private_dir(&dir)
-            .map_err(anyhow::Error::from)
-            .and_then(|_| vault::write_private(&path, html.as_bytes()))
-            .and_then(|_| open(&path));
+        let done = write_page(&m).and_then(|path| open(&path).map(|_| path));
         self.status = match done {
-            Ok(()) => format!("opened {}", path.display()),
+            Ok(path) => format!("opened {}", path.display()),
             Err(e) => format!("cannot open it: {e:#}"),
         };
+    }
+
+    /// Present the message read with ohp, as its HTML, its own images in
+    /// it, or its text: ohp takes the terminal until it quits.
+    fn present(&mut self) {
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to present: ⏎ reads the message picked".to_string();
+            return;
+        };
+        match write_page(&m) {
+            Ok(path) => self.launch = Some(Launch::Ohp(path)),
+            Err(e) => self.status = format!("cannot present it: {e:#}"),
+        }
     }
 
     /// Save the message's attachments to the downloads folder, each under
@@ -3129,7 +3249,7 @@ impl App {
             self.status = "nothing to list: ⏎ reads the message picked".to_string();
             return;
         };
-        let mut items: Vec<Item> = vec![Item::Page];
+        let mut items: Vec<Item> = vec![Item::Page, Item::Present];
         items.extend(m.attachments.iter().enumerate().map(|(at, a)| Item::File {
             at,
             name: a.name.clone(),
@@ -3138,7 +3258,7 @@ impl App {
         }));
         items.extend(m.links.iter().cloned().map(Item::Link));
         // On its first file, if it has one; else on the message itself.
-        let at = usize::from(items.len() > 1);
+        let at = if items.len() > 2 { 2 } else { 0 };
         self.dialog = Dialog::Files(Files {
             items,
             at,
@@ -3179,6 +3299,10 @@ impl App {
             Some(Item::Page) => {
                 self.dialog = Dialog::Closed;
                 self.open_in_browser();
+            }
+            Some(Item::Present) => {
+                self.dialog = Dialog::Closed;
+                self.present();
             }
             Some(Item::File { at, name, .. }) => {
                 let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
@@ -3282,6 +3406,13 @@ impl App {
                 .origin(&email, &folder, &summary.message_id, uid);
             let dest = known.clone().unwrap_or_else(|| self.inbox(account));
             let name = self.folder_label(account, &dest);
+            // Put back, it was not to be thrown away: learnt as kept.
+            let ident = self.accounts[account].ident.clone();
+            let _ = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put_back(&ident, &summary.message_id);
             self.drop_listed(account, &folder, uid);
             self.status = if known.is_some() {
                 format!("put back in {name}")
@@ -3378,6 +3509,27 @@ impl App {
         }
     }
 
+    /// Learn from what was done with the message of `account` at `uid` in
+    /// `folder`: thrown away, or kept.
+    fn teach_at(&mut self, account: usize, folder: &str, uid: u32, thrown: bool) {
+        let Some(ident) = self.accounts.get(account).map(|a| a.ident.clone()) else {
+            return;
+        };
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(key) = index.key_at(&ident, folder, uid) {
+            let _ = index.teach(&key, thrown);
+        }
+    }
+
+    /// Learn from what was done with the messages `keys`: thrown away, or
+    /// kept.
+    fn teach(&mut self, keys: &[crate::index::Key], thrown: bool) {
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        for key in keys {
+            let _ = index.teach(key, thrown);
+        }
+    }
+
     fn move_to_trash(
         &mut self,
         account: usize,
@@ -3386,9 +3538,24 @@ impl App {
         message_id: String,
         trash: String,
     ) {
+        // Thrown away: what is learnt of what you throw away.
+        self.teach_at(account, &from, uid, true);
         let name = self.folder_label(account, &trash);
-        self.drop_listed(account, &from, uid);
         self.status = format!("moved to {name} · d there puts it back, for 7 days");
+        self.trash_quietly(account, from, uid, message_id, trash);
+    }
+
+    /// Move the message to the account's Trash, recorded to be put back,
+    /// and nothing learnt of it.
+    fn trash_quietly(
+        &mut self,
+        account: usize,
+        from: String,
+        uid: u32,
+        message_id: String,
+        trash: String,
+    ) {
+        self.drop_listed(account, &from, uid);
         self.ask(
             account,
             Ask::Move {
@@ -3563,6 +3730,8 @@ impl App {
             return;
         };
         let (account, folder, uid) = (summary.account, summary.folder, summary.summary.uid);
+        // Answered, it is kept: learnt as not thrown away.
+        self.teach_at(account, &folder, uid, false);
         if let Some(message) = self.cached(account, &folder, uid) {
             self.open_reply(account, &folder, &message, how);
             return;
@@ -4004,6 +4173,15 @@ impl App {
     /// open to change more; or the map laid out again; any other key
     /// closes it.
     fn view_key(&mut self, key: KeyEvent) {
+        // M-l, C-n and the like are not the menu's: it closes, and they do
+        // what they do.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.dialog = Dialog::Closed;
+            return self.key(key);
+        }
         let row = match key.code {
             KeyCode::Char(c) => keymap::VIEW.iter().find(|v| v.0 == c),
             _ => None,
@@ -4147,6 +4325,283 @@ impl App {
         self.map.clusters = words.next() == Some("clusters");
     }
 
+    /// Throw away, on its own, each message come to an Inbox since it was
+    /// turned on that it is sure enough of, and that you never decided on:
+    /// written down to be told of, never learnt.
+    pub fn throw_away_on_its_own(&mut self) {
+        if !self.auto.on {
+            return;
+        }
+        let found: Vec<(crate::index::Key, Vec<crate::index::Place>, String)> = {
+            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            if !index.filter.ready() {
+                return;
+            }
+            let known = index.known();
+            let decided: std::collections::HashSet<&crate::index::Key> =
+                index.filter.taught.iter().map(|t| &t.key).collect();
+            index
+                .records
+                .values()
+                // New, and never read: mail read and left is yours.
+                .filter(|r| r.first_seen >= self.auto.since && !decided.contains(&r.key))
+                .filter(|r| !r.flags.seen)
+                .filter(|r| index.system(&r.key).inbox)
+                .filter(|r| {
+                    let tokens = crate::filter::Filter::tokens(r, &known);
+                    index.filter.odds(&tokens) >= crate::filter::AUTO
+                })
+                .map(|r| (r.key.clone(), r.places.clone(), r.message_id.clone()))
+                .collect()
+        };
+        let mut thrown = 0;
+        for (key, places, message_id) in found {
+            let Some(a) = self.live().find(|&a| self.accounts[a].ident == key.account) else {
+                continue;
+            };
+            let (Some(trash), inbox) = (self.trash_of(a), self.inbox(a)) else {
+                continue;
+            };
+            let Some(place) = places.iter().find(|p| p.folder == inbox) else {
+                continue;
+            };
+            let written = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .throw_on_its_own(&key);
+            if written.is_err() {
+                continue;
+            }
+            self.trash_quietly(a, place.folder.clone(), place.uid, message_id, trash);
+            thrown += 1;
+        }
+        if thrown > 0 {
+            self.status = format!("{thrown} thrown away on its own: B says which, and why");
+        }
+    }
+
+    /// As letterbox opens: tell of what was thrown away on its own since
+    /// it was last told of, if anything was.
+    pub fn debrief_on_start(&mut self) {
+        let since = self.auto.debriefed;
+        self.debrief_since(since, "Since you last looked");
+    }
+
+    /// Tell of what was thrown away on its own after `since`, under
+    /// `title`; whether there was any.
+    fn debrief_since(&mut self, since: i64, title: &str) -> bool {
+        let mut d = {
+            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            let d = index.debrief(since);
+            if d.thrown.is_empty() {
+                return false;
+            }
+            let said = crate::filter::Filter::check(&index.filter.taught);
+            crate::filter::Debrief {
+                grade: (!said.is_empty()).then(|| crate::filter::grade(&said, crate::filter::AUTO)),
+                ..d
+            }
+        };
+        d.title = title.to_string();
+        self.dialog = Dialog::Debrief(Box::new(d));
+        self.auto.debriefed = jiff::Timestamp::now().as_second();
+        self.remember_auto();
+        true
+    }
+
+    /// Tell of what was thrown away on its own in the days it can be put
+    /// back.
+    fn debrief(&mut self) {
+        let since = jiff::Timestamp::now().as_second() - crate::trash::KEPT;
+        if !self.debrief_since(since, "Thrown away on its own, the last 7 days") {
+            self.status = "nothing thrown away on its own in the last 7 days".to_string();
+        }
+    }
+
+    /// A key in the debrief: ⏎ puts the one picked back, u all of them.
+    fn debrief_key(&mut self, key: KeyEvent) {
+        let Dialog::Debrief(d) = &mut self.dialog else {
+            return;
+        };
+        let n = d.thrown.len();
+        match (keymap::act(key), key.code) {
+            (Some(Act::Down), _) => d.at = (d.at + 1).min(n.saturating_sub(1)),
+            (Some(Act::Up), _) => d.at = d.at.saturating_sub(1),
+            (Some(Act::Open), _) => {
+                let at = d.at;
+                self.put_back_thrown(&[at]);
+            }
+            (_, KeyCode::Char('u')) => self.put_back_thrown(&(0..n).collect::<Vec<_>>()),
+            _ => self.dialog = Dialog::Closed,
+        }
+    }
+
+    /// Put back those `at` of what was thrown away on its own, each learnt
+    /// as kept.
+    fn put_back_thrown(&mut self, at: &[usize]) {
+        let Dialog::Debrief(mut d) = std::mem::take(&mut self.dialog) else {
+            return;
+        };
+        let mut back = 0;
+        for &i in at {
+            let Some(t) = d.thrown.get(i).filter(|t| !t.back).cloned() else {
+                continue;
+            };
+            let Some(a) = self
+                .live()
+                .find(|&a| self.accounts[a].ident == t.key.account)
+            else {
+                continue;
+            };
+            let email = self.accounts[a].email.clone();
+            let Some(e) = self.ledger.find(&email, &t.message_id) else {
+                continue;
+            };
+            let _ = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put_back(&t.key.account, &t.message_id);
+            self.ask(
+                a,
+                Ask::Move {
+                    from: e.folder,
+                    uid: e.uid,
+                    to: e.origin,
+                    message_id: t.message_id.clone(),
+                    trashed: false,
+                },
+            );
+            d.thrown[i].back = true;
+            back += 1;
+        }
+        self.status = match back {
+            0 => "nothing put back: not in the Trash yet, or put back already".to_string(),
+            1 => "put back, and learnt as kept".to_string(),
+            n => format!("{n} put back, and learnt as kept"),
+        };
+        self.dialog = Dialog::Debrief(d);
+    }
+
+    /// List the papers the message read tells of, and ask paperstack where
+    /// each stands.
+    fn list_papers(&mut self) {
+        let Some(m) = self.message().cloned() else {
+            self.status = "nothing to look in: ⏎ reads the message picked".to_string();
+            return;
+        };
+        let from = m
+            .from
+            .rsplit_once('<')
+            .map_or(m.from.as_str(), |(_, a)| a.trim_end_matches('>'));
+        let papers = crate::papers::in_message(from, m.html.as_deref(), &m.text);
+        if papers.is_empty() {
+            self.status = "no papers found in it".to_string();
+            return;
+        }
+        self.papers_asked += 1;
+        let asked = self.papers_asked;
+        self.dialog = Dialog::Papers(Box::new(PapersView {
+            asked,
+            standing: vec![None; papers.len()],
+            papers: papers.clone(),
+            at: 0,
+            note: Some("asking paperstack…".to_string()),
+        }));
+        let (lib, replies) = (self.library.clone(), self.replies_to.clone());
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let said = with_library(&lib, |l| {
+                papers
+                    .iter()
+                    .map(|p| crate::paperstack::standing(l, p))
+                    .collect()
+            });
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Standings {
+                    asked,
+                    said: said.map_err(worker::text),
+                },
+            });
+        });
+    }
+
+    /// A key among the papers listed: ⏎ puts the one picked in paperstack,
+    /// starred; o opens it.
+    fn papers_key(&mut self, key: KeyEvent) {
+        let Dialog::Papers(p) = &mut self.dialog else {
+            return;
+        };
+        let n = p.papers.len();
+        match (keymap::act(key), key.code) {
+            (Some(Act::Down), _) => p.at = (p.at + 1).min(n.saturating_sub(1)),
+            (Some(Act::Up), _) => p.at = p.at.saturating_sub(1),
+            (Some(Act::Open), _) => self.shelve(),
+            (_, KeyCode::Char('o')) => {
+                if let Some(link) = p.papers.get(p.at).and_then(|x| x.link.clone()) {
+                    self.launch = Some(Launch::Browse(link));
+                }
+            }
+            _ => self.dialog = Dialog::Closed,
+        }
+    }
+
+    /// Put the paper picked in paperstack, starred, as you liked it; or,
+    /// there already, star it.
+    fn shelve(&mut self) {
+        let Dialog::Papers(p) = &mut self.dialog else {
+            return;
+        };
+        let at = p.at;
+        let Some(paper) = p.papers.get(at).cloned() else {
+            return;
+        };
+        let have = match p.standing.get(at).and_then(Option::as_ref) {
+            Some(crate::paperstack::Standing::Have { starred: true, .. }) => {
+                p.note = Some("in your library, starred already".to_string());
+                return;
+            }
+            Some(crate::paperstack::Standing::Have { key, .. }) => Some(key.clone()),
+            _ => None,
+        };
+        p.note = Some(format!("putting it in paperstack: {}", paper.what));
+        let asked = p.asked;
+        let (lib, replies) = (self.library.clone(), self.replies_to.clone());
+        self.pending += 1;
+        std::thread::spawn(move || {
+            let found = with_library(&lib, |l| {
+                let f = match have {
+                    Some(key) => crate::paperstack::Found {
+                        key,
+                        title: paper.title.clone(),
+                        starred: true,
+                    },
+                    None => l.add(&paper.what)?,
+                };
+                l.star(&f.key)?;
+                Ok(f)
+            });
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Shelved {
+                    asked,
+                    at,
+                    found: found.map_err(worker::text),
+                },
+            });
+        });
+    }
+
+    /// Write down whether new mail is thrown away on its own, and when what
+    /// it did was last told of.
+    pub fn remember_auto(&self) {
+        if let Some(path) = &self.filter_file {
+            let _ = std::fs::write(path, self.auto.to_string());
+        }
+    }
+
     /// Write down how the mail is looked at, to open so again.
     pub fn remember_look(&self) {
         let Some(path) = &self.look_file else {
@@ -4200,6 +4655,22 @@ impl App {
             };
             if let Some(i) = narrowed.and_then(|n| self.rows.iter().position(|r| *r == n)) {
                 self.row = i;
+            }
+        }
+        // A move or a mark begun on the map is the map's: let go; one made
+        // in the list, kept.
+        if self.map.mode == Mode::Map {
+            let moving = self.map.moving.take().is_some();
+            let marked = self.map.region.take().is_some();
+            if moving || marked {
+                self.status = "what was moving or marked on the map, let go".to_string();
+            }
+        }
+        if let Some(r) = &mut self.review {
+            r.relabel = None;
+            // The Inbox looked through is the map's: back to the list.
+            if self.focus == Focus::Reader {
+                self.focus = Focus::List;
             }
         }
         self.map.mode = Mode::List;
@@ -4437,6 +4908,8 @@ impl App {
             self.list_map();
             self.narrow();
         }
+        // What the index holds changed: new mail may be sure to go.
+        self.throw_away_on_its_own();
         self.map_due();
     }
 
@@ -4579,6 +5052,13 @@ impl App {
     fn region_archive(&mut self) -> bool {
         let dots = self.region_dots();
         let mut archived = 0;
+        // Archived, they are kept: learnt as not thrown away.
+        let keys: Vec<crate::index::Key> = dots
+            .iter()
+            .filter(|d| d.system.inbox)
+            .map(|d| d.key.clone())
+            .collect();
+        self.teach(&keys, false);
         for d in dots.iter().filter(|d| d.system.inbox) {
             let Some((a, folder, uid)) = self.place_of(d) else {
                 continue;
@@ -4732,6 +5212,8 @@ impl App {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
+        // Filed, it is kept: learnt as not thrown away.
+        self.teach(&keys, false);
         let at = jiff::Timestamp::now().as_second();
         let mut filed = 0;
         let mut pending = Vec::new();
@@ -4775,13 +5257,169 @@ impl App {
         self.map.region = None;
         self.map.suggesting = Some(label.clone());
         self.status = format!(
-            "{} under {label}, out of the Inbox · y files the next it would go with too",
+            "{} under {label}, out of the Inbox{}",
             if filed == 1 {
                 "filed".to_string()
             } else {
                 format!("{filed} filed")
+            },
+            if self.map.mode == Mode::Map {
+                " · y files the next it would go with too"
+            } else {
+                ""
             }
         );
+    }
+
+    /// Mark the message picked in the list, or let it go, and go on to the
+    /// next: what is marked is acted on together.
+    fn list_mark(&mut self) {
+        let Some(key) = self
+            .listed_on_map()
+            .and_then(|i| self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()))
+        else {
+            self.status = "not on the map yet: it is marked once the map has read it".to_string();
+            return;
+        };
+        let region = self.map.region.get_or_insert_with(|| map::Region {
+            keys: Vec::new(),
+            boxed: None,
+        });
+        match region.keys.iter().position(|k| *k == key) {
+            Some(at) => {
+                region.keys.remove(at);
+            }
+            None => region.keys.push(key),
+        }
+        let n = region.keys.len();
+        if n == 0 {
+            self.map.region = None;
+        }
+        self.status = format!(
+            "{n} marked: d trashes them, e archives them, m moves them, u and s mark them, esc lets them go"
+        );
+        self.step(1);
+    }
+
+    /// What a key does to what is marked in the list; whether it was its
+    /// to do.
+    fn list_marked_act(&mut self, act: Act) -> bool {
+        let Some(keys) = self.map.region.as_ref().map(|r| r.keys.clone()) else {
+            return false;
+        };
+        match act {
+            Act::Seen => self.region_flag(Flag::Seen),
+            Act::Flag => self.region_flag(Flag::Flagged),
+            Act::Trash => self.region_trash(),
+            Act::Archive => self.region_archive(),
+            Act::Back => {
+                self.map.region = None;
+                self.status = "let go".to_string();
+                true
+            }
+            Act::Move => {
+                let Some(i) = keys
+                    .first()
+                    .and_then(|k| self.map.snapshot.as_ref()?.find(k))
+                else {
+                    return false;
+                };
+                self.open_menu(i);
+                if let Some(menu) = &mut self.menu {
+                    menu.with = keys[1..].to_vec();
+                }
+                true
+            }
+            Act::NewLabel => {
+                self.map.moving = Some(keys);
+                self.ask_new_label();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Mark every message listed that would go where the one picked would;
+    /// marked so already, file them all there.
+    fn list_file_all(&mut self) {
+        let Some(i) = self.listed_on_map() else {
+            self.status = "not on the map yet: it is filed once the map has read it".to_string();
+            return;
+        };
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let Some(label) = s.suggestion(i).map(str::to_string) else {
+            self.status = "nowhere it would go: m picks where".to_string();
+            return;
+        };
+        let keys: Vec<crate::index::Key> = self
+            .shown
+            .iter()
+            .filter_map(|l| {
+                let ident = &self.accounts.get(l.account)?.ident;
+                let key = self
+                    .index
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .key_at(ident, &l.folder, l.summary.uid)?;
+                let j = s.find(&key)?;
+                (s.suggestion(j) == Some(label.as_str())).then_some(key)
+            })
+            .collect();
+        if self.map.region.as_ref().is_some_and(|r| r.keys == keys) {
+            self.file_keys(keys, &label);
+            self.map.region = None;
+        } else {
+            self.status = format!(
+                "{} would go to {label}, marked: Y files them, esc lets go",
+                keys.len()
+            );
+            self.map.region = Some(map::Region { keys, boxed: None });
+        }
+    }
+
+    /// The message picked in the list, by its place in the map.
+    fn listed_on_map(&self) -> Option<usize> {
+        let l = self.current()?;
+        let ident = &self.accounts.get(l.account)?.ident;
+        let key = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .key_at(ident, &l.folder, l.summary.uid)?;
+        self.map.snapshot.as_ref()?.find(&key)
+    }
+
+    /// File the message picked in the list as the map does: `m` drops down
+    /// the labels it may go to, `N` names a new one, `y` files it where it
+    /// would go, and `-` says it is not one for there.
+    fn list_file(&mut self, act: Act) {
+        let Some(i) = self.listed_on_map() else {
+            self.status = if self.map_off.is_some() || self.map_later {
+                "filing is by the map: M or M-g begins it".to_string()
+            } else {
+                "not on the map yet: it is filed once the map has read it".to_string()
+            };
+            return;
+        };
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
+            return;
+        };
+        self.map.cursor = Some(key.clone());
+        let suggested = self.picked_suggestion();
+        match act {
+            Act::Move => self.open_menu(i),
+            Act::NewLabel => {
+                self.map.moving = Some(vec![key]);
+                self.ask_new_label();
+            }
+            Act::FileFirst if suggested.is_some() => {
+                self.file_where_suggested(false);
+            }
+            Act::NotIt if suggested.is_some() => self.not_it(),
+            _ => self.status = "nowhere it would go: m picks where".to_string(),
+        }
     }
 
     /// The suggestions for the label last filed under, nearest first.
@@ -5071,7 +5709,8 @@ impl App {
 
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
     /// The messages in an Inbox, to look through: newest first, by their
-    /// place in the map; none sent from here.
+    /// place in the map, those kept before after the rest; none sent from
+    /// here.
     pub fn review_rows(&self) -> Vec<usize> {
         let Some(s) = &self.map.snapshot else {
             return Vec::new();
@@ -5081,29 +5720,38 @@ impl App {
             .collect();
         rows.sort_by_key(|&i| {
             let d = &s.dots[i];
-            std::cmp::Reverse((d.date.unwrap_or(d.arrived), i))
+            (
+                d.looked,
+                std::cmp::Reverse((d.date.unwrap_or(d.arrived), i)),
+            )
         });
         rows
     }
 
-    /// What is suggested for the message `i` of `s`: filed where it would
-    /// go, else kept.
+    /// What is suggested for the message `i` of `s`: discarded, if mail
+    /// like it is thrown away, as learnt; else filed where it would go;
+    /// else kept.
     pub fn suggested(s: &map::Snapshot, i: usize) -> Choice {
+        if s.dots[i].thrown.is_some() {
+            return Choice::Discard;
+        }
         s.suggestion(i)
             .map_or(Choice::Keep, |l| Choice::Move(l.to_string()))
     }
 
-    /// What is to be done with the message `i` of the map: what was chosen,
-    /// else what is suggested.
+    /// What was chosen for the message `i` of the map, if it was looked at.
+    pub fn chosen(&self, i: usize) -> Option<Choice> {
+        let s = self.map.snapshot.as_ref()?;
+        self.review.as_ref()?.chosen.get(&s.dots[i].key).cloned()
+    }
+
+    /// What is shown for the message `i` of the map: what was chosen, else
+    /// what is suggested.
     pub fn choice(&self, i: usize) -> Choice {
         let Some(s) = &self.map.snapshot else {
             return Choice::Keep;
         };
-        self.review
-            .as_ref()
-            .and_then(|r| r.chosen.get(&s.dots[i].key))
-            .cloned()
-            .unwrap_or_else(|| Self::suggested(s, i))
+        self.chosen(i).unwrap_or_else(|| Self::suggested(s, i))
     }
 
     /// Open the Inbox to look through beside the map; or close it, what was
@@ -5130,7 +5778,7 @@ impl App {
         self.focus = Focus::Reader;
         self.pick_review(first);
         self.status =
-            "the Inbox, to look through: m move, space keep, d discard, y as suggested, $ does it"
+            "the Inbox, to look through as far as you like: m move, space keep, d discard, y as suggested; $ does those chosen"
                 .to_string();
     }
 
@@ -5166,22 +5814,25 @@ impl App {
         self.pick_review(Some(rows[at.clamp(0, rows.len() as isize - 1) as usize]));
     }
 
-    /// Choose `c` for the message `i`; then, `on`, go on to the next.
-    fn choose(&mut self, i: usize, c: Choice, on: bool) {
-        let Some(s) = self.map.snapshot.clone() else {
+    /// Choose `c` for the message `i`, or, none, leave it as it is; then,
+    /// `on`, go on to the next.
+    fn decide(&mut self, i: usize, c: Option<Choice>, on: bool) {
+        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
             return;
         };
-        let key = s.dots[i].key.clone();
         if let Some(r) = &mut self.review {
-            if c == Self::suggested(&s, i) {
-                r.chosen.remove(&key);
-            } else {
-                r.chosen.insert(key, c);
-            }
+            match c {
+                Some(c) => r.chosen.insert(key, c),
+                None => r.chosen.remove(&key),
+            };
         }
         if on {
             self.review_step(1);
         }
+    }
+
+    fn choose(&mut self, i: usize, c: Choice, on: bool) {
+        self.decide(i, Some(c), on);
     }
 
     /// Drop down the labels the message `i` may be moved to.
@@ -5189,12 +5840,10 @@ impl App {
         let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
             return;
         };
-        if let Some(r) = &mut self.review {
-            r.menu = Some(Menu {
-                key,
-                ..Menu::default()
-            });
-        }
+        self.menu = Some(Menu {
+            key,
+            ..Menu::default()
+        });
         self.status = "move it to: type to narrow, ↑ ↓ pick, ⏎ moves it there, esc".to_string();
     }
 
@@ -5203,10 +5852,7 @@ impl App {
     /// the nearest few, or, typed, every one holding what is typed; a new
     /// one, if none is called that; and picking on the map.
     pub fn menu_items(&self) -> Vec<Pick> {
-        let (Some(s), Some(menu)) = (
-            self.map.snapshot.as_ref(),
-            self.review.as_ref().and_then(|r| r.menu.as_ref()),
-        ) else {
+        let (Some(s), Some(menu)) = (self.map.snapshot.as_ref(), self.menu.as_ref()) else {
             return Vec::new();
         };
         let Some(i) = s.find(&menu.key) else {
@@ -5249,17 +5895,17 @@ impl App {
     /// A key while the labels are dropped down: what is typed narrows them.
     fn menu_key(&mut self, key: KeyEvent) {
         let count = self.menu_items().len();
-        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.as_mut()) else {
+        let Some(menu) = self.menu.as_mut() else {
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
-                self.review.as_mut().expect("open").menu = None;
+                self.menu = None;
                 self.status = "not moved".to_string();
             }
             KeyCode::Char('g') if ctrl => {
-                self.review.as_mut().expect("open").menu = None;
+                self.menu = None;
                 self.status = "not moved".to_string();
             }
             // Round, past either end.
@@ -5279,16 +5925,39 @@ impl App {
         }
     }
 
-    /// Pick the item `at` of the labels dropped down: moved there, to be
-    /// done with the rest; or, picking on the map, where it goes asked there.
+    /// Pick the item `at` of the labels dropped down: in the list, filed
+    /// there at once; in the Inbox looked through, to be, with the rest; or,
+    /// picking on the map, where it goes asked there.
     fn pick_item(&mut self, at: usize) {
         let item = self.menu_items().get(at).cloned();
-        let Some(menu) = self.review.as_mut().and_then(|r| r.menu.take()) else {
+        let Some(menu) = self.menu.take() else {
             return;
         };
         let Some(i) = self.map.snapshot.as_ref().and_then(|s| s.find(&menu.key)) else {
             return;
         };
+        if self.map.mode == Mode::List {
+            match item {
+                Some(Pick::Label(name, _) | Pick::New(name)) => {
+                    let mut keys = vec![menu.key];
+                    keys.extend(menu.with);
+                    self.file_keys(keys, &name)
+                }
+                Some(Pick::OnMap) => {
+                    self.show_map();
+                    self.map.cursor = Some(menu.key.clone());
+                    let mut keys = vec![menu.key];
+                    keys.extend(menu.with);
+                    self.map.region = None;
+                    self.map.moving = Some(keys);
+                    self.status =
+                        "where it goes: a click on a cluster, or ⏎ on one; N a new label; esc stops"
+                            .to_string();
+                }
+                None => {}
+            }
+            return;
+        }
         match item {
             Some(Pick::Label(name, _) | Pick::New(name)) => {
                 self.status = format!("to go to {name} · $ does it, with the rest");
@@ -5367,13 +6036,15 @@ impl App {
                         .and_then(|s| s.suggestion(i))
                         .map(str::to_string),
                 };
-                let mut all: Vec<Choice> = label.into_iter().map(Choice::Move).collect();
-                all.extend([Choice::Keep, Choice::Discard]);
-                let now = self.choice(i);
+                // Round them, and round to none chosen.
+                let mut all: Vec<Option<Choice>> = vec![None];
+                all.extend(label.into_iter().map(|l| Some(Choice::Move(l))));
+                all.extend([Some(Choice::Keep), Some(Choice::Discard)]);
+                let now = self.chosen(i);
                 let at = all.iter().position(|c| *c == now).unwrap_or(0) as isize;
                 let by = if act == Act::Right { 1 } else { -1 };
                 let next = all[(at + by).rem_euclid(all.len() as isize) as usize].clone();
-                self.choose(i, next, false);
+                self.decide(i, next, false);
             }
             (Act::Move, Some(i)) => self.open_menu(i),
             (Act::NewLabel, Some(i)) => self.choose_new(i),
@@ -5400,8 +6071,8 @@ impl App {
             (Act::Seen, Some(_)) => self.dot_flag(Flag::Seen),
             (Act::Flag, Some(_)) => self.dot_flag(Flag::Flagged),
             (Act::Archive, _) => {
-                self.status =
-                    "here, m moves it, space keeps it, d discards it; $ does it all".to_string()
+                self.status = "here, m moves it, space keeps it, d discards it; $ does those chosen"
+                    .to_string()
             }
             (
                 Act::Left
@@ -5419,36 +6090,40 @@ impl App {
         true
     }
 
-    /// How many of the Inbox looked through are to be filed, discarded and
-    /// kept.
-    fn review_counts(&self) -> (usize, usize, usize) {
-        let (mut filed, mut discarded, mut kept) = (0, 0, 0);
+    /// How many of the Inbox looked through are chosen to be filed,
+    /// discarded and kept, and how many are left as they are.
+    pub fn review_counts(&self) -> (usize, usize, usize, usize) {
+        let (mut filed, mut discarded, mut kept, mut left) = (0, 0, 0, 0);
         for i in self.review_rows() {
-            match self.choice(i) {
-                Choice::Move(_) => filed += 1,
-                Choice::Discard => discarded += 1,
-                Choice::Keep => kept += 1,
+            match self.chosen(i) {
+                Some(Choice::Move(_)) => filed += 1,
+                Some(Choice::Discard) => discarded += 1,
+                Some(Choice::Keep) => kept += 1,
+                None => left += 1,
             }
         }
-        (filed, discarded, kept)
+        (filed, discarded, kept, left)
     }
 
     /// Ask whether to do what was chosen in the Inbox looked through.
     fn ask_apply(&mut self) {
-        let (filed, discarded, kept) = self.review_counts();
-        if filed + discarded == 0 {
-            self.status = "nothing to do: each is kept in the Inbox".to_string();
+        let (filed, discarded, kept, left) = self.review_counts();
+        if filed + discarded + kept == 0 {
+            self.status =
+                "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
             return;
         }
         if let Some(r) = &mut self.review {
             r.asking = true;
         }
-        self.status =
-            format!("File {filed}, discard {discarded}, keep {kept} in the Inbox? (y or n)");
+        self.status = format!(
+            "File {filed}, discard {discarded}, keep {kept}; the other {left} left as they are? (y or n)"
+        );
     }
 
     /// Do what was chosen in the Inbox looked through: each to be moved
-    /// filed under its label, each to be discarded moved to the Trash.
+    /// filed under its label, each to be discarded moved to the Trash, each
+    /// kept learnt as kept; those not looked at left as they are.
     fn apply_review(&mut self) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
@@ -5456,25 +6131,34 @@ impl App {
         let mut moves: std::collections::BTreeMap<String, Vec<crate::index::Key>> =
             std::collections::BTreeMap::new();
         let mut discard = Vec::new();
+        let mut kept = Vec::new();
         for i in self.review_rows() {
             let key = s.dots[i].key.clone();
-            match self.choice(i) {
-                Choice::Move(label) => moves.entry(label).or_default().push(key),
-                Choice::Discard => discard.push(key),
-                Choice::Keep => {}
+            match self.chosen(i) {
+                Some(Choice::Move(label)) => moves.entry(label).or_default().push(key),
+                Some(Choice::Discard) => discard.push(key),
+                // Kept by choice: learnt as not thrown away, and after the
+                // rest when looked through again.
+                Some(Choice::Keep) => kept.push(key),
+                None => {}
             }
         }
+        self.teach(&kept, false);
         if let Some(r) = &mut self.review {
             r.relabel = None;
             r.chosen.clear();
         }
         self.review_kept.clear();
         let filed: usize = moves.values().map(Vec::len).sum();
+        let kept_n = kept.len();
         for (label, keys) in moves {
             self.file_keys(keys, &label);
         }
         self.map.suggesting = None;
         let mut said = format!("{filed} filed");
+        if kept_n > 0 {
+            said = format!("{said} · {kept_n} kept");
+        }
         if !discard.is_empty() {
             self.map.region = Some(map::Region {
                 keys: discard,
@@ -5509,10 +6193,15 @@ impl App {
         };
         self.focus = Focus::Reader;
         self.pick_review(Some(i));
+        // A click on what was chosen leaves it as it is again.
+        let toggle = |app: &mut Self, c: Choice| {
+            let c = (app.chosen(i) != Some(c.clone())).then_some(c);
+            app.decide(i, c, false);
+        };
         match which {
             0 => self.open_menu(i),
-            1 => self.choose(i, Choice::Keep, false),
-            2 => self.choose(i, Choice::Discard, false),
+            1 => toggle(self, Choice::Keep),
+            2 => toggle(self, Choice::Discard),
             _ => self.choose_new(i),
         }
     }
@@ -5622,6 +6311,78 @@ fn open(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Do `f` with paperstack, run first if it is not yet: what it gives.
+fn with_library<T>(
+    lib: &Mutex<Option<Box<dyn crate::paperstack::Library>>>,
+    f: impl FnOnce(&mut dyn crate::paperstack::Library) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut held = lib.lock().unwrap_or_else(|e| e.into_inner());
+    if held.is_none() {
+        *held = Some(crate::paperstack::connect()?);
+    }
+    let done = f(held.as_mut().expect("run").as_mut());
+    // What paperstack said no to, it said; anything else, as one gone or
+    // that answered what is not its, is run again next time.
+    if done
+        .as_ref()
+        .is_err_and(|e| !e.to_string().starts_with("paperstack: "))
+    {
+        *held = None;
+    }
+    done
+}
+
+/// `html` with each image it shows from its own parts, `images`, by
+/// Content-ID, MIME type and bytes, put in it.
+pub(crate) fn inline_images(html: &str, images: &[(String, String, Vec<u8>)]) -> String {
+    use base64::Engine;
+    let mut html = html.to_string();
+    for (id, mime, bytes) in images {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let (needle, url) = (format!("cid:{id}"), format!("data:{mime};base64,{data}"));
+        // Its name whole, not the start of another's.
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find(&needle) {
+            let after = &rest[at + needle.len()..];
+            let longer = after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || "._-@$%+".contains(c));
+            out.push_str(&rest[..at]);
+            out.push_str(if longer { &needle } else { &url });
+            rest = after;
+        }
+        out.push_str(rest);
+        html = out;
+    }
+    html
+}
+
+/// The message as a page, written where only you may read it: its HTML,
+/// the images it shows from its own parts put in it, or its text; and the
+/// file it is in.
+fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
+    let body = match &m.html {
+        Some(html) => inline_images(html, &mail::inline_images(&m.raw)),
+        None => format!(
+            "<meta charset=utf-8><pre style='white-space: pre-wrap'>{}</pre>",
+            escape(&m.text)
+        ),
+    };
+    // Mail is from strangers: its scripts, plugins and forms are not run
+    // from a file that could reach this machine's other files.
+    let html = format!(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
+         object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
+    );
+    let dir = cache().join("html");
+    let path = dir.join(format!("{}.html", m.uid));
+    private_dir(&dir)?;
+    vault::write_private(&path, html.as_bytes())?;
+    Ok(path)
+}
+
 /// Keep `bytes`, an attachment or a document downloaded, of the message
 /// `uid`, in a private folder of the cache, to be opened from there.
 fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
@@ -5655,6 +6416,25 @@ fn capital(key: KeyEvent) -> KeyEvent {
 /// their paths, each quoted or its spaces escaped, or their `file://`
 /// addresses; none unless each is a file named from the root or home.
 fn dropped(text: &str) -> Vec<PathBuf> {
+    let windows = cfg!(windows);
+    let paths: Vec<PathBuf> = dropped_words(text, windows)
+        .iter()
+        .map(|w| match w.strip_prefix("file://") {
+            Some(rest) => PathBuf::from(file_address(rest, windows)),
+            None => compose::path_of(w),
+        })
+        .collect();
+    if paths.iter().all(|p| p.is_absolute() && p.is_file()) {
+        paths
+    } else {
+        Vec::new()
+    }
+}
+
+/// The words of `text` as a terminal pastes paths: each quoted, or its
+/// spaces escaped by a backslash; on `windows`, where a backslash parts
+/// folders, quoted only.
+pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote: Option<char> = None;
@@ -5663,7 +6443,7 @@ fn dropped(text: &str) -> Vec<PathBuf> {
         match quote {
             Some(q) if c == q => quote = None,
             Some(_) => word.push(c),
-            None if c == '\\' => word.extend(chars.next()),
+            None if c == '\\' && !windows => word.extend(chars.next()),
             None if c == '\'' || c == '"' => quote = Some(c),
             None if c.is_whitespace() => {
                 if !word.is_empty() {
@@ -5676,18 +6456,21 @@ fn dropped(text: &str) -> Vec<PathBuf> {
     if !word.is_empty() {
         words.push(word);
     }
-    let paths: Vec<PathBuf> = words
-        .iter()
-        .map(|w| match w.strip_prefix("file://") {
-            Some(rest) => PathBuf::from(unescaped(rest)),
-            None => compose::path_of(w),
-        })
-        .collect();
-    if paths.iter().all(|p| p.is_absolute() && p.is_file()) {
-        paths
-    } else {
-        Vec::new()
+    words
+}
+
+/// The path of a `file://` address, after its `file://`: its escapes
+/// read; on `windows`, the drive's, without the root's slash before it,
+/// its folders parted by backslashes.
+pub(crate) fn file_address(rest: &str, windows: bool) -> String {
+    let path = unescaped(rest);
+    if !windows {
+        return path;
     }
+    let b = path.as_bytes();
+    let drive = b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':';
+    let path = if drive { &path[1..] } else { &path[..] };
+    path.replace('/', "\\")
 }
 
 /// `s` with each `%` and two hex digits the byte they stand for.

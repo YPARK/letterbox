@@ -1118,6 +1118,9 @@ fn press(app: &mut App, keys: &[&str]) {
 /// The demo's Inbox: the six letters, and the lab's mail still to deal with;
 /// and how many of them are unread.
 const INBOX: usize = 33;
+/// How many the demo has in Archive: what is read and old, and a Scholar
+/// alert.
+const ARCHIVE: usize = 21;
 const UNREAD: u32 = 18;
 
 fn unseen(app: &App) -> Option<u32> {
@@ -1231,15 +1234,16 @@ fn attachments_are_saved_under_a_name_of_their_own() {
 
     // One of them, from the list of its files and links.
     let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     press(&mut app, &["o"]);
     let files = app.dialog.files().expect("listed");
     assert_eq!(
         files.items.len(),
-        3,
-        "the message, two attachments, no links"
+        4,
+        "the message, in the browser and in ohp, two attachments, no links"
     );
-    assert_eq!(files.at, 1, "begun on the first file");
+    assert_eq!(files.at, 2, "begun on the first file");
     press(&mut app, &["j", "s"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
 
@@ -1250,7 +1254,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     };
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
     assert!(pdf.starts_with(cache.path()));
-    click_at(&mut app, app::Target::Item(1));
+    click_at(&mut app, app::Target::Item(2));
     let Some(app::Launch::Open(text)) = app.launch.take() else {
         panic!("not for the system: {:?}", app.launch);
     };
@@ -1268,6 +1272,49 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     press(&mut app, &["<esc>"]);
     assert!(app.dialog.files().is_none());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn the_message_read_is_presented_by_ohp_with_the_images_it_carries() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    // Nothing read: nothing to present.
+    press(&mut app, &["O"]);
+    assert!(app.launch.is_none());
+    press(&mut app, &["<enter>", "O"]);
+    let Some(app::Launch::Ohp(page)) = app.launch.take() else {
+        panic!("not for ohp: {:?}", app.launch);
+    };
+    assert!(page.starts_with(cache.path()));
+    assert!(app::ohp_reads(&page.to_string_lossy()));
+    let html = std::fs::read_to_string(&page).unwrap();
+    assert!(html.contains("script-src 'none'"), "{html}");
+    // From the list of its files too.
+    press(&mut app, &["o"]);
+    let at = app
+        .dialog
+        .files()
+        .unwrap()
+        .items
+        .iter()
+        .position(|i| *i == app::Item::Present)
+        .unwrap();
+    click_at(&mut app, app::Target::Item(at));
+    assert!(matches!(app.launch.take(), Some(app::Launch::Ohp(_))));
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    // An image the HTML shows by cid: is found by its Content-ID.
+    let raw = b"From: a@b.c\r\nSubject: logo\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"x\"\r\n\r\n\
+--x\r\nContent-Type: text/html\r\n\r\n<img src=\"cid:logo@b.c\">\r\n\
+--x\r\nContent-Type: image/png\r\nContent-ID: <logo@b.c>\r\n\
+Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--x--\r\n";
+    let images = crate::mail::inline_images(raw);
+    assert_eq!(images.len(), 1, "{images:?}");
+    assert_eq!(images[0].0, "logo@b.c");
+    assert_eq!(images[0].1, "image/png");
+    assert!(images[0].2.starts_with(b"\x89PNG"));
 }
 
 #[test]
@@ -1821,7 +1868,7 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
     let _ = app::screen(&mut app, 60, 12);
     assert!(matches!(app.dialog, app::Dialog::Help(3)));
     // The wheel does not run it off its end.
-    for _ in 0..100 {
+    for _ in 0..1000 {
         app.mouse(mouse(MouseEventKind::ScrollDown, rect.x + 1, rect.y + 1));
     }
     let end = app::screen(&mut app, 60, 12);
@@ -1840,12 +1887,21 @@ fn the_keys_at_the_foot_are_clicked_and_the_help_scrolls() {
 
 // ---- the vault ----
 
+/// Held by each test that points `$XDG_CACHE_HOME` somewhere, so that
+/// none writes where another looks.
+static CACHE_AT: Mutex<()> = Mutex::new(());
+
+/// Held by each test that points `$LETTERBOX_VAULT` somewhere, so that
+/// none reads another's, or the vault of whoever runs them.
+static VAULT_AT: Mutex<()> = Mutex::new(());
+
 #[test]
 fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
     let (account, _) = server();
     let dir = tempfile::tempdir().unwrap();
     let vault_at = dir.path().join("data/vault.age");
-    // SAFETY: tests that read it are this one alone.
+    // SAFETY: tests that read it hold VAULT_AT.
     unsafe { std::env::set_var("LETTERBOX_VAULT", &vault_at) };
     crate::vault::lock();
     let path = dir.path().join("accounts.toml");
@@ -2319,6 +2375,9 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "list_messages",
             "search_messages",
             "read_message",
+            "nearest_messages",
+            "suggest_label",
+            "would_throw_away",
             "mark_message"
         ]
     );
@@ -2395,7 +2454,11 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
 
 #[test]
 fn an_agent_is_told_a_vaults_account_is_not_for_it() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
+    // A vault of its own, never made: not one beside a key file.
+    // SAFETY: tests that read it hold VAULT_AT.
+    unsafe { std::env::set_var("LETTERBOX_VAULT", dir.path().join("vault.age")) };
     let path = dir.path().join("accounts.toml");
     std::fs::write(
         &path,
@@ -2412,6 +2475,7 @@ fn an_agent_is_told_a_vaults_account_is_not_for_it() {
             .unwrap()
             .contains("keep it in the keyring")
     );
+    unsafe { std::env::remove_var("LETTERBOX_VAULT") };
 }
 
 #[test]
@@ -3296,8 +3360,11 @@ fn files_are_picked_a_folder_at_a_time_and_sent_with_the_message() {
     assert!(matches!(app.dialog, app::Dialog::Closed), "{}", app.status);
     assert_eq!(app.status, "attached 2 files");
     let text = app.compose.as_ref().unwrap().buffer.text();
-    assert!(text.contains("/papers/figure.png\n"), "{text}");
-    assert!(text.contains("/papers/notes.pdf\n"), "{text}");
+    let papers = dir.path().join("papers");
+    for name in ["figure.png", "notes.pdf"] {
+        let line = format!("{}\n", papers.join(name).display());
+        assert!(text.contains(&line), "{line} in {text}");
+    }
     let screen = app::screen(&mut app, 150, 40);
     assert!(screen.contains("14 B"), "the size, beside it: {screen}");
     // Again, from the folder last attached from; a file there once.
@@ -3358,6 +3425,32 @@ fn a_forward_s_files_are_attach_lines_that_can_be_let_go() {
 }
 
 #[test]
+fn a_dropped_path_is_read_as_the_terminal_of_each_system_writes_it() {
+    // Elsewhere a backslash escapes what follows it, as a space.
+    assert_eq!(
+        crate::app::dropped_words("/tmp/a\\ draft.txt '/tmp/plain.txt'", false),
+        ["/tmp/a draft.txt", "/tmp/plain.txt"]
+    );
+    // On Windows it is what folders are parted by: kept, and a path with a
+    // space is quoted.
+    assert_eq!(
+        crate::app::dropped_words(r#"C:\Users\a\plain.txt "C:\Users\a\a draft.txt""#, true),
+        [r"C:\Users\a\plain.txt", r"C:\Users\a\a draft.txt"]
+    );
+    // An address: its path, the drive's after the root's slash.
+    assert_eq!(
+        crate::app::file_address("/Users/a/a%20draft.txt", false),
+        "/Users/a/a draft.txt"
+    );
+    // On Windows, its folders parted as Windows parts them, so that it is
+    // the same path as the file dropped.
+    assert_eq!(
+        crate::app::file_address("/C:/Users/a/a%20draft.txt", true),
+        r"C:\Users\a\a draft.txt"
+    );
+}
+
+#[test]
 fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
     let dir = tempfile::tempdir().unwrap();
     let spaced = dir.path().join("a draft.txt");
@@ -3366,15 +3459,25 @@ fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
     std::fs::write(&plain, b"plain").unwrap();
     let mut app = demo();
     press(&mut app, &["c"]);
-    // As terminals paste dropped files: escaped, quoted, or as addresses.
-    let escaped = spaced.display().to_string().replace(' ', "\\ ");
-    app.paste(&format!("{escaped} '{}'", plain.display()));
+    // As terminals paste dropped files: escaped, quoted, or as addresses;
+    // on Windows, a path with a space quoted.
+    let spaced_said = if cfg!(windows) {
+        format!("\"{}\"", spaced.display())
+    } else {
+        spaced.display().to_string().replace(' ', "\\ ")
+    };
+    app.paste(&format!("{spaced_said} '{}'", plain.display()));
     let text = app.compose.as_ref().unwrap().buffer.text();
     assert!(text.contains("a draft.txt\n"), "{text}");
     assert!(text.contains("plain.txt\n"), "{text}");
     let address = format!(
-        "file://{}",
-        spaced.display().to_string().replace(' ', "%20")
+        "file://{}{}",
+        if cfg!(windows) { "/" } else { "" },
+        spaced
+            .display()
+            .to_string()
+            .replace(' ', "%20")
+            .replace('\\', "/")
     );
     app.paste(&address);
     assert_eq!(app.status, "attached already");
@@ -3748,8 +3851,8 @@ fn the_wheel_moves_in_the_dialog_open_and_not_behind_it() {
     }
     assert_eq!(
         app.dialog.files().expect("listed").at,
-        2,
-        "the last of three"
+        3,
+        "the last of four"
     );
     press(&mut app, &["<esc>"]);
 
@@ -3948,6 +4051,16 @@ fn identity() -> age::x25519::Identity {
     age::x25519::Identity::generate()
 }
 
+/// The journals' files in `dir`: all of it but the lock held as one is
+/// written to.
+fn journal_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().is_some_and(|n| n != "lock"))
+        .collect()
+}
+
 #[test]
 fn the_journals_give_back_what_was_written() {
     let dir = tempfile::tempdir().unwrap();
@@ -3993,13 +4106,14 @@ fn the_journals_give_back_what_was_written() {
     assert_eq!(index.keep.layouts[&Lens::Both][&a.key], (1.5, -2.0));
     assert_eq!(index.keep.looked, 42);
     // Encrypted: nothing of the mail is in the files.
-    for entry in std::fs::read_dir(dir.path()).unwrap() {
-        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+    for path in journal_files(dir.path()) {
+        let bytes = std::fs::read(path).unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("Photo") && !text.contains("Grant"));
         assert!(text.starts_with("age-encryption.org/v1"));
     }
     // Another key reads nothing, and says so.
+    drop(index);
     let other = Index::open_with(dir.path(), &identity());
     assert!(other.records.is_empty());
     assert!(other.keep_fault().is_some());
@@ -4081,7 +4195,7 @@ fn a_journal_with_many_logs_is_written_again_as_one_base() {
             index.flush().unwrap();
         }
     }
-    let files = || std::fs::read_dir(dir.path()).unwrap().count();
+    let files = || journal_files(dir.path()).len();
     assert_eq!(files(), many);
     let index = Index::open_with(dir.path(), &id);
     assert_eq!(index.records.len(), many);
@@ -4146,7 +4260,7 @@ fn a_keep_that_cannot_be_read_is_not_written_over() {
     index.flush().unwrap();
     drop(index);
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(journal_files(dir.path()).len(), 1);
 }
 
 /// Where a test keeps the map's key: here, the system's store left alone.
@@ -4404,17 +4518,23 @@ fn the_demo_is_mapped_from_a_twin_that_sees_its_mail() {
     let index = Mutex::new(Index::memory());
     sync_once(twin.as_mut(), &index);
     // The Inbox, Archive, Sent and Projects/Grant; not Drafts.
-    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(index.lock().unwrap().records.len(), INBOX + ARCHIVE + 4 + 4);
     let mut demo = demo;
     demo.relocate("INBOX", 1, "Trash", "").unwrap();
     sync_once(twin.as_mut(), &index);
-    assert_eq!(index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4 - 1);
+    assert_eq!(
+        index.lock().unwrap().records.len(),
+        INBOX + ARCHIVE + 4 + 4 - 1
+    );
 }
 
 #[test]
 fn the_app_maps_every_account_as_it_starts() {
     let app = demo();
-    assert_eq!(app.index.lock().unwrap().records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(
+        app.index.lock().unwrap().records.len(),
+        INBOX + ARCHIVE + 4 + 4
+    );
     assert!(app.mapping.is_empty(), "{}", app.mapping);
 }
 
@@ -5054,7 +5174,7 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     let mut app = demo_map();
     assert_eq!(app.map.mode, crate::map::Mode::Map);
     let s = app.map.snapshot.clone().expect("drawn");
-    assert_eq!(s.dots.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(s.dots.len(), INBOX + ARCHIVE + 4 + 4);
     assert!(s.at.is_some(), "laid out");
     // The layout is kept, to be the same next time.
     assert_eq!(
@@ -5266,7 +5386,7 @@ fn a_message_in_two_accounts_is_two_dots_marked_twins() {
     let mut app = two_accounts();
     press(&mut app, &["<m-g>"]);
     let s = app.map.snapshot.clone().unwrap();
-    assert_eq!(s.dots.len(), 2 * (INBOX + 20 + 4 + 4) + 1);
+    assert_eq!(s.dots.len(), 2 * (INBOX + ARCHIVE + 4 + 4) + 1);
     let photo: Vec<&crate::map::Dot> = s.dots.iter().filter(|d| d.subject == "Photo 51").collect();
     assert_eq!(photo.len(), 2);
     assert!(photo.iter().all(|d| d.twin));
@@ -5514,10 +5634,43 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
 }
 
 #[test]
+fn the_newest_file_of_several_as_new_is_the_first_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = std::time::SystemTime::now() - Duration::from_secs(60);
+    for name in ["b.txt", "a.txt", "c.txt"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+    let p = crate::pick::Picker::open(dir.path().to_path_buf());
+    assert_eq!(
+        p.current().map(|e| e.name().to_string()).as_deref(),
+        Some("a.txt")
+    );
+}
+
+#[test]
 fn space_marks_in_the_picker_after_typing_too() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["one draft.txt", "two draft.txt", "notes.txt"] {
-        std::fs::write(dir.path().join(name), b"x").unwrap();
+    // Each newer than the last, as a clock that tells them apart has it.
+    let at = std::time::SystemTime::now() - Duration::from_secs(60);
+    for (i, name) in ["one draft.txt", "two draft.txt", "notes.txt"]
+        .iter()
+        .enumerate()
+    {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at + Duration::from_secs(i as u64))
+            .unwrap();
     }
     let mut p = crate::pick::Picker::open(dir.path().to_path_buf());
     for c in "draft".chars() {
@@ -6211,7 +6364,10 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
     let id = identity();
     let mut once = demo_index();
     let said = crate::map::rebuild(&mut once).unwrap();
-    assert!(said.contains("laid out 61 messages"), "{said}");
+    assert!(
+        said.contains(&format!("laid out {} messages", INBOX + ARCHIVE + 4 + 4)),
+        "{said}"
+    );
     assert_eq!(once.keep.layouts.len(), 3, "a layout each lens");
     let mut twice = demo_index();
     crate::map::rebuild(&mut twice).unwrap();
@@ -6246,10 +6402,10 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
         sync_once(twin.as_mut(), &shared);
         let mut index = shared.into_inner().unwrap();
         crate::map::rebuild(&mut index).unwrap();
-        assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+        assert_eq!(index.records.len(), INBOX + ARCHIVE + 4 + 4);
     }
     let index = Index::open_with(dir.path(), &id);
-    assert_eq!(index.records.len(), INBOX + 20 + 4 + 4);
+    assert_eq!(index.records.len(), INBOX + ARCHIVE + 4 + 4);
     assert_eq!(index.keep.labels.len(), 1);
     assert_eq!(index.keep.not_it.len(), 1);
     assert_eq!(index.keep.layouts.len(), 3);
@@ -6258,7 +6414,7 @@ fn a_rebuild_lays_out_the_same_map_from_the_same_mail_and_keeps_what_letterbox_k
             .keep
             .layouts
             .values()
-            .all(|at| at.len() == INBOX + 20 + 4 + 4)
+            .all(|at| at.len() == INBOX + ARCHIVE + 4 + 4)
     );
 }
 
@@ -6820,10 +6976,13 @@ fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
         .collect();
     assert!(!going.is_empty(), "some would go to a label");
     let (first, label) = going[0].clone();
-    // Where it would go, beside it, by the cluster it lies in.
-    assert_eq!(
-        s.group_of(first).unwrap().label.as_deref(),
-        Some(label.as_str())
+    // Where it would go, a label there is, as the filed mail nearest it
+    // votes.
+    assert!(
+        s.model
+            .label_vectors
+            .contains_key(&crate::index::fold(&label)),
+        "{label}"
     );
     app.map.cursor = Some(s.dots[first].key.clone());
     press(&mut app, &["<enter>"]);
@@ -6906,7 +7065,15 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("Inbox · 33 to look through"), "{screen}");
     assert!(screen.contains("Apply  $"), "{screen}");
-    assert!(screen.contains("✓ keep"), "{screen}");
+    // Nothing chosen until it is: what is suggested only hinted at, and $
+    // has nothing to do.
+    assert!(!screen.contains('✓'), "{screen}");
+    assert!(screen.contains("[?] "), "{screen}");
+    assert!(screen.contains("none chosen"), "{screen}");
+    assert!(rows.iter().all(|&i| app.chosen(i).is_none()));
+    press(&mut app, &["$"]);
+    assert!(app.status.contains("nothing chosen"), "{}", app.status);
+    assert!(!app.review.as_ref().unwrap().asking);
     let s = app.map.snapshot.clone().unwrap();
     // The one picked is picked on the map too.
     assert_eq!(app.map.picked(), Some(rows[0]));
@@ -6916,9 +7083,13 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     assert_eq!(app.map.picked(), Some(rows[1]));
     press(&mut app, &["k", "<space>"]);
     assert_eq!(app.choice(rows[0]), app::Choice::Keep);
-    // ← and → go round what may be done.
+    // ← and → go round what may be done, and round to none chosen.
     press(&mut app, &["k", "<right>"]);
     assert_eq!(app.choice(rows[0]), app::Choice::Discard);
+    press(&mut app, &["<right>"]);
+    assert_eq!(app.chosen(rows[0]), None);
+    press(&mut app, &["<left>"]);
+    assert_eq!(app.chosen(rows[0]), Some(app::Choice::Discard));
     // One suggested to go somewhere: y files it there.
     let going = rows
         .iter()
@@ -6960,13 +7131,24 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
         dot_labels(&app, &s.dots[rows[nowhere]].subject).1,
         "still in the Inbox"
     );
-    // $ asks; n leaves it; $ and y do it all.
+    // $ asks, saying how many are left; n leaves it; $ and y do those
+    // chosen, and only those.
     app.focus = app::Focus::Reader;
     press(&mut app, &["$"]);
     assert!(app.status.contains("(y or n)"), "{}", app.status);
+    assert!(app.status.contains("left as they are"), "{}", app.status);
     press(&mut app, &["n"]);
     assert!(app.review.as_ref().unwrap().chosen.len() >= 2);
+    let untouched: Vec<String> = rows
+        .iter()
+        .filter(|&&i| app.chosen(i).is_none())
+        .map(|&i| s.dots[i].subject.clone())
+        .collect();
+    assert!(!untouched.is_empty());
     press(&mut app, &["$", "y"]);
+    for subject in &untouched {
+        assert!(dot_labels(&app, subject).1, "{subject} left in the Inbox");
+    }
     let (labels, inbox) = dot_labels(&app, &s.dots[rows[going]].subject);
     assert!(labels.contains(&label) && !inbox, "{labels:?}");
     let (labels, inbox) = dot_labels(&app, &s.dots[rows[nowhere]].subject);
@@ -7042,7 +7224,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     let i = rows[going];
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m"]);
-    assert!(app.review.as_ref().unwrap().menu.is_some());
+    assert!(app.menu.is_some());
     let items = app.menu_items();
     assert!(
         matches!(&items[0], app::Pick::Label(n, _) if n == "Grant"),
@@ -7071,7 +7253,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     );
     press(&mut app, &["<enter>"]);
     assert_eq!(app.choice(i), app::Choice::Move("Projects".into()));
-    assert!(app.review.as_ref().unwrap().menu.is_none());
+    assert!(app.menu.is_none());
     // A new one, by its name typed.
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m"]);
@@ -7090,7 +7272,7 @@ fn the_labels_drop_down_nearest_first_narrowed_as_typed() {
     // esc puts it away, nothing chosen; a click picks one.
     app.review.as_mut().unwrap().picked = Some(s.dots[i].key.clone());
     press(&mut app, &["m", "<esc>"]);
-    assert!(app.review.as_ref().unwrap().menu.is_none());
+    assert!(app.menu.is_none());
     assert_eq!(app.choice(i), app::Choice::Move("Engines".into()));
     press(&mut app, &["m"]);
     click_at(&mut app, app::Target::MenuItem(0));
@@ -7137,4 +7319,2095 @@ fn the_keys_of_the_inbox_looked_through_lose_nothing_and_act_on_the_one_picked()
     press(&mut app, &["u"]);
     let s = app.map.snapshot.clone().unwrap();
     assert_ne!(s.dots[picked].flags.seen, seen);
+}
+
+// ---- What you throw away, learnt ----
+
+/// A message from `address` about `subject`, by `id`.
+fn sent_by(id: &str, address: &str, subject: &str) -> index::Record {
+    let mut r = record(id, subject);
+    r.address = address.to_string();
+    r.from = address.to_string();
+    r.preview = String::new();
+    r
+}
+
+/// What `n` mails from a shop and `n` from colleagues teach, each a subject
+/// of its own.
+fn taught(n: usize) -> crate::filter::Filter {
+    let mut f = crate::filter::Filter::default();
+    for k in 0..n {
+        for (address, subject, thrown) in [
+            (
+                "deals@shop.example",
+                format!("Save {k} percent on item {k}"),
+                true,
+            ),
+            (
+                "ada@analytical.example",
+                format!("Engine notes, part {k}"),
+                false,
+            ),
+        ] {
+            let r = sent_by(&format!("{k}{thrown}"), address, &subject);
+            f.learn(crate::filter::Taught {
+                key: r.key.clone(),
+                thrown,
+                tokens: crate::filter::Filter::tokens(&r, &Default::default()),
+                message_id: r.message_id.clone(),
+                seeded: false,
+                ..Default::default()
+            });
+        }
+    }
+    f
+}
+
+#[test]
+fn what_you_throw_away_is_learnt_by_who_sent_it_not_its_subject() {
+    // Too little taught: nothing said.
+    let few = taught(crate::filter::READY as usize - 1);
+    assert!(!few.ready());
+    let new_deal = sent_by("x", "deals@shop.example", "A brand new offer, never seen");
+    assert_eq!(few.would_throw(&new_deal, &Default::default()), None);
+    // Enough: the shop's new mail, of a subject never seen, leans to thrown
+    // away, its words never seen weighing nothing; once taught more, sure
+    // enough to say so. Ada's would not be.
+    let f = taught(40);
+    assert!(f.ready());
+    assert!(
+        f.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        )) > 0.8
+    );
+    let f = taught(100);
+    let p = f
+        .would_throw(&new_deal, &Default::default())
+        .expect("thrown away");
+    assert!(p >= crate::filter::SURE, "{p}");
+    let from_ada = sent_by(
+        "y",
+        "ada@analytical.example",
+        "A brand new offer, never seen",
+    );
+    assert_eq!(f.would_throw(&from_ada, &Default::default()), None);
+    assert!(
+        f.odds(&crate::filter::Filter::tokens(
+            &from_ada,
+            &Default::default()
+        )) < 0.5
+    );
+    // The same taught in the same order: the same odds.
+    let again = taught(100);
+    assert_eq!(
+        f.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        )),
+        again.odds(&crate::filter::Filter::tokens(
+            &new_deal,
+            &Default::default()
+        ))
+    );
+}
+
+#[test]
+fn what_was_learnt_is_written_down_and_learnt_again_as_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let deal = sent_by("d", "deals@shop.example", "Save now");
+    let note = sent_by("n", "ada@analytical.example", "Engine notes");
+    let odds;
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![
+                Cached::Upsert(Box::new(deal.clone())),
+                Cached::Upsert(Box::new(note.clone())),
+            ])
+            .unwrap();
+        for _ in 0..3 {
+            index.teach(&deal.key, true).unwrap();
+            index.teach(&note.key, false).unwrap();
+        }
+        // One not indexed teaches nothing.
+        index.teach(&record("gone", "Gone").key, true).unwrap();
+        assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
+        odds = index
+            .filter
+            .odds(&crate::filter::Filter::tokens(&deal, &Default::default()));
+        index.flush().unwrap();
+    }
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!((index.filter.thrown, index.filter.kept), (3, 3));
+    assert_eq!(
+        index
+            .filter
+            .odds(&crate::filter::Filter::tokens(&deal, &Default::default())),
+        odds
+    );
+    // Its key, by where it is.
+    assert!(index.key_at("a@b.c", "INBOX", 1).is_some());
+}
+
+#[test]
+fn trashing_teaches_and_the_inbox_looked_through_says_what_would_be_thrown_away() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    // d on the map: thrown away, and learnt.
+    let ci = s
+        .dots
+        .iter()
+        .position(|d| d.subject.starts_with("Build passed"))
+        .unwrap();
+    app.map.cursor = Some(s.dots[ci].key.clone());
+    press(&mut app, &["d"]);
+    assert_eq!(app.index.lock().unwrap().filter.thrown, 1);
+    // Taught enough that the CI's mail is thrown away, and the rest kept.
+    let (ci_keys, kept_keys): (Vec<_>, Vec<_>) = {
+        let index = app.index.lock().unwrap();
+        let ci: Vec<_> = index
+            .records
+            .values()
+            .filter(|r| r.from == "CI")
+            .map(|r| r.key.clone())
+            .collect();
+        let kept: Vec<_> = index
+            .records
+            .values()
+            .filter(|r| r.from != "CI")
+            .map(|r| r.key.clone())
+            .take(25)
+            .collect();
+        (ci, kept)
+    };
+    {
+        let mut index = app.index.lock().unwrap();
+        for k in 0..25 {
+            index.teach(&ci_keys[k % ci_keys.len()], true).unwrap();
+            index.teach(&kept_keys[k], false).unwrap();
+        }
+    }
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 170, 40);
+    app.settle(Duration::from_secs(5));
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    let failed = rows
+        .iter()
+        .copied()
+        .find(|&i| s.dots[i].from == "CI")
+        .expect("the CI's mail in the Inbox");
+    assert!(
+        s.dots[failed].thrown.is_some(),
+        "{:?}",
+        s.dots[failed].thrown
+    );
+    // Suggested, not chosen: hinted at, and nothing thrown away by $.
+    assert_eq!(app.choice(failed), app::Choice::Discard);
+    assert_eq!(app.chosen(failed), None);
+    let screen = app::screen(&mut app, 170, 60);
+    assert!(screen.contains("[?] discard "), "{screen}");
+    assert!(screen.contains('%'), "{screen}");
+}
+
+#[test]
+fn only_those_chosen_are_done_and_those_kept_come_last_next_time() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    let first = s.dots[rows[0]].key.clone();
+    // Kept, the first; the rest not looked at.
+    press(&mut app, &["<space>", "$", "y"]);
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+    assert_eq!(app.index.lock().unwrap().filter.kept, 1);
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 170, 40);
+    app.settle(Duration::from_secs(5));
+    // Still in the Inbox, all of them; the one kept after the rest.
+    let rows = app.review_rows();
+    assert_eq!(rows.len(), INBOX);
+    let s = app.map.snapshot.clone().unwrap();
+    assert_eq!(s.dots[*rows.last().unwrap()].key, first);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("1 kept before"), "{screen}");
+}
+
+// ---- the list and the map, one key apart ----
+
+#[test]
+fn m_goes_between_the_map_and_the_list_and_lets_go_of_what_was_the_maps() {
+    let mut app = demo();
+    press(&mut app, &["M"]);
+    assert_eq!(app.map.mode, crate::map::Mode::Map);
+    // Something marked on the map is let go in the list.
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some());
+    press(&mut app, &["M"]);
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    assert!(app.map.region.is_none() && app.map.moving.is_none());
+    // The view menu open, M-l closes it and goes to the list.
+    press(&mut app, &["M", ",", "f", "<m-l>"]);
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+    // From the Inbox looked through, the list is picked, not the message.
+    press(&mut app, &["M", "i", "M"]);
+    assert_eq!(app.focus, app::Focus::List);
+    // A cluster listed counts what it lists.
+    press(&mut app, &["M", "Z", "<enter>", "M"]);
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(!screen.contains(" 0 messages"), "{screen}");
+}
+
+#[test]
+fn in_the_list_a_message_is_filed_as_in_the_map() {
+    let mut app = demo();
+    let subject = app.current().unwrap().summary.subject.clone();
+    // m drops down the labels; ⏎ files it there at once.
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_some());
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(screen.contains("Move to"), "{screen}");
+    let first = match &app.menu_items()[0] {
+        app::Pick::Label(n, _) => n.clone(),
+        other => panic!("{other:?}"),
+    };
+    press(&mut app, &["<enter>"]);
+    assert!(app.menu.is_none());
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &subject);
+    assert!(labels.contains(&first) && !inbox, "{labels:?}");
+    assert!(
+        !app.shown.iter().any(|l| l.summary.subject == subject),
+        "out of the Inbox listed"
+    );
+    // N names a new label for the next; esc lets it go.
+    let next = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["N"]);
+    assert!(matches!(app.dialog, app::Dialog::Label(_)));
+    press(&mut app, &["<esc>"]);
+    assert!(app.map.moving.is_none());
+    press(&mut app, &["N", "<c-u>"]);
+    for c in "Engines".chars() {
+        let shift = if c.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        app.key(KeyEvent::new(KeyCode::Char(c), shift));
+    }
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &next);
+    assert!(
+        labels.contains(&"Engines".to_string()) && !inbox,
+        "{labels:?}"
+    );
+    // y files one where it would go, as the map would.
+    let s = app.map.snapshot.clone().unwrap();
+    let going = app
+        .shown
+        .iter()
+        .position(|l| {
+            s.dots.iter().enumerate().any(|(i, d)| {
+                d.subject == l.summary.subject && d.system.inbox && s.suggestion(i).is_some()
+            })
+        })
+        .expect("one that would go somewhere");
+    let subject = app.shown[going].summary.subject.clone();
+    let i = s.dots.iter().position(|d| d.subject == subject).unwrap();
+    let label = s.suggestion(i).unwrap().to_string();
+    app.list.select(Some(going));
+    press(&mut app, &["y"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, inbox) = dot_labels(&app, &subject);
+    assert!(labels.contains(&label) && !inbox, "{labels:?}");
+}
+
+// ---- how what is learnt would have done ----
+
+#[test]
+fn the_filter_is_graded_on_each_decision_before_it_is_learnt() {
+    let mut f = taught(40);
+    // A message from the shop you kept, last: it would have been thrown
+    // away, and is graded so, not as what it taught.
+    let kept = sent_by("k", "deals@shop.example", "Your receipt");
+    f.learn(crate::filter::Taught {
+        key: kept.key.clone(),
+        thrown: false,
+        tokens: crate::filter::Filter::tokens(&kept, &Default::default()),
+        message_id: String::new(),
+        seeded: false,
+        ..Default::default()
+    });
+    let said = crate::filter::Filter::check(&f.taught);
+    // Nothing said before twenty of each: one of each a turn.
+    let first = 2 * crate::filter::READY as usize;
+    assert_eq!(said.len(), f.taught.len() - first, "{}", said.len());
+    let last = said.last().unwrap();
+    assert!(!last.thrown && last.odds >= crate::filter::SURE, "{last:?}");
+    assert_eq!(last.from, "deals@shop.example");
+    let g = crate::filter::grade(&said, crate::filter::SURE);
+    assert_eq!(g.wrong, 1, "{g:?}");
+    assert!(g.caught >= 4, "{g:?}");
+    assert_eq!(g.right, said.iter().filter(|s| !s.thrown).count() - 1);
+}
+
+#[test]
+fn a_message_put_back_is_learnt_as_kept_though_the_index_let_it_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = Index::open_with(dir.path(), &identity());
+    let mut deal = sent_by("d", "deals@shop.example", "Save now");
+    deal.message_id = "<d@shop>".into();
+    index
+        .cache(vec![Cached::Upsert(Box::new(deal.clone()))])
+        .unwrap();
+    index.teach(&deal.key, true).unwrap();
+    // Known by its Message-ID; one never thrown away is not.
+    assert!(!index.put_back(&deal.key.account, "<other@shop>").unwrap());
+    assert!(index.put_back(&deal.key.account, "<d@shop>").unwrap());
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 1));
+    let last = index.filter.taught.last().unwrap();
+    assert!(!last.thrown && last.tokens == index.filter.taught[0].tokens);
+    // Once kept, put back again teaches nothing more.
+    assert!(!index.put_back(&deal.key.account, "<d@shop>").unwrap());
+}
+
+#[test]
+fn archiving_answering_and_putting_back_teach_that_it_was_kept() {
+    let mut app = demo_map();
+    let kept = |app: &App| app.index.lock().unwrap().filter.kept;
+    let thrown = |app: &App| app.index.lock().unwrap().filter.thrown;
+    // e on the map: archived, kept.
+    press(&mut app, &["e"]);
+    assert_eq!(kept(&app), 1);
+    // r, in the list: answered, kept.
+    press(&mut app, &["M", "r"]);
+    assert_eq!(kept(&app), 2);
+    app.compose = None;
+    // d, then d on it in the Trash: put back, kept.
+    let subject = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["d"]);
+    assert_eq!(thrown(&app), 1);
+    app.settle(Duration::from_secs(5));
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Trash",
+            _ => false,
+        })
+        .expect("a Trash in the sidebar");
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject == subject)
+        .expect("in the Trash");
+    app.list.select(Some(at));
+    app.focus = app::Focus::List;
+    press(&mut app, &["d"]);
+    assert!(app.status.contains("put back"), "{}", app.status);
+    assert_eq!(kept(&app), 3);
+}
+
+#[test]
+fn what_is_in_the_trash_and_under_labels_is_learnt_once_and_graded() {
+    let mut index = Index::memory();
+    let mut store = Demo::new();
+    // Two thrown away, one read first: dealt with, not unwanted, so left
+    // out.
+    let page = store.page("INBOX", 0, 40).unwrap().summaries;
+    let unread = page.iter().find(|m| !m.flags.seen).unwrap().clone();
+    let read = page.iter().find(|m| m.flags.seen).unwrap().clone();
+    for m in [&unread, &read] {
+        store.relocate("INBOX", m.uid, "Trash", "").unwrap();
+    }
+    let now = jiff::Timestamp::now().as_second();
+    let thrown = crate::trash_seeds(&mut store, &Default::default(), 10, now).unwrap();
+    assert_eq!(thrown.len(), 1, "{thrown:?}");
+    assert!(thrown[0].1.thrown && thrown[0].1.seeded);
+    assert_eq!(thrown[0].1.message_id, unread.message_id);
+    // Filed under labels, kept.
+    let shared = std::sync::Mutex::new(index);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    index = shared.into_inner().unwrap();
+    let kept = index.kept_seeds(100);
+    assert!(!kept.is_empty());
+    assert!(kept.iter().all(|(_, t)| !t.thrown && t.seeded));
+    let seeds: Vec<_> = thrown.into_iter().chain(kept).map(|(_, t)| t).collect();
+    let n = seeds.len();
+    assert_eq!(index.seed(seeds.clone()).unwrap(), n);
+    // Again: nothing more.
+    assert_eq!(index.seed(seeds).unwrap(), 0);
+    let said = crate::check(&index, crate::filter::DECAY);
+    assert!(said.contains(&format!("{n} decisions")), "{said}");
+    assert!(said.contains("read from the Trash"), "{said}");
+    // Forgotten: only your own decisions are left.
+    assert_eq!(index.unseed().unwrap(), n);
+    assert!(index.filter.taught.is_empty());
+    assert_eq!((index.filter.thrown, index.filter.kept), (0, 0));
+}
+
+// ---- what else tells mail thrown away from mail kept ----
+
+/// A message from `from` about `subject`, with `headers` beside its own.
+fn with_headers(id: &str, from: &str, subject: &str, headers: &str) -> index::Record {
+    let raw = format!(
+        "From: {from}\r\nTo: me@example.com\r\nSubject: {subject}\r\n\
+         Message-ID: <{id}@example.com>\r\n{headers}\r\nHello.\r\n"
+    );
+    let indexed = index::record::Indexed {
+        uid: 1,
+        size: 100,
+        raw: raw.into_bytes(),
+        ..Default::default()
+    };
+    index::Record::of("a@b.c", "INBOX", 7, &indexed, 1_000)
+}
+
+#[test]
+fn mail_sent_to_many_is_known_by_its_headers() {
+    let plain = with_headers("p", "ada@analytical.example", "Notes", "");
+    assert!(!plain.bulk);
+    let unsubscribe = with_headers(
+        "u",
+        "deals@shop.example",
+        "Sale",
+        "List-Unsubscribe: <mailto:out@shop.example>\r\n",
+    );
+    assert!(unsubscribe.bulk);
+    let precedence = with_headers("b", "news@shop.example", "News", "Precedence: bulk\r\n");
+    assert!(precedence.bulk);
+    // Asked of every server.
+    let items = crate::imap::indexed_items(false);
+    assert!(items.contains("LIST-UNSUBSCRIBE") && items.contains("PRECEDENCE"));
+}
+
+#[test]
+fn the_filter_reads_whether_you_wrote_to_them_and_whether_it_was_sent_to_many() {
+    let mut known = crate::filter::Known::default();
+    known.written.insert("ada@analytical.example".to_string());
+    let tokens = |r: &index::Record| -> Vec<String> {
+        crate::filter::Filter::tokens(r, &known)
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    };
+    let ada = with_headers("a", "Ada <ada@analytical.example>", "Notes", "");
+    assert!(
+        tokens(&ada).contains(&"wrote".to_string()),
+        "{:?}",
+        tokens(&ada)
+    );
+    let deal = with_headers(
+        "d",
+        "Shop <no-reply@shop.example>",
+        "Sale",
+        "List-Unsubscribe: <mailto:out@shop.example>\r\n",
+    );
+    let t = tokens(&deal);
+    assert!(!t.contains(&"wrote".to_string()), "{t:?}");
+    assert!(t.contains(&"noreply".to_string()), "{t:?}");
+    assert!(t.contains(&"bulk".to_string()), "{t:?}");
+    for address in [
+        "noreply@x.org",
+        "do-not-reply@x.org",
+        "donotreply@x.org",
+        "notifications@x.org",
+    ] {
+        let r = with_headers("n", address, "Hi", "");
+        assert!(tokens(&r).contains(&"noreply".to_string()), "{address}");
+    }
+}
+
+#[test]
+fn whom_you_wrote_to_is_read_from_the_mail_you_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = Index::open_with(dir.path(), &identity());
+    let mut sent = with_headers("s", "me@example.com", "Re: Notes", "");
+    sent.to = vec!["Ada@Analytical.example".to_string()];
+    sent.cc = vec!["grace@navy.example".to_string()];
+    sent.places[0].folder = "Sent".into();
+    index
+        .cache(vec![
+            Cached::Folder {
+                account: "a@b.c".into(),
+                folder: "Sent".into(),
+                state: index::record::FolderState {
+                    role: Some(crate::mail::Role::Sent),
+                    ..Default::default()
+                },
+            },
+            Cached::Upsert(Box::new(sent)),
+        ])
+        .unwrap();
+    let known = index.known();
+    assert!(known.written.contains("ada@analytical.example"));
+    assert!(known.written.contains("grace@navy.example"));
+    // What is taught is read so.
+    let ada = with_headers("a", "ada@analytical.example", "Notes", "");
+    index
+        .cache(vec![Cached::Upsert(Box::new(ada.clone()))])
+        .unwrap();
+    index.teach(&ada.key, false).unwrap();
+    let taught = index.filter.taught.last().unwrap();
+    assert!(taught.tokens.iter().any(|(t, _)| t == "wrote"));
+}
+
+#[test]
+fn a_sender_never_seen_is_judged_by_whether_you_wrote_to_them_and_how_it_was_sent() {
+    let mut known = crate::filter::Known::default();
+    let mut f = crate::filter::Filter::default();
+    for k in 0..30 {
+        let colleague = format!("colleague{k}@uni.example");
+        known.written.insert(colleague.clone());
+        for (r, thrown) in [
+            (
+                with_headers(
+                    &format!("s{k}"),
+                    &format!("no-reply@shop{k}.example"),
+                    &format!("Offer {k}"),
+                    "List-Unsubscribe: <mailto:out@x>\r\n",
+                ),
+                true,
+            ),
+            (
+                with_headers(&format!("c{k}"), &colleague, &format!("Draft {k}"), ""),
+                false,
+            ),
+        ] {
+            f.learn(crate::filter::Taught {
+                key: r.key.clone(),
+                thrown,
+                tokens: crate::filter::Filter::tokens(&r, &known),
+                message_id: r.message_id.clone(),
+                seeded: false,
+                ..Default::default()
+            });
+        }
+    }
+    // Each sender new, each subject new: only how it came tells them apart.
+    let shop = with_headers(
+        "x",
+        "no-reply@never.example",
+        "Something else entirely",
+        "List-Unsubscribe: <mailto:out@x>\r\n",
+    );
+    known.written.insert("new@uni.example".into());
+    let friend = with_headers("y", "new@uni.example", "Something else entirely", "");
+    let odds = |r: &index::Record| f.odds(&crate::filter::Filter::tokens(r, &known));
+    assert!(odds(&shop) > 0.8, "{}", odds(&shop));
+    assert!(odds(&friend) < 0.2, "{}", odds(&friend));
+}
+
+#[test]
+fn the_demos_robots_send_to_many_and_what_was_read_before_is_read_again() {
+    let mut store = Demo::new();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    let ci: Vec<index::Record> = shared
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .filter(|r| r.list == "ci.runner.example")
+        .cloned()
+        .collect();
+    assert!(
+        !ci.is_empty() && ci.iter().all(|r| r.bulk),
+        "the CI's mail is bulk"
+    );
+    // Read before the index asked whether it was: read again, its places,
+    // labels and when it was first seen kept.
+    let mut stale = ci[0].clone();
+    stale.bulk = false;
+    shared
+        .lock()
+        .unwrap()
+        .cache(vec![Cached::Upsert(Box::new(stale.clone()))])
+        .unwrap();
+    let n = index::sync::refresh(&mut store, &shared, &[stale.key.clone()], now).unwrap();
+    assert_eq!(n, 1);
+    let index = shared.lock().unwrap();
+    let again = &index.records[&stale.key];
+    assert!(again.bulk);
+    assert_eq!(again.first_seen, ci[0].first_seen);
+    assert_eq!(again.places, stale.places);
+}
+
+#[test]
+fn filter_learn_reads_what_you_kept_again_so_it_is_read_as_new_mail_is() {
+    let mut store = Demo::new();
+    // The CI's mail, filed under Projects.
+    let ci = store
+        .page("INBOX", 0, 40)
+        .unwrap()
+        .summaries
+        .into_iter()
+        .find(|m| m.from == "CI")
+        .unwrap();
+    store.relocate("INBOX", ci.uid, "Projects", "").unwrap();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    let mut index = shared.into_inner().unwrap();
+    // Each bulk message filed under a label, read as the index once read it.
+    let stale: Vec<index::Record> = index
+        .kept_seeds(1000)
+        .into_iter()
+        .filter_map(|(_, t)| index.records.get(&t.key).cloned())
+        .filter(|r| r.bulk)
+        .map(|mut r| {
+            r.bulk = false;
+            r
+        })
+        .collect();
+    assert!(!stale.is_empty(), "the CI's mail, filed");
+    index
+        .cache(
+            stale
+                .iter()
+                .cloned()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let mut stores: Vec<(String, Box<dyn Store>)> = vec![("Demo".into(), Box::new(store))];
+    let (_, kept, learnt) = crate::learn(&mut index, &mut stores, 1000, now).unwrap();
+    assert!(kept > 0 && learnt > 0);
+    for r in &stale {
+        let t = index
+            .filter
+            .taught
+            .iter()
+            .find(|t| t.key == r.key)
+            .expect("learnt");
+        assert!(t.tokens.iter().any(|(w, _)| w == "bulk"), "{}", r.subject);
+    }
+}
+
+// ---- thrown away on its own, and told of ----
+
+/// An index taught that the shop's bulk mail is thrown away and Ada's
+/// kept, the shop's next deal in it.
+fn taught_index(dir: &std::path::Path, id: &age::x25519::Identity) -> (Index, index::Record) {
+    let mut index = Index::open_with(dir, id);
+    let mut records = Vec::new();
+    for k in 0..30 {
+        records.push((
+            with_headers(
+                &format!("s{k}"),
+                "Shop <no-reply@shop.example>",
+                &format!("Offer {k}"),
+                "List-Unsubscribe: <mailto:out@x>\r\n",
+            ),
+            true,
+        ));
+        records.push((
+            with_headers(
+                &format!("a{k}"),
+                "ada@analytical.example",
+                &format!("Engine {k}"),
+                "",
+            ),
+            false,
+        ));
+    }
+    let deal = with_headers(
+        "next",
+        "Shop <no-reply@shop.example>",
+        "Last chance on the offer",
+        "List-Unsubscribe: <mailto:out@x>\r\n",
+    );
+    index
+        .cache(
+            records
+                .iter()
+                .map(|(r, _)| r)
+                .chain([&deal])
+                .map(|r| Cached::Upsert(Box::new(r.clone())))
+                .collect(),
+        )
+        .unwrap();
+    for (r, thrown) in &records {
+        index.teach(&r.key, *thrown).unwrap();
+    }
+    (index, deal)
+}
+
+#[test]
+fn what_is_thrown_away_on_its_own_is_written_down_and_never_learnt() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let (mut index, deal) = taught_index(dir.path(), &id);
+    let known = index.known();
+    let tokens = crate::filter::Filter::tokens(&deal, &known);
+    let (odds, counts) = (
+        index.filter.odds(&tokens),
+        (index.filter.thrown, index.filter.kept),
+    );
+    let graded = crate::filter::Filter::check(&index.filter.taught).len();
+    index.throw_on_its_own(&deal.key).unwrap();
+    // Written down, with what tells it, but not learnt from.
+    let auto = index.filter.taught.last().unwrap().clone();
+    assert!(auto.auto && auto.thrown);
+    assert_eq!(auto.subject, "Last chance on the offer");
+    assert_eq!(auto.from, "Shop");
+    assert!(auto.odds >= 0.95, "{}", auto.odds);
+    assert!(auto.at > 0);
+    assert_eq!(index.filter.odds(&tokens), odds);
+    assert_eq!((index.filter.thrown, index.filter.kept), counts);
+    assert_eq!(
+        crate::filter::Filter::check(&index.filter.taught).len(),
+        graded
+    );
+    // So after a start too.
+    index.flush().unwrap();
+    drop(index);
+    let mut index = Index::open_with(dir.path(), &id);
+    assert_eq!(index.filter.odds(&tokens), odds);
+    // Put back, it was wrong: learnt as kept.
+    assert!(index.put_back(&deal.key.account, &deal.message_id).unwrap());
+    assert_eq!(index.filter.kept, counts.1 + 1);
+    assert!(index.filter.odds(&tokens) < odds);
+}
+
+#[test]
+fn why_it_would_be_thrown_away_is_said_in_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, deal) = taught_index(dir.path(), &identity());
+    let why = index
+        .filter
+        .why(&crate::filter::Filter::tokens(&deal, &index.known()));
+    assert!(!why.is_empty() && why.len() <= 3, "{why:?}");
+    let said = why.join(" · ");
+    assert!(
+        said.contains("no-reply@shop.example")
+            || said.contains("sent to many")
+            || said.contains("takes no answer"),
+        "{said}"
+    );
+    // Its own words, not a token's.
+    assert!(!said.contains("from:") && !said.contains("w:"), "{said}");
+}
+
+#[test]
+fn the_debrief_says_what_was_thrown_away_on_its_own_and_learnt_since() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut index, deal) = taught_index(dir.path(), &identity());
+    let before = index.debrief(i64::MAX);
+    assert!(before.thrown.is_empty() && before.decided == 0);
+    index.throw_on_its_own(&deal.key).unwrap();
+    let d = index.debrief(0);
+    assert_eq!(d.thrown.len(), 1);
+    let t = &d.thrown[0];
+    assert_eq!(t.subject, "Last chance on the offer");
+    assert_eq!(t.message_id, deal.message_id);
+    assert!(!t.why.is_empty());
+    // Your sixty decisions; not the one it made.
+    assert_eq!(d.decided, 60);
+    assert_eq!((d.kept, d.thrown_by_you), (30, 30));
+    // Since after it: nothing.
+    assert!(index.debrief(t.at + 1).thrown.is_empty());
+}
+
+/// The demo's map, taught that the CI's mail is thrown away and the rest
+/// kept, as many times as it takes to be sure.
+fn demo_taught() -> App {
+    let mut app = demo_map();
+    {
+        let mut index = app.index.lock().unwrap();
+        let (ci, rest): (Vec<_>, Vec<_>) = index
+            .records
+            .values()
+            .map(|r| (r.key.clone(), r.from == "CI"))
+            .partition(|(_, ci)| *ci);
+        // One of the CI's left untaught, for it to be sure of alone.
+        assert!(ci.len() >= 2 && rest.len() >= 25);
+        for k in 0..40 {
+            index.teach(&ci[1 + k % (ci.len() - 1)].0, true).unwrap();
+            index.teach(&rest[k % 25].0, false).unwrap();
+        }
+    }
+    app.settle(Duration::from_secs(5));
+    app
+}
+
+#[test]
+fn new_mail_it_is_sure_of_is_thrown_away_on_its_own_and_never_learnt() {
+    let mut app = demo_taught();
+    let auto = |app: &App| -> Vec<crate::filter::Taught> {
+        let index = app.index.lock().unwrap();
+        index
+            .filter
+            .taught
+            .iter()
+            .filter(|t| t.auto)
+            .cloned()
+            .collect()
+    };
+    let thrown = app.index.lock().unwrap().filter.thrown;
+    // Off, or on only for mail come since: nothing.
+    app.throw_away_on_its_own();
+    app.auto = crate::filter::Auto {
+        on: true,
+        since: i64::MAX,
+        debriefed: 0,
+    };
+    app.throw_away_on_its_own();
+    assert!(auto(&app).is_empty());
+    // On for all of it: the CI's mail it is sure of, out of the Inbox.
+    app.auto.since = 0;
+    app.throw_away_on_its_own();
+    app.settle(Duration::from_secs(5));
+    let gone = auto(&app);
+    assert!(!gone.is_empty());
+    assert!(
+        gone.iter()
+            .all(|t| t.from == "CI" && t.odds >= crate::filter::AUTO),
+        "{gone:?}"
+    );
+    // Out of the Inbox: in the Trash, which the map does not show.
+    let s = app.map.snapshot.clone().unwrap();
+    for t in &gone {
+        assert!(
+            s.dots
+                .iter()
+                .filter(|d| d.subject == t.subject)
+                .all(|d| !d.system.inbox),
+            "{} out of the Inbox",
+            t.subject
+        );
+    }
+    assert!(app.status.contains("on its own"), "{}", app.status);
+    // Not learnt as thrown away; and not thrown away twice.
+    assert_eq!(app.index.lock().unwrap().filter.thrown, thrown);
+    app.throw_away_on_its_own();
+    assert_eq!(auto(&app).len(), gone.len());
+}
+
+#[test]
+fn letterbox_opens_with_a_debrief_and_b_opens_it_again() {
+    let mut app = demo_taught();
+    app.auto = crate::filter::Auto {
+        on: true,
+        since: 0,
+        debriefed: 0,
+    };
+    // Nothing thrown away on its own: nothing to tell.
+    app.debrief_on_start();
+    assert!(!matches!(app.dialog, app::Dialog::Debrief(_)));
+    app.throw_away_on_its_own();
+    app.settle(Duration::from_secs(5));
+    app.debrief_on_start();
+    let app::Dialog::Debrief(d) = &app.dialog else {
+        panic!("no debrief: {}", app.status);
+    };
+    let n = d.thrown.len();
+    let first = d.thrown[0].subject.clone();
+    assert!(n > 0);
+    assert!(app.auto.debriefed > 0, "told of");
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("Since you last looked"), "{screen}");
+    assert!(screen.contains(&first), "{screen}");
+    assert!(
+        screen.contains("sent to many") || screen.contains("list "),
+        "{screen}"
+    );
+    // ⏎ puts the one picked back: learnt as kept.
+    let kept = app.index.lock().unwrap().filter.kept;
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.index.lock().unwrap().filter.kept, kept + 1);
+    assert!(dot_labels(&app, &first).1, "{first} back in the Inbox");
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("put back"), "{screen}");
+    // esc: told of, so not again as it starts.
+    press(&mut app, &["<esc>"]);
+    assert!(!app.dialog.is_open());
+    app.debrief_on_start();
+    assert!(!app.dialog.is_open());
+    // B tells of the last seven days again; u puts the rest back.
+    press(&mut app, &["B"]);
+    let app::Dialog::Debrief(d) = &app.dialog else {
+        panic!("B: {}", app.status);
+    };
+    assert_eq!(d.thrown.len(), n);
+    assert_eq!(d.thrown.iter().filter(|t| t.back).count(), 1);
+    press(&mut app, &["u"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.index.lock().unwrap().filter.kept, kept + n as u32);
+}
+
+#[test]
+fn b_with_nothing_thrown_away_says_so() {
+    let mut app = demo();
+    press(&mut app, &["B"]);
+    assert!(!app.dialog.is_open());
+    assert!(
+        app.status.contains("nothing thrown away on its own"),
+        "{}",
+        app.status
+    );
+}
+
+#[test]
+fn whether_it_throws_away_on_its_own_is_kept_beside_the_accounts() {
+    // None yet: on, for mail come from now.
+    let a = crate::filter::Auto::read("", 100);
+    assert_eq!((a.on, a.since, a.debriefed), (true, 100, 100));
+    let b = crate::filter::Auto {
+        on: false,
+        since: 5,
+        debriefed: 9,
+    };
+    let again = crate::filter::Auto::read(&b.to_string(), 100);
+    assert_eq!((again.on, again.since, again.debriefed), (false, 5, 9));
+    // letterbox filter auto off, and on again from now.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("filter");
+    crate::set_auto(&path, false, 50).unwrap();
+    let off = crate::filter::Auto::read(&std::fs::read_to_string(&path).unwrap(), 0);
+    assert!(!off.on);
+    crate::set_auto(&path, true, 70).unwrap();
+    let on = crate::filter::Auto::read(&std::fs::read_to_string(&path).unwrap(), 0);
+    assert!(on.on && on.since == 70);
+}
+
+#[test]
+fn filter_debrief_says_it_on_the_command_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut index, deal) = taught_index(dir.path(), &identity());
+    index.throw_on_its_own(&deal.key).unwrap();
+    let said = crate::debrief_text(&index, 0);
+    assert!(said.contains("thrown away on its own: 1"), "{said}");
+    assert!(said.contains("Last chance on the offer"), "{said}");
+    assert!(said.contains("60 of your decisions"), "{said}");
+}
+
+// ---- what was learnt long ago fades ----
+
+fn decided(r: &index::Record, thrown: bool) -> crate::filter::Taught {
+    crate::filter::Taught {
+        key: r.key.clone(),
+        thrown,
+        tokens: crate::filter::Filter::tokens(r, &Default::default()),
+        message_id: r.message_id.clone(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_weight_grows_without_end() {
+    let deal = sent_by("x", "deals@shop.example", "Sale");
+    let note = sent_by("y", "ada@analytical.example", "Engine");
+    let weight = |decay: f32, n: usize| {
+        let mut f = crate::filter::Filter::with_decay(decay);
+        for _ in 0..n {
+            f.learn(decided(&deal, true));
+            f.learn(decided(&note, false));
+        }
+        f.weight("from:deals@shop.example")
+    };
+    // Unbounded, it goes on growing; bounded, it settles, in as many
+    // decisions as a weight takes to fade.
+    let d = crate::filter::DECAY;
+    let n = (1.0 / (1.0 - d)) as usize;
+    let (bounded, unbounded) = (
+        weight(d, 4 * n) - weight(d, 2 * n),
+        weight(1.0, 4 * n) - weight(1.0, 2 * n),
+    );
+    assert!(bounded.abs() < unbounded / 4.0, "{bounded} {unbounded}");
+    assert!(weight(d, 4 * n) > 0.0);
+}
+
+#[test]
+fn a_sender_not_heard_of_in_a_long_time_weighs_less() {
+    let deal = sent_by("x", "deals@shop.example", "Sale");
+    let note = sent_by("y", "ada@analytical.example", "Engine");
+    let after = |decay: f32| {
+        let mut f = crate::filter::Filter::with_decay(decay);
+        for _ in 0..30 {
+            f.learn(decided(&deal, true));
+            f.learn(decided(&note, false));
+        }
+        let early = f.weight("from:deals@shop.example");
+        // Many decisions since, none of them the shop's.
+        let n = (1.0 / (1.0 - crate::filter::DECAY)) as usize;
+        for k in 0..n {
+            f.learn(decided(
+                &sent_by(
+                    &format!("t{k}"),
+                    &format!("a{k}@x{k}.example"),
+                    &format!("w{k}"),
+                ),
+                true,
+            ));
+            f.learn(decided(
+                &sent_by(
+                    &format!("k{k}"),
+                    &format!("b{k}@y{k}.example"),
+                    &format!("v{k}"),
+                ),
+                false,
+            ));
+        }
+        f.weight("from:deals@shop.example") / early
+    };
+    assert!((after(1.0) - 1.0).abs() < 1e-6, "kept as it was, unfaded");
+    assert!(
+        after(crate::filter::DECAY) < 0.5,
+        "{}",
+        after(crate::filter::DECAY)
+    );
+    assert!(after(crate::filter::DECAY) > 0.0);
+}
+
+// ---- papers in mail, into paperstack ----
+
+const SCHOLAR: &str = r#"<html><body>
+<h3 style="font-weight:normal"><a href="https://scholar.google.com/scholar_url?url=https://www.nature.com/articles/s41586-026-11078-2&amp;hl=en&amp;sa=X&amp;oi=scholaralrt" class="gse_alrt_title">Population-scale immune <b>multiome</b> atlas reveals regulatory disease mechanisms</a></h3>
+<div style="color:#006621">M Kanai, TM Delorey, J Honkanen - Nature, 2026</div>
+<div class="gse_alrt_sni">The immune system is shaped by genetics &hellip;</div>
+<h3><a href="https://scholar.google.com/scholar_url?url=https://arxiv.org/abs/2410.01234&amp;hl=en&amp;oi=scholaralrt" class="gse_alrt_title">Learning gene programs from single-cell data with transformers</a></h3>
+<div style="color:#006621">A Author, B Author - arXiv preprint, 2026</div>
+<p><a href="https://scholar.google.com/scholar_alerts?view_op=cancel_alert_options&amp;x=1">Cancel alert</a>
+<a href="https://scholar.google.com/scholar_alerts?view_op=list_alerts">List alerts</a></p>
+</body></html>"#;
+
+const NEJM: &str = r#"<table><tr><td>
+<a href="https://click.nejm.org/?qs=abc123"><span>Large Language Models for Clinical Trial Matching in Oncology</span></a><br><span>J. Smith and Others</span>
+</td></tr><tr><td>
+<a href="https://ai.nejm.org/doi/full/10.1056/AIoa2500123?query=TOC">A Benchmark of Medical Reasoning in Vision&#8211;Language Models</a>
+</td></tr><tr><td>
+<a href="https://click.nejm.org/?qs=def">View Table of Contents</a>
+<a href="https://click.nejm.org/?qs=x">Unsubscribe from these emails</a>
+</td></tr></table>"#;
+
+#[test]
+fn the_papers_of_a_scholar_alert_are_found_with_where_they_are() {
+    let found = crate::papers::in_message("scholaralerts-noreply@google.com", Some(SCHOLAR), "");
+    let titles: Vec<&str> = found.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Population-scale immune multiome atlas reveals regulatory disease mechanisms",
+            "Learning gene programs from single-cell data with transformers"
+        ]
+    );
+    // The address Scholar sends it on to, and who wrote it where.
+    assert_eq!(
+        found[0].what,
+        "https://www.nature.com/articles/s41586-026-11078-2"
+    );
+    assert_eq!(
+        found[0].about,
+        "M Kanai, TM Delorey, J Honkanen - Nature, 2026"
+    );
+    assert_eq!(found[1].what, "arXiv:2410.01234");
+}
+
+#[test]
+fn a_journals_table_of_contents_gives_its_papers_by_doi_or_title() {
+    let found = crate::papers::in_message("nejmai@nejm.org", Some(NEJM), "");
+    let titles: Vec<&str> = found.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Large Language Models for Clinical Trial Matching in Oncology",
+            "A Benchmark of Medical Reasoning in Vision–Language Models"
+        ]
+    );
+    // Behind a link that tells nothing, by its title; else by its DOI.
+    assert_eq!(found[0].what, found[0].title);
+    assert_eq!(found[1].what, "10.1056/AIoa2500123");
+    // Mail from no journal: only links that say they are papers.
+    let found = crate::papers::in_message("friend@example.com", Some(NEJM), "");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].what, "10.1056/AIoa2500123");
+}
+
+#[test]
+fn an_arxiv_listing_in_text_gives_its_papers() {
+    let text = "------\narXiv:2410.05678\nDate: Mon, 21 Oct 2026\nTitle: Sparse autoencoders for gene\n  regulatory networks\nAuthors: C. Author\n------\n";
+    let found = crate::papers::in_message("no-reply@arxiv.org", None, text);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].what, "arXiv:2410.05678");
+    assert_eq!(
+        found[0].title,
+        "Sparse autoencoders for gene regulatory networks"
+    );
+}
+
+/// A library in memory, as paperstack would answer.
+#[derive(Default)]
+struct Shelf {
+    papers: Vec<crate::paperstack::Found>,
+    added: Vec<String>,
+}
+
+impl crate::paperstack::Library for Shelf {
+    fn search(
+        &mut self,
+        query: &str,
+        _limit: usize,
+    ) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        let starred = query.contains("is:starred");
+        let words: Vec<String> = query
+            .replace("is:starred", "")
+            .replace("title:", "")
+            .replace('"', " ")
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        Ok(self
+            .papers
+            .iter()
+            .filter(|p| !starred || p.starred)
+            .filter(|p| {
+                let t = p.title.to_lowercase();
+                words.iter().all(|w| t.contains(w.as_str()))
+            })
+            .cloned()
+            .collect())
+    }
+    fn add(&mut self, what: &str) -> anyhow::Result<crate::paperstack::Found> {
+        self.added.push(what.to_string());
+        let found = crate::paperstack::Found {
+            key: format!("Key{}", self.added.len()),
+            title: what.to_string(),
+            starred: false,
+        };
+        self.papers.push(found.clone());
+        Ok(found)
+    }
+    fn star(&mut self, key: &str) -> anyhow::Result<()> {
+        for p in self.papers.iter_mut().filter(|p| p.key == key) {
+            p.starred = true;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_paper_is_in_your_library_like_what_you_starred_or_new() {
+    use crate::paperstack::{Found, Standing, standing};
+    let mut shelf = Shelf {
+        papers: vec![
+            Found {
+                key: "Kanai2026".into(),
+                title:
+                    "Population-scale immune multiome atlas reveals regulatory disease mechanisms"
+                        .into(),
+                starred: true,
+            },
+            Found {
+                key: "Theodoris2023".into(),
+                title: "Transfer learning enables predictions in network biology".into(),
+                starred: true,
+            },
+        ],
+        ..Default::default()
+    };
+    let paper = |title: &str| crate::papers::Paper {
+        title: title.into(),
+        what: title.into(),
+        about: String::new(),
+        link: None,
+    };
+    let have = standing(
+        &mut shelf,
+        &paper("Population-scale immune multiome atlas reveals regulatory disease mechanisms"),
+    )
+    .unwrap();
+    assert_eq!(
+        have,
+        Standing::Have {
+            key: "Kanai2026".into(),
+            starred: true
+        }
+    );
+    let like = standing(
+        &mut shelf,
+        &paper("Network biology predictions from transfer learning of single cells"),
+    )
+    .unwrap();
+    assert_eq!(
+        like,
+        Standing::Like("Transfer learning enables predictions in network biology".into())
+    );
+    let new = standing(&mut shelf, &paper("A census of deep-sea octopus behaviour")).unwrap();
+    assert_eq!(new, Standing::New);
+}
+
+#[test]
+fn paperstack_is_asked_over_mcp_one_line_a_message() {
+    let replies = [
+        r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"paperstack"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"..."}],"isError":false,"structuredContent":{"total":1,"shown":1,"papers":[{"key":"Kanai2026","title":"Population-scale atlas","starred":true}]}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"added"}],"isError":false,"structuredContent":{"outcome":"added","paper":{"key":"New2026","title":"A new one","starred":false}}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"not found: nothing"}],"isError":true}}"#,
+    ]
+    .join("\n");
+    let mut mcp =
+        crate::paperstack::Mcp::new(std::io::Cursor::new(replies), Vec::<u8>::new()).unwrap();
+    use crate::paperstack::Library;
+    let found = mcp.search("is:starred atlas", 5).unwrap();
+    assert_eq!(found[0].key, "Kanai2026");
+    assert!(found[0].starred);
+    let added = mcp.add("10.1056/AIoa2500123").unwrap();
+    assert_eq!(added.key, "New2026");
+    let failed = mcp.star("nothing").unwrap_err();
+    assert!(format!("{failed:#}").contains("not found"), "{failed:#}");
+    // What was asked: initialize, the initialized notice, then each tool.
+    let asked: Vec<serde_json::Value> = String::from_utf8(mcp.into_writer())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(asked[0]["method"], "initialize");
+    assert_eq!(asked[1]["method"], "notifications/initialized");
+    assert_eq!(asked[2]["params"]["name"], "search_papers");
+    assert_eq!(asked[2]["params"]["arguments"]["query"], "is:starred atlas");
+    assert_eq!(asked[3]["params"]["name"], "add_paper");
+    assert_eq!(asked[4]["params"]["name"], "update_paper");
+    assert_eq!(asked[4]["params"]["arguments"]["starred"], true);
+}
+
+/// A library shared with the test that put it there.
+struct Shared(Arc<Mutex<Shelf>>);
+
+impl crate::paperstack::Library for Shared {
+    fn search(&mut self, q: &str, n: usize) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        self.0.lock().unwrap().search(q, n)
+    }
+    fn add(&mut self, what: &str) -> anyhow::Result<crate::paperstack::Found> {
+        self.0.lock().unwrap().add(what)
+    }
+    fn star(&mut self, key: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().star(key)
+    }
+}
+
+/// The demo, reading its Scholar alert.
+fn reading_the_alert() -> App {
+    let mut app = demo();
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Archive",
+            _ => false,
+        })
+        .unwrap();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.from == "Google Scholar Alerts")
+        .expect("the alert in Archive");
+    app.list.select(Some(at));
+    app.focus = app::Focus::List;
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.message().is_some(), "{}", app.status);
+    app
+}
+
+#[test]
+fn p_lists_the_papers_of_the_message_read_and_adds_one_to_paperstack_starred() {
+    use crate::paperstack::{Found, Standing};
+    // Nothing read: nothing to list.
+    let mut app = demo();
+    press(&mut app, &["P"]);
+    assert!(!app.dialog.is_open());
+    assert!(app.status.contains("reads"), "{}", app.status);
+    let mut app = reading_the_alert();
+    let shelf = Arc::new(Mutex::new(Shelf {
+        papers: vec![Found {
+            key: "Kanai2026".into(),
+            title: "Population-scale immune multiome atlas reveals regulatory disease mechanisms"
+                .into(),
+            starred: true,
+        }],
+        ..Default::default()
+    }));
+    *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("no papers: {}", app.status);
+    };
+    assert_eq!(p.papers.len(), 2);
+    assert_eq!(
+        p.standing[0],
+        Some(Standing::Have {
+            key: "Kanai2026".into(),
+            starred: true
+        })
+    );
+    assert_eq!(p.standing[1], Some(Standing::New));
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("in your library"), "{screen}");
+    assert!(screen.contains("Learning gene programs"), "{screen}");
+    // ⏎ on the new one: added, and starred, for you liked it.
+    press(&mut app, &["j", "<enter>"]);
+    app.settle(Duration::from_secs(5));
+    {
+        let shelf = shelf.lock().unwrap();
+        assert_eq!(shelf.added, ["arXiv:2410.01234"]);
+        assert!(shelf.papers.iter().all(|p| p.starred));
+    }
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("closed: {}", app.status);
+    };
+    assert!(matches!(
+        &p.standing[1],
+        Some(Standing::Have { starred: true, .. })
+    ));
+    // o opens where it is.
+    press(&mut app, &["o"]);
+    assert_eq!(
+        app.launch.take(),
+        Some(app::Launch::Browse(
+            "https://arxiv.org/abs/2410.01234".into()
+        ))
+    );
+}
+
+#[test]
+fn without_paperstack_p_says_how_to_have_it() {
+    let mut app = reading_the_alert();
+    // SAFETY: this test alone reads it.
+    unsafe { std::env::set_var("LETTERBOX_PAPERSTACK", "no-such-paperstack-program") };
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    unsafe { std::env::remove_var("LETTERBOX_PAPERSTACK") };
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("no papers: {}", app.status);
+    };
+    // The papers are still listed; why paperstack could not be asked, said.
+    assert_eq!(p.papers.len(), 2);
+    let note = p.note.clone().unwrap_or_default();
+    assert!(note.contains("paperstack"), "{note}");
+}
+
+#[test]
+fn mail_read_before_the_index_read_as_it_now_does_is_read_again_a_few_a_pass() {
+    let mut store = Demo::new();
+    let shared = std::sync::Mutex::new(Index::memory());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let now = jiff::Timestamp::now().as_second();
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    // Read as fresh mail is.
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .records
+            .values()
+            .all(|r| r.read_as == index::record::READ_AS)
+    );
+    // Every message read as an older letterbox read it.
+    let stale: Vec<index::Record> = shared
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .cloned()
+        .map(|mut r| {
+            r.read_as = 0;
+            r.bulk = false;
+            r
+        })
+        .collect();
+    shared
+        .lock()
+        .unwrap()
+        .cache(
+            stale
+                .iter()
+                .cloned()
+                .map(|r| Cached::Upsert(Box::new(r)))
+                .collect(),
+        )
+        .unwrap();
+    let old = |index: &Index| {
+        index
+            .records
+            .values()
+            .filter(|r| r.read_as < index::record::READ_AS)
+            .count()
+    };
+    let n = stale.len();
+    assert!(n > index::sync::AGAIN, "{n}");
+    // A pass reads so many again, the Inbox first; the next, the rest.
+    index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    {
+        let index = shared.lock().unwrap();
+        assert_eq!(old(&index), n - index::sync::AGAIN);
+        assert!(
+            index
+                .records
+                .values()
+                .filter(|r| index.system(&r.key).inbox)
+                .all(|r| r.read_as == index::record::READ_AS),
+            "the Inbox first"
+        );
+        assert!(
+            index.records.values().any(|r| r.bulk),
+            "the robots' mail, bulk again"
+        );
+    }
+    for _ in 0..n / index::sync::AGAIN + 1 {
+        index::sync::pass(&mut store, &shared, now, &stop, &mut |_| {}).unwrap();
+    }
+    assert_eq!(old(&shared.lock().unwrap()), 0);
+}
+
+// ---- marking in the list ----
+
+#[test]
+fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
+    let mut app = demo();
+    let first = app.shown[0].summary.subject.clone();
+    let second = app.shown[1].summary.subject.clone();
+    // v marks the one picked and goes on; on one marked, lets it go.
+    press(&mut app, &["v", "v", "v"]);
+    assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(3));
+    press(&mut app, &["k", "v"]);
+    assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(2));
+    let screen = app::screen(&mut app, 150, 30);
+    assert!(screen.contains("2 marked"), "{screen}");
+    assert!(screen.contains('▪'), "marked rows marked: {screen}");
+    // u marks them read, together.
+    press(&mut app, &["u"]);
+    app.settle(Duration::from_secs(5));
+    for subject in [&first, &second] {
+        let l = app
+            .shown
+            .iter()
+            .find(|l| &l.summary.subject == subject)
+            .unwrap();
+        assert!(l.summary.flags.seen, "{subject} read");
+    }
+    // m drops down the labels; ⏎ files both there at once.
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_some());
+    let label = match &app.menu_items()[0] {
+        app::Pick::Label(n, _) => n.clone(),
+        other => panic!("{other:?}"),
+    };
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    for subject in [&first, &second] {
+        let (labels, inbox) = dot_labels(&app, subject);
+        assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
+    }
+    assert!(app.map.region.is_none(), "let go once filed");
+    // Marked again, esc lets go; d trashes what is marked.
+    press(&mut app, &["v", "<esc>"]);
+    assert!(app.map.region.is_none());
+    let count = app.shown.len();
+    press(&mut app, &["v", "v", "d"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(app.shown.len(), count - 2);
+}
+
+#[test]
+fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
+    let mut app = demo();
+    let s = app.map.snapshot.clone().unwrap();
+    let going = app
+        .shown
+        .iter()
+        .position(|l| {
+            s.dots
+                .iter()
+                .enumerate()
+                .any(|(i, d)| d.subject == l.summary.subject && s.suggestion(i).is_some())
+        })
+        .unwrap();
+    let subject = app.shown[going].summary.subject.clone();
+    let i = s.dots.iter().position(|d| d.subject == subject).unwrap();
+    let label = s.suggestion(i).unwrap().to_string();
+    let like: Vec<String> = app
+        .shown
+        .iter()
+        .filter(|l| {
+            s.dots.iter().enumerate().any(|(j, d)| {
+                d.subject == l.summary.subject && s.suggestion(j) == Some(label.as_str())
+            })
+        })
+        .map(|l| l.summary.subject.clone())
+        .collect();
+    app.list.select(Some(going));
+    press(&mut app, &["Y"]);
+    assert_eq!(
+        app.map.region.as_ref().map(|r| r.keys.len()),
+        Some(like.len())
+    );
+    assert!(app.status.contains(&label), "{}", app.status);
+    press(&mut app, &["Y"]);
+    app.settle(Duration::from_secs(5));
+    for subject in &like {
+        let (labels, inbox) = dot_labels(&app, subject);
+        assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
+    }
+}
+
+// ---- threads, by who answered whom ----
+
+fn threaded(id: &str, parents: &[&str], subject: &str) -> crate::forest::Threaded {
+    crate::forest::Threaded {
+        message_id: id.to_string(),
+        parents: parents.iter().map(|p| p.to_string()).collect(),
+        thread: None,
+        subject: subject.to_string(),
+    }
+}
+
+fn sorted(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
+    for g in &mut groups {
+        g.sort();
+    }
+    groups.sort();
+    groups
+}
+
+#[test]
+fn a_thread_is_who_answered_whom_not_its_subject() {
+    let items = vec![
+        threaded("a", &[], "Meeting"),
+        threaded("b", &["a"], "Re: Meeting"),
+        // Its subject changed: still the same talk.
+        threaded("c", &["a", "b"], "Moved to Thursday"),
+        // Another talk of the same subject: apart.
+        threaded("d", &[], "Meeting"),
+        threaded("e", &["d"], "Re: Meeting"),
+        // Notices that answer nothing: by subject, as before.
+        threaded("f", &[], "Build failed: 12"),
+        threaded("g", &[], "Build failed: 13"),
+        // Answers to one not here, together.
+        threaded("h", &["lost"], "Re: lost"),
+        threaded("i", &["lost"], "Re: lost, again"),
+    ];
+    assert_eq!(
+        sorted(crate::forest::thread_groups(&items)),
+        vec![vec![0, 1, 2], vec![3, 4], vec![5, 6], vec![7, 8]]
+    );
+}
+
+#[test]
+fn gmails_thread_holds_its_messages_together() {
+    let mut a = threaded("a", &[], "Photo 51");
+    let mut b = threaded("b", &[], "the X-ray, sharper");
+    a.thread = Some(9);
+    b.thread = Some(9);
+    let c = threaded("c", &[], "Something else");
+    assert_eq!(
+        sorted(crate::forest::thread_groups(&[a, b, c])),
+        vec![vec![0, 1], vec![2]]
+    );
+}
+
+#[test]
+fn what_a_message_answers_is_read_from_its_headers() {
+    let r = with_headers(
+        "x",
+        "ada@analytical.example",
+        "Re: Notes",
+        "In-Reply-To: <b@analytical.example>\r\nReferences: <a@analytical.example>\r\n <b@analytical.example>\r\n",
+    );
+    assert_eq!(r.parents, ["b@analytical.example", "a@analytical.example"]);
+    assert_eq!(r.read_as, 2, "read again from older mail");
+    let items = crate::imap::indexed_items(false);
+    assert!(items.contains("IN-REPLY-TO") && items.contains("REFERENCES"));
+}
+
+// ---- the map, for an agent ----
+
+#[test]
+fn an_agent_asks_what_is_near_a_message_where_it_would_go_and_whether_it_would_be_thrown_away() {
+    use serde_json::json;
+    let mut server = crate::mcp::Server::new(std::path::Path::new("/nowhere"), true).unwrap();
+    // Listed as read only.
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .unwrap();
+    for name in ["nearest_messages", "suggest_label", "would_throw_away"] {
+        let tool = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} listed"));
+        assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+    }
+    let page = call(&mut server, "list_messages", json!({ "limit": 50 }));
+    let r01 = page["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["subject"].as_str().unwrap_or_default().contains("R01"))
+        .expect("the R01 letter in the Inbox")["uid"]
+        .clone();
+    // Near it: the grant's letters, nearest first.
+    let near = call(
+        &mut server,
+        "nearest_messages",
+        json!({ "uid": r01, "limit": 5 }),
+    );
+    assert_eq!(near["isError"], false, "{near}");
+    let nearest = near["structuredContent"]["nearest"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(nearest.len(), 5);
+    let degrees: Vec<f64> = nearest
+        .iter()
+        .map(|m| m["degrees"].as_f64().unwrap())
+        .collect();
+    assert!(degrees.windows(2).all(|w| w[0] <= w[1]), "{degrees:?}");
+    assert!(
+        nearest
+            .iter()
+            .any(|m| m["labels"].as_array().unwrap().iter().any(|l| l == "Grant")),
+        "{nearest:?}"
+    );
+    assert!(
+        nearest
+            .iter()
+            .all(|m| m["uid"].is_u64() && m["folder"].is_string())
+    );
+    // Where it would go, and the labels nearest it.
+    let sug = call(&mut server, "suggest_label", json!({ "uid": r01 }));
+    let labels = sug["structuredContent"]["labels"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!labels.is_empty() && labels[0]["degrees"].is_f64(), "{sug}");
+    if let Some(go) = sug["structuredContent"]["would_go_to"].as_str() {
+        assert_eq!(labels[0]["name"], go);
+    }
+    // Nothing taught yet: it says so, and throws nothing away.
+    let thrown = call(&mut server, "would_throw_away", json!({ "uid": r01 }));
+    let t = &thrown["structuredContent"];
+    assert_eq!(t["ready"], false, "{thrown}");
+    assert_eq!(t["would_throw_away"], false);
+    assert!(t["odds"].is_f64());
+    // One not there: why not.
+    let none = call(&mut server, "nearest_messages", json!({ "uid": 999_999 }));
+    assert_eq!(none["isError"], true);
+}
+
+#[test]
+fn the_index_read_only_reads_all_of_it_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let (a, b) = (record("a", "Notes on the engine"), record("b", "Photo 51"));
+    {
+        let mut index = Index::open_with(dir.path(), &id);
+        index
+            .cache(vec![Cached::Upsert(Box::new(a.clone()))])
+            .unwrap();
+        index.teach(&a.key, false).unwrap();
+        index.flush().unwrap();
+    }
+    let files = |d: &std::path::Path| {
+        let mut f: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        f.sort();
+        f
+    };
+    let before = files(dir.path());
+    let mut read = Index::read_only(dir.path(), &id);
+    assert!(read.records.contains_key(&a.key));
+    assert_eq!(read.filter.kept, 1);
+    // Changed in memory only.
+    read.cache(vec![Cached::Upsert(Box::new(b.clone()))])
+        .unwrap();
+    read.flush().unwrap();
+    drop(read);
+    assert_eq!(files(dir.path()), before, "nothing written");
+    assert!(
+        !Index::open_with(dir.path(), &id)
+            .records
+            .contains_key(&b.key)
+    );
+}
+
+// ---- how well the map would file what you filed ----
+
+#[test]
+fn the_map_is_graded_on_putting_each_filed_message_back_under_its_label() {
+    // Grant letters and seminar notices, each filed under its own; a few
+    // mislabelled, to be missed.
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..12 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Grant".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let corpus = crate::model::Corpus::read(&messages, index::Lens::Both);
+    let check = corpus.label_check(&messages, corpus.base());
+    assert_eq!(check.total, 24);
+    assert_eq!(check.hits, 24, "{check:?}");
+    // Labels given at random: about half put back.
+    let mixed: Vec<crate::model::Given> = given
+        .iter()
+        .enumerate()
+        .map(|(k, (r, _))| {
+            let l = if (k * 7) % 3 == 0 {
+                "Grant"
+            } else {
+                "Seminars"
+            };
+            (r, vec![l.to_string()], false)
+        })
+        .collect();
+    let corpus = crate::model::Corpus::read(&mixed, index::Lens::Both);
+    let check = corpus.label_check(&mixed, corpus.base());
+    assert!(check.hits < 20, "{check:?}");
+}
+
+#[test]
+fn a_label_of_two_kinds_is_put_back_by_its_nearest_not_its_mean() {
+    // Projects holds two kinds of mail, a grant's and a course's; Seminars
+    // one kind, between them. By the mean, Projects' mail goes to Seminars;
+    // by the nearest filed, to Projects.
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..10 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("c{k}"),
+                "teach@uni.example",
+                &format!("Course syllabus marking {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let corpus = crate::model::Corpus::read(&messages, index::Lens::Both);
+    let near = corpus.label_check_nearest(&messages, corpus.base(), crate::model::VOTERS, 90.0);
+    assert_eq!((near.hits, near.total), (30, 30), "{near:?}");
+    // Always the commonest label: the share of it.
+    let common = crate::model::commonest_label_check(&messages);
+    assert_eq!((common.hits, common.total), (20, 30));
+}
+
+#[test]
+fn where_mail_would_go_is_voted_by_the_filed_mail_nearest_it() {
+    let mut given: Vec<(index::Record, Vec<String>)> = Vec::new();
+    for k in 0..10 {
+        given.push((
+            sent_by(
+                &format!("g{k}"),
+                "office@research.example",
+                &format!("Grant budget aims {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("c{k}"),
+                "teach@uni.example",
+                &format!("Course syllabus marking {k}"),
+            ),
+            vec!["Projects".to_string()],
+        ));
+        given.push((
+            sent_by(
+                &format!("s{k}"),
+                "talks@uni.example",
+                &format!("Seminar speaker abstract {k}"),
+            ),
+            vec!["Seminars".to_string()],
+        ));
+    }
+    let course = sent_by(
+        "new",
+        "teach@uni.example",
+        "Course syllabus marking, the last",
+    );
+    let talk = sent_by(
+        "talk",
+        "talks@uni.example",
+        "Seminar speaker abstract, the next",
+    );
+    given.push((course.clone(), Vec::new()));
+    given.push((talk.clone(), Vec::new()));
+    let messages: Vec<crate::model::Given> =
+        given.iter().map(|(r, l)| (r, l.clone(), false)).collect();
+    let model = crate::model::Model::build(&messages, &Default::default(), index::Lens::Both);
+    let at = |r: &index::Record| model.place[&r.key];
+    let voted = model.voted(|_, _| false);
+    // A course's mail, though Projects' mean is far from it: Projects.
+    assert_eq!(voted[at(&course)].as_deref(), Some("Projects"));
+    assert_eq!(voted[at(&talk)].as_deref(), Some("Seminars"));
+    // Filed mail is voted for nothing; a label turned down is not voted.
+    assert!(voted[0].is_none());
+    let voted = model.voted(|i, l| i == at(&course) && l == "projects");
+    assert_ne!(voted[at(&course)].as_deref(), Some("Projects"));
+}
+
+// ---- as reviewed ----
+
+#[test]
+fn a_late_answer_of_paperstack_never_lands_on_another_list_of_papers() {
+    let mut app = reading_the_alert();
+    let shelf = Arc::new(Mutex::new(Shelf::default()));
+    *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
+    // paperstack slow: P asked, let go, and asked again.
+    let held = shelf.lock().unwrap();
+    press(&mut app, &["P", "<esc>", "P"]);
+    // As if another message's, of fewer papers, were listed now.
+    if let app::Dialog::Papers(p) = &mut app.dialog {
+        p.papers.truncate(1);
+        p.standing.truncate(1);
+    }
+    drop(held);
+    app.settle(Duration::from_secs(5));
+    let _ = app::screen(&mut app, 120, 40);
+    let app::Dialog::Papers(p) = &app.dialog else {
+        panic!("closed: {}", app.status);
+    };
+    assert_eq!(p.standing.len(), p.papers.len());
+    press(&mut app, &["<enter>"]);
+    let _ = app::screen(&mut app, 120, 40);
+}
+
+#[test]
+fn an_ampersand_before_a_letter_of_more_than_a_byte_is_read() {
+    assert_eq!(
+        crate::papers::decode("Smith & Müller — Nature &amp; more"),
+        "Smith & Müller — Nature & more"
+    );
+}
+
+#[test]
+fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
+    let mut app = demo_map();
+    let s = app.map.snapshot.clone().unwrap();
+    app.map.region = Some(crate::map::Region {
+        keys: vec![s.dots[0].key.clone()],
+        boxed: None,
+    });
+    app.map.moving = Some(vec![s.dots[1].key.clone()]);
+    press(&mut app, &["<m-l>"]);
+    assert!(app.map.moving.is_none());
+    assert!(app.map.region.is_none(), "marked on the map, let go");
+    // Marked in the list, kept as the list is asked for again.
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some(), "{}", app.status);
+    press(&mut app, &["<m-l>"]);
+    assert!(app.map.region.is_some(), "marked in the list, kept");
+}
+
+#[test]
+fn what_is_marked_in_the_list_is_let_go_as_another_folder_is_opened() {
+    let mut app = demo();
+    press(&mut app, &["v"]);
+    assert!(app.map.region.is_some(), "{}", app.status);
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| match *r {
+            app::Row::Folder(a, i) => app.accounts[a].folders[i].name == "Archive",
+            _ => false,
+        })
+        .unwrap();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.map.region.is_none(), "marked in the Inbox, let go");
+}
+
+#[test]
+fn on_the_map_m_on_the_message_read_drops_down_nothing_unseen() {
+    let mut app = demo_map();
+    app.focus = app::Focus::Reader;
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_none(), "a menu drawn nowhere");
+}
+
+#[test]
+fn mail_read_is_never_thrown_away_on_its_own() {
+    let mut app = demo_taught();
+    let sure: Vec<crate::index::Key> = {
+        let index = app.index.lock().unwrap();
+        let known = index.known();
+        index
+            .records
+            .values()
+            .filter(|r| index.system(&r.key).inbox)
+            .filter(|r| {
+                index.filter.odds(&crate::filter::Filter::tokens(r, &known)) >= crate::filter::AUTO
+            })
+            .map(|r| r.key.clone())
+            .collect()
+    };
+    assert!(!sure.is_empty());
+    // Read, all of them, and left in the Inbox.
+    for key in &sure {
+        app.index
+            .lock()
+            .unwrap()
+            .records
+            .get_mut(key)
+            .unwrap()
+            .flags
+            .seen = true;
+    }
+    app.auto = crate::filter::Auto {
+        on: true,
+        since: 0,
+        debriefed: 0,
+    };
+    app.throw_away_on_its_own();
+    app.settle(Duration::from_secs(5));
+    let auto = app
+        .index
+        .lock()
+        .unwrap()
+        .filter
+        .taught
+        .iter()
+        .filter(|t| t.auto)
+        .count();
+    assert_eq!(auto, 0);
+}
+
+/// A library that cannot be reached, or that says no.
+struct Failing(&'static str);
+
+impl crate::paperstack::Library for Failing {
+    fn search(&mut self, _: &str, _: usize) -> anyhow::Result<Vec<crate::paperstack::Found>> {
+        match self.0 {
+            "pipe" => Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into()),
+            said => Err(anyhow::anyhow!("paperstack: {said}")),
+        }
+    }
+    fn add(&mut self, _: &str) -> anyhow::Result<crate::paperstack::Found> {
+        anyhow::bail!("paperstack: no")
+    }
+    fn star(&mut self, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("paperstack: no")
+    }
+}
+
+#[test]
+fn paperstack_gone_is_run_again_and_paperstack_saying_no_is_kept() {
+    let mut app = reading_the_alert();
+    *app.library.lock().unwrap() = Some(Box::new(Failing("no such paper")));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.library.lock().unwrap().is_some(), "it answered");
+    press(&mut app, &["<esc>"]);
+    *app.library.lock().unwrap() = Some(Box::new(Failing("pipe")));
+    press(&mut app, &["P"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.library.lock().unwrap().is_none(), "run again next time");
+}
+
+#[test]
+fn in_the_list_all_marked_are_picked_where_to_go_on_the_map() {
+    let mut app = demo();
+    press(&mut app, &["v", "v"]);
+    let marked = app.map.region.as_ref().unwrap().keys.clone();
+    assert_eq!(marked.len(), 2);
+    press(&mut app, &["k", "m"]);
+    let on_map = app
+        .menu_items()
+        .iter()
+        .position(|p| matches!(p, app::Pick::OnMap))
+        .unwrap();
+    for _ in 0..on_map {
+        press(&mut app, &["<down>"]);
+    }
+    press(&mut app, &["<enter>"]);
+    let mut moving = app.map.moving.clone().expect("moving");
+    moving.sort();
+    let mut marked = marked;
+    marked.sort();
+    assert_eq!(moving, marked);
+    assert!(app.map.region.is_none());
+}
+
+#[test]
+fn an_image_whose_name_begins_another_s_leaves_it_whole() {
+    let html = r#"<img src="cid:1"><img src="cid:10">"#;
+    let images = vec![
+        ("1".to_string(), "image/png".to_string(), b"one".to_vec()),
+        ("10".to_string(), "image/png".to_string(), b"ten".to_vec()),
+    ];
+    let page = crate::app::inline_images(html, &images);
+    assert!(page.contains("data:image/png;base64,b25l\""), "{page}");
+    assert!(page.contains("data:image/png;base64,dGVu\""), "{page}");
+}
+
+#[test]
+fn one_letterbox_writes_the_index_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let first = Index::open_with(dir.path(), &id);
+    assert!(first.writes());
+    // Another, as `filter learn` while letterbox is open: read, never
+    // written, and why said.
+    let second = Index::open_with(dir.path(), &id);
+    assert!(!second.writes());
+    assert!(
+        second.fault.as_deref().is_some_and(|f| f.contains("open")),
+        "{:?}",
+        second.fault
+    );
+    drop(second);
+    drop(first);
+    assert!(Index::open_with(dir.path(), &id).writes());
 }

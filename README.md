@@ -144,21 +144,25 @@ letterbox search grant report --account Work
 | `f`, `C-f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
+| `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
+| `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
+| `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `C-n` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, onto another merging them |
 | `D` | remove the account picked in the sidebar, or the one listed |
+| `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
 | `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, each cluster is one node, the bigger the more it holds, opened by `⏎` as a tree. The wheel zooms too |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
-| `i` | the Inbox, beside the map, to look through: each message with what to do with it, where it would go picked first; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
-| `$` | in the Inbox looked through, do what was chosen for each message, once asked: filed, kept, or discarded |
+| `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
+| `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
-| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox |
-| `N` | while moving, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
-| `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
-| `v` | in the map, mark the cluster of the message picked, or drag a box over some; `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox |
+| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once |
+| `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
+| `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first, on the map or in the list; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
+| `v` | in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `q` | quit |
@@ -166,9 +170,10 @@ letterbox search grant report --account Work
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 ⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
 keyboard protocol, as kitty, WezTerm and Ghostty do, and keeps no
-shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`,
-or a click on Map at the top right, shows the map in any terminal, and
-List goes back.
+shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`
+needs ⌥ sent as Meta (in Terminal, Settings › Profiles › Keyboard, “Use
+Option as Meta key”). `M`, or a click on Map at the top right, shows the
+map in any terminal, and `M` or List goes back.
 
 `c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
@@ -221,12 +226,12 @@ trash = "Deleted Items"
 
 ## The map
 
-`M-g` (⌘G or Super+G where the terminal passes it on, or a click on Map
-at the top right) shows a second way into your mail, in place of the sidebar and the list: every
+`M` (or `M-g`, ⌘G or Super+G where the terminal passes it on, or a click
+on Map at the top right) shows a second way into your mail, in place of the sidebar and the list: every
 message of every account laid out as a map, near what it is about and
 who it is from, in clusters, coloured by how they are related. Filing a
 message is moving it onto a cluster; letterbox learns from what you file
-and says what else would go there. `M-l` goes back to the list.
+and says what else would go there. `M` or `M-l` goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 
@@ -281,24 +286,83 @@ the clusters, shown with `f`, say which would take what is shown. `y`
 files it there, `Y` marks every message that would go there too and,
 pressed again, files them all, and `-` says it is not one for that
 label, which the map learns. No subject is read to say where: only what
-the mail is about and who it is from, as the map has it.
+the mail is about and who it is from, as the map has it. Where a message
+would go is voted by the ten filed messages nearest it, within 45°, each
+for its labels, the nearer the more; one with none so near is said to go
+nowhere. `letterbox map check` grades it on your mail: each filed message,
+its labels hidden, put back by the vote, and by other ways to compare.
 
-`i` opens the Inbox beside the map, to look through: every message still
-in an Inbox, newest first, each with what may be done with it, `→ Grant`,
-`keep` or `discard`, and what is suggested already picked: filed where it
-would go, else kept. `m`, or a click on `→`, drops down the labels it
+`i` opens the Inbox beside the map, to look through as far as you like:
+every message still in an Inbox, newest first, those kept before after
+the rest, each with what may be done with it, `→ Grant`, `keep` or
+`discard`, and what is suggested marked `[?]`: filed where it would go,
+else kept. Nothing is chosen until you choose it. `m`, or a click on `→`, drops down the labels it
 may go to: where it would go first, then the four nearest it by what it
 is about; typing narrows them to those that hold what is typed, from all
 of them, and offers a new label by that name; the last picks where on the
 map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
-`←` and `→` go round them, and a click picks one. Nothing is done until
-`$`, or the Apply button, asks and is told `y`: then each is filed, or
-moved to the Trash, at once. `esc` goes back to the map and `tab` comes
+`←` and `→` go round them, and back to none chosen; a click picks one, and
+again leaves it. Nothing is done until `$`, or the Apply button, asks and
+is told `y`: then each chosen is filed, kept, or moved to the Trash, at
+once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
-list, and `u` and `s` mark the one picked. The map has no sidebar beside it, as its
+list, and `u` and `s` mark the one picked.
+
+letterbox learns what you throw away. Each message you trash, however it
+is trashed, teaches it that mail like it is thrown away; each you file,
+archive, answer, flag, keep in the Inbox looked through, or put back from
+the Trash, that it is not. Like is by who sent it, from where, by which
+list, and its words, never its subject alone, so that a sender you always
+throw away is known by a subject never seen; and by whether you ever wrote
+to its sender, as your sent mail says, whether its sender takes no answer
+(`noreply` and the like), and whether it was sent to many, saying how to
+unsubscribe from it, so that even a sender never seen is told apart. Once it has been taught twenty
+of each, a message in the Inbox it is sure of, 90% or more, comes to be
+looked through with `[?] discard 92%` suggested; nothing is thrown away
+unless you choose it and `$` does it.
+What it learns is written down, encrypted with the map's index, as the
+journal `taught`, and learnt again as letterbox starts.
+
+```sh
+letterbox filter check    # how it would have done on what you decided
+letterbox filter learn    # learn from the Trash and your labels too, then check
+letterbox filter forget   # forget what was learnt from them, then check
+letterbox filter debrief  # what was thrown away on its own, and why
+letterbox filter auto off # throw nothing away on its own; `on` again
+```
+
+New mail it is 95% sure of is thrown away on its own, to the Trash, from
+the first time this letterbox opens; mail you have decided on never is.
+What it throws away is written down, with why, but never learnt from, so
+a wrong guess does not teach it to guess so again. As letterbox opens, it
+tells of what it threw away since it last told: how sure it was, who sent
+each, what about, and the few things that weighed most, as *sent to many
+· takes no answer · list news.example*; then what it learnt since, and
+how it does now. `⏎` puts the one picked back, `u` all of them, each
+learnt as kept. `B` tells of the last seven days again, and
+`letterbox filter debrief` says the same on the command line.
+
+`filter check` goes through every decision in turn and says, of each,
+what it would have said from those before it alone, before learning it,
+so it is never graded on what it has already seen. It counts how many of
+what you threw away it would have caught, and how many you kept it would
+have thrown away, sure to 70%, 80%, 90% and 95%, and names the ones kept,
+which matter most. `filter learn` reads, on each account's server, the
+newest 500 messages (`--limit`) of its Trash that were never read, as
+thrown away, and the newest 500 filed under your labels, as kept, oldest
+first, what you filed read again from its server first, as the index
+now reads a message; each only once. Mail read and then thrown away was dealt with, not
+unwanted, so it is left out: learnt from, it took meetings and colleagues'
+mail for what you throw away. `filter forget` takes back what was learnt
+from either, and your own decisions are all that is left. Both write
+what letterbox writes, so each waits till letterbox is closed; one
+letterbox writes the map's index at a time, another opened beside it
+reads it, and says so.
+
+The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages
 that fit nowhere; `M-l` lists the cluster the map is narrowed to.
@@ -400,10 +464,14 @@ have your shell's `PATH`.
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
+| `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
+| `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |
+| `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
 
-The first four are marked read-only, so a program may let the agent use
-them without asking. Nothing is sent, moved or deleted. Mail is from
+All but the last are marked read-only, so a program may let the agent use
+them without asking. The map's index is read as letterbox last kept it,
+and never written, so an agent may ask while letterbox runs. Nothing is sent, moved or deleted. Mail is from
 strangers, and a message may be written to steer an agent: the agent is
 told to read what a message says as data, never as instructions. An
 account whose password is in the vault is not served, as its passphrase
