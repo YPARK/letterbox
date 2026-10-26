@@ -7198,6 +7198,30 @@ fn what_is_chosen_in_the_inbox_is_asked_in_a_pop_up_before_it_is_done() {
 }
 
 #[test]
+fn only_what_the_pop_up_said_is_done() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    press(&mut app, &["<space>", "$"]);
+    // Chosen after it was asked, as a pass of the map might change what is
+    // there: not done, as it was not said.
+    let later = s.dots[rows[1]].key.clone();
+    app.review
+        .as_mut()
+        .unwrap()
+        .chosen
+        .insert(later, app::Choice::Discard);
+    press(&mut app, &["y"]);
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+    assert!(!app.status.contains("Trash"), "{}", app.status);
+    assert!(
+        dot_labels(&app, &s.dots[rows[1]].subject).1,
+        "still in the Inbox"
+    );
+}
+
+#[test]
 fn the_pop_up_names_the_labels_filed_under() {
     let mut app = demo_map();
     press(&mut app, &["i"]);
@@ -9309,7 +9333,7 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
     press(&mut app, &["V"]);
     app.settle(Duration::from_secs(60));
     let paged = app.paged.as_ref().expect("its pages");
-    assert!(!paged.pages.is_empty());
+    assert!(!paged.is_empty());
     let screen = app::screen(&mut app, 120, 40);
     assert!(screen.contains("page 1 of"), "{screen}");
     // V again: its text.
@@ -9323,7 +9347,8 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
 #[test]
 fn pages_turn_as_far_as_there_are() {
     let blank = || image::RgbaImage::new(10, 14);
-    let mut paged = crate::pages::Paged::new(1, vec![blank(), blank(), blank()]);
+    let mut paged =
+        crate::pages::Paged::new((0, "INBOX".to_string(), 1), vec![blank(), blank(), blank()]);
     paged.step(1);
     paged.step(1);
     paged.step(1);
@@ -9332,6 +9357,93 @@ fn pages_turn_as_far_as_there_are() {
     assert_eq!(paged.at, 0);
     let picker = ratatui_image::picker::Picker::halfblocks();
     assert!(paged.drawn(&picker).is_some());
+    // Turned on and back, each page still there to draw.
+    paged.step(1);
+    assert!(paged.drawn(&picker).is_some());
+    paged.step(-1);
+    assert!(paged.drawn(&picker).is_some());
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_are_made_to_fit_the_pane_whole() {
+    let tall = image::RgbaImage::new(100, 200);
+    let wide = image::RgbaImage::new(100, 50);
+    let fitted = crate::pages::fit(vec![tall, wide], 100, 100);
+    assert_eq!(fitted[0].dimensions(), (50, 100));
+    assert_eq!(fitted[1].dimensions(), (100, 50));
+}
+
+/// The demo's Noether letter read, in HTML, shown as its pages.
+#[cfg(feature = "pages")]
+fn noether_paged() -> App {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .expect("Noether's letter, in HTML");
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["V"]);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_some(), "{}", app.status);
+    app
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_are_of_the_message_read_and_let_go_once_another_is() {
+    let mut app = noether_paged();
+    // Of the same number in another folder: not its pages.
+    app.paged.as_mut().unwrap().place.1 = "Archive".to_string();
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(!screen.contains("page 1 of"), "{screen}");
+    assert!(app.paged.is_none(), "let go");
+    // Another message read: its pages let go, and V shows the new one's
+    // at once.
+    let mut app = noether_paged();
+    let uid = app.reading.as_ref().unwrap().uid;
+    press(&mut app, &["n"]);
+    app.settle(Duration::from_secs(5));
+    assert_ne!(
+        app.reading.as_ref().map(|r| r.uid),
+        Some(uid),
+        "n reads the next"
+    );
+    let _ = app::screen(&mut app, 120, 40);
+    assert!(app.paged.is_none());
+    press(&mut app, &["V"]);
+    assert!(!app.status.starts_with("its text"), "{}", app.status);
+    app.settle(Duration::from_secs(60));
+    assert_eq!(
+        app.paged.as_ref().map(|p| p.place.clone()),
+        app.read_place(),
+        "{}",
+        app.status
+    );
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn v_while_its_pages_are_typeset_lets_them_go() {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .unwrap();
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["V", "V"]);
+    assert!(app.status.contains("its text"), "{}", app.status);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_none(), "shown after all");
+    assert!(!app.status.contains("pages"), "{}", app.status);
 }
 
 #[cfg(feature = "pages")]
@@ -9364,4 +9476,18 @@ fn only_a_terminal_that_says_it_draws_images_is_asked() {
         "xterm-256color"
     )])));
     assert!(!crate::pages::draws_images(env(&[])));
+    // Within tmux or screen, which pass no images on, though the terminal
+    // outside them would draw them.
+    assert!(!crate::pages::draws_images(env(&[
+        ("KITTY_WINDOW_ID", "1"),
+        ("TMUX", "/tmp/tmux-501/default,1,0")
+    ])));
+    assert!(!crate::pages::draws_images(env(&[
+        ("WEZTERM_EXECUTABLE", "/Applications/WezTerm.app"),
+        ("STY", "1.ttys001.host")
+    ])));
+    assert!(!crate::pages::draws_images(env(&[
+        ("GHOSTTY_RESOURCES_DIR", "/x"),
+        ("TERM", "screen-256color")
+    ])));
 }

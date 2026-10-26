@@ -35,7 +35,8 @@ cargo install letterbox --features pages
 That brings typst, so it builds for longer, and typst's evaluator
 assembles one small file with the system's C toolchain.
 
-Pure Rust, as paperstack and ohp: nothing in C is compiled. TLS is rustls
+Pure Rust, as paperstack and ohp: built without pages, nothing in C is
+compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
 
 ## Accounts

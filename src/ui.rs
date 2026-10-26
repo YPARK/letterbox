@@ -137,6 +137,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.targets.push((grip, Target::Divider));
     }
     app.read_width = read_w;
+    app.read_height = read.height;
     keys(f, app, foot_area, foot_lines, spots);
     if app.compose.is_some() {
         compose_popup(f, app, main);
@@ -171,7 +172,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
-        Dialog::Apply(said) => Some(applying(f, &t, said)),
+        Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
         Dialog::Label(typed) => Some(asking(
             f,
@@ -3197,9 +3198,17 @@ fn label_menu(f: &mut Frame, app: &mut App, area: Rect, under: u16) {
 /// wide as the pane, and which it is below it. Whether it was.
 #[cfg(feature = "pages")]
 fn paged(f: &mut Frame, app: &mut App, area: Rect) -> bool {
-    let uid = app.message().map(|m| m.uid);
+    // Another message's pages, as another is read: let go.
+    let place = app.read_place();
+    if app
+        .paged
+        .as_ref()
+        .is_some_and(|p| Some(&p.place) != place.as_ref())
+    {
+        app.paged = None;
+    }
     let (Some(paged), Some(picker)) = (
-        app.paged.as_mut().filter(|p| Some(p.uid) == uid),
+        app.paged.as_mut(),
         app.picker.as_ref().and_then(Option::as_ref),
     ) else {
         return false;
@@ -3217,7 +3226,7 @@ fn paged(f: &mut Frame, app: &mut App, area: Rect) -> bool {
     let said = format!(
         "page {} of {} · j k turn · V its text",
         paged.at + 1,
-        paged.pages.len()
+        paged.len()
     );
     if let Some(drawn) = paged.drawn(picker) {
         f.render_stateful_widget(ratatui_image::StatefulImage::default(), page, drawn);

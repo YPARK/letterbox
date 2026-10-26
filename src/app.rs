@@ -674,8 +674,18 @@ pub enum Dialog {
     /// paperstack, to put there.
     Papers(Box<PapersView>),
     /// Whether to do what was chosen in the Inbox looked through: what it
-    /// is, as said.
-    Apply(String),
+    /// is, as said, and only that is done.
+    Apply(Box<Plan>),
+}
+
+/// What was chosen in the Inbox looked through, as asked whether to do it.
+#[derive(Clone, Debug, Default)]
+pub struct Plan {
+    /// What is to be done, said.
+    pub said: String,
+    moves: std::collections::BTreeMap<String, Vec<crate::index::Key>>,
+    discard: Vec<crate::index::Key>,
+    kept: Vec<crate::index::Key>,
 }
 
 /// The papers of the message read, as listed: where each stands with
@@ -923,6 +933,8 @@ pub struct App {
     pub panes_right: u16,
     /// How wide the message read was last drawn.
     pub read_width: u16,
+    /// How tall the message read was last drawn.
+    pub read_height: u16,
     /// Where it is written down how the mail was looked at, the list or
     /// the map, to open as it was left; none to keep nothing.
     pub look_file: Option<PathBuf>,
@@ -941,6 +953,10 @@ pub struct App {
     pub picker: Option<Option<ratatui_image::picker::Picker>>,
     #[cfg(feature = "pages")]
     pub paged: Option<crate::pages::Paged>,
+    /// The message whose pages are being typeset; let go, they are not
+    /// shown once they are.
+    #[cfg(feature = "pages")]
+    typesetting: Option<crate::pages::Place>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -1146,6 +1162,7 @@ impl App {
             resizing: false,
             panes_right: 0,
             read_width: 0,
+            read_height: 0,
             look_file: None,
             auto: Default::default(),
             filter_file: None,
@@ -1154,6 +1171,8 @@ impl App {
             picker: None,
             #[cfg(feature = "pages")]
             paged: None,
+            #[cfg(feature = "pages")]
+            typesetting: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -1317,13 +1336,19 @@ impl App {
             return self.relaid(lens, &keys, &at);
         }
         #[cfg(feature = "pages")]
-        if let Answer::Paged { uid, pages } = reply.answer {
+        if let Answer::Paged { place, pages } = reply.answer {
+            // Let go, or of a message no longer read: not shown, nor said.
+            if self.typesetting.as_ref() != Some(&place) {
+                return;
+            }
+            self.typesetting = None;
+            if self.read_place().as_ref() != Some(&place) {
+                return;
+            }
             match pages {
                 Ok(pages) if !pages.is_empty() => {
-                    if self.message().is_some_and(|m| m.uid == uid) {
-                        self.paged = Some(crate::pages::Paged::new(uid, pages));
-                        self.status = "its pages: j k turn them, V its text".to_string();
-                    }
+                    self.paged = Some(crate::pages::Paged::new(place, pages));
+                    self.status = "its pages: j k turn them, V its text".to_string();
                 }
                 Ok(_) => self.status = "it has no pages to show".to_string(),
                 Err(e) => self.status = format!("cannot typeset it: {}", first_line(&e)),
@@ -2842,9 +2867,11 @@ impl App {
                 }
             },
             Dialog::Apply(_) => {
-                self.dialog = Dialog::Closed;
+                let Dialog::Apply(plan) = std::mem::take(&mut self.dialog) else {
+                    unreachable!()
+                };
                 if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
-                    self.apply_review();
+                    self.apply_review(*plan);
                 } else {
                     self.status = "nothing done · $ when it is as you want it".to_string();
                 }
@@ -3694,33 +3721,44 @@ impl App {
     }
 
     fn drop_listed(&mut self, account: usize, folder: &str, uid: u32) {
-        if let Some(listing) = self
-            .listing
-            .as_mut()
-            .and_then(|l| l.part_mut(account, folder))
-        {
-            let before = listing.messages.len();
-            listing.messages.retain(|m| m.uid != uid);
-            if listing.messages.len() != before {
-                listing.total = listing.total.saturating_sub(1);
+        self.drop_all_listed(&[(account, folder.to_string(), uid)]);
+    }
+
+    /// Take each of `gone`, by account, folder and UID, out of what is
+    /// listed, and out of the reader; what is shown narrowed once, after.
+    fn drop_all_listed(&mut self, gone: &[(usize, String, u32)]) {
+        for (account, folder, uid) in gone {
+            let (account, uid) = (*account, *uid);
+            if let Some(listing) = self
+                .listing
+                .as_mut()
+                .and_then(|l| l.part_mut(account, folder))
+            {
+                let before = listing.messages.len();
+                listing.messages.retain(|m| m.uid != uid);
+                if listing.messages.len() != before {
+                    listing.total = listing.total.saturating_sub(1);
+                }
+            }
+            if let Some((messages, total)) = self.listed.get_mut(&(account, folder.clone())) {
+                let before = messages.len();
+                messages.retain(|m| m.uid != uid);
+                if messages.len() != before {
+                    *total = total.saturating_sub(1);
+                }
+            }
+            if self
+                .reading
+                .as_ref()
+                .is_some_and(|r| r.account == account && r.folder == *folder && r.uid == uid)
+            {
+                self.reading = None;
+                self.drawn = None;
             }
         }
-        if let Some((messages, total)) = self.listed.get_mut(&(account, folder.to_string())) {
-            let before = messages.len();
-            messages.retain(|m| m.uid != uid);
-            if messages.len() != before {
-                *total = total.saturating_sub(1);
-            }
+        if !gone.is_empty() {
+            self.narrow();
         }
-        if self
-            .reading
-            .as_ref()
-            .is_some_and(|r| r.account == account && r.folder == folder && r.uid == uid)
-        {
-            self.reading = None;
-            self.drawn = None;
-        }
-        self.narrow();
     }
 
     fn reload(&mut self, account: usize) {
@@ -4499,15 +4537,34 @@ impl App {
         self.dialog = Dialog::Debrief(d);
     }
 
+    /// Where the message read is.
+    #[cfg(feature = "pages")]
+    pub fn read_place(&self) -> Option<crate::pages::Place> {
+        let r = self.reading.as_ref()?;
+        Some((r.account, r.folder.clone(), r.uid))
+    }
+
     /// Show the message read as its pages, typeset off the screen's thread;
     /// shown so, its text again.
     #[cfg(feature = "pages")]
     fn toggle_pages(&mut self) {
-        if self.paged.take().is_some() {
+        let place = self.read_place();
+        // Another message's pages are let go, not taken for its own.
+        if let Some(paged) = self.paged.take()
+            && Some(&paged.place) == place.as_ref()
+        {
             self.status = "its text".to_string();
             return;
         }
-        let Some(m) = self.message().cloned() else {
+        if self
+            .typesetting
+            .take()
+            .is_some_and(|t| Some(&t) == place.as_ref())
+        {
+            self.status = "its text: its pages let go".to_string();
+            return;
+        }
+        let (Some(m), Some(place)) = (self.message().cloned(), place) else {
             self.status = "nothing to show: ⏎ reads the message picked".to_string();
             return;
         };
@@ -4518,12 +4575,15 @@ impl App {
                 "this terminal draws no images: O hands the message to ohp instead".to_string();
             return;
         };
-        let cols = if self.read_width > 0 {
-            self.read_width
+        // Within the pane's border and padding, and above its foot.
+        let (cols, rows) = if self.read_width > 3 && self.read_height > 1 {
+            (self.read_width - 3, self.read_height - 1)
         } else {
-            80
+            (80, 40)
         };
-        let width = u32::from(cols) * u32::from(picker.font_size().width.max(1));
+        let font = picker.font_size();
+        let width = u32::from(cols) * u32::from(font.width.max(1));
+        let height = u32::from(rows) * u32::from(font.height.max(1));
         let path = match write_page(&m) {
             Ok(path) => path,
             Err(e) => {
@@ -4532,13 +4592,16 @@ impl App {
             }
         };
         self.status = "typesetting its pages…".to_string();
-        let (replies, uid) = (self.replies_to.clone(), m.uid);
+        self.typesetting = Some(place.clone());
+        let replies = self.replies_to.clone();
         self.pending += 1;
         std::thread::spawn(move || {
-            let pages = crate::pages::typeset(&path, width).map_err(worker::text);
+            let pages = crate::pages::typeset(&path, width)
+                .map(|pages| crate::pages::fit(pages, width, height))
+                .map_err(worker::text);
             let _ = replies.send(Reply {
                 account: usize::MAX,
-                answer: Answer::Paged { uid, pages },
+                answer: Answer::Paged { place, pages },
             });
         });
     }
@@ -4552,13 +4615,18 @@ impl App {
     /// whether it was its to do.
     #[cfg(feature = "pages")]
     fn pages_act(&mut self, act: Act) -> bool {
-        let uid = self.message().map(|m| m.uid);
-        let Some(paged) = self.paged.as_mut().filter(|p| Some(p.uid) == uid) else {
+        let place = self.read_place();
+        let Some(paged) = self
+            .paged
+            .as_mut()
+            .filter(|p| Some(&p.place) == place.as_ref())
+        else {
             return false;
         };
+        // n and p still go to the next message and the one before.
         match act {
-            Act::Down | Act::ScreenDown | Act::PageDown | Act::NextMessage => paged.step(1),
-            Act::Up | Act::ScreenUp | Act::PageUp | Act::PreviousMessage => paged.step(-1),
+            Act::Down | Act::ScreenDown | Act::PageDown => paged.step(1),
+            Act::Up | Act::ScreenUp | Act::PageUp => paged.step(-1),
             Act::Top => paged.at = 0,
             Act::End => paged.step(isize::MAX / 2),
             _ => return false,
@@ -5334,9 +5402,7 @@ impl App {
         for (a, ask) in asks {
             self.ask(a, ask);
         }
-        for (a, folder, uid) in inbox {
-            self.drop_listed(a, &folder, uid);
-        }
+        self.drop_all_listed(&inbox);
         self.map.region = None;
         self.map.suggesting = Some(label.clone());
         self.status = format!(
@@ -6187,27 +6253,35 @@ impl App {
 
     /// Ask whether to do what was chosen in the Inbox looked through.
     fn ask_apply(&mut self) {
-        let (filed, discarded, kept, left) = self.review_counts();
-        if filed + discarded + kept == 0 {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let mut plan = Plan::default();
+        let mut left = 0;
+        for i in self.review_rows() {
+            let key = s.dots[i].key.clone();
+            match self.chosen(i) {
+                Some(Choice::Move(label)) => plan.moves.entry(label).or_default().push(key),
+                Some(Choice::Discard) => plan.discard.push(key),
+                Some(Choice::Keep) => plan.kept.push(key),
+                None => left += 1,
+            }
+        }
+        if plan.moves.is_empty() && plan.discard.is_empty() && plan.kept.is_empty() {
             self.status =
                 "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
             return;
         }
-        let mut under: std::collections::BTreeMap<String, usize> = Default::default();
-        for i in self.review_rows() {
-            if let Some(Choice::Move(label)) = self.chosen(i) {
-                *under.entry(label).or_default() += 1;
-            }
-        }
-        let mut said: Vec<String> = under
-            .into_iter()
-            .map(|(label, n)| format!("file {n} under {label}"))
+        let mut said: Vec<String> = plan
+            .moves
+            .iter()
+            .map(|(label, keys)| format!("file {} under {label}", keys.len()))
             .collect();
-        if discarded > 0 {
-            said.push(format!("discard {discarded} to the Trash"));
+        if !plan.discard.is_empty() {
+            said.push(format!("discard {} to the Trash", plan.discard.len()));
         }
-        if kept > 0 {
-            said.push(format!("keep {kept} in the Inbox"));
+        if !plan.kept.is_empty() {
+            said.push(format!("keep {} in the Inbox", plan.kept.len()));
         }
         let mut said = said.join(", ");
         if let Some(first) = said.get(..1) {
@@ -6219,35 +6293,28 @@ impl App {
             1 => said.push_str(" The other one is left as it is."),
             _ => said.push_str(&format!(" The other {left} are left as they are.")),
         }
-        self.dialog = Dialog::Apply(said);
+        plan.said = said;
+        self.dialog = Dialog::Apply(Box::new(plan));
     }
 
-    /// Do what was chosen in the Inbox looked through: each to be moved
-    /// filed under its label, each to be discarded moved to the Trash, each
-    /// kept learnt as kept; those not looked at left as they are.
-    fn apply_review(&mut self) {
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        let mut moves: std::collections::BTreeMap<String, Vec<crate::index::Key>> =
-            std::collections::BTreeMap::new();
-        let mut discard = Vec::new();
-        let mut kept = Vec::new();
-        for i in self.review_rows() {
-            let key = s.dots[i].key.clone();
-            match self.chosen(i) {
-                Some(Choice::Move(label)) => moves.entry(label).or_default().push(key),
-                Some(Choice::Discard) => discard.push(key),
-                // Kept by choice: learnt as not thrown away, and after the
-                // rest when looked through again.
-                Some(Choice::Keep) => kept.push(key),
-                None => {}
-            }
-        }
+    /// Do what was chosen in the Inbox looked through, as `plan` said it:
+    /// each to be moved filed under its label, each to be discarded moved
+    /// to the Trash, each kept learnt as kept (and after the rest when
+    /// looked through again); those not looked at left as they are, and
+    /// what was chosen since still chosen.
+    fn apply_review(&mut self, plan: Plan) {
+        let Plan {
+            moves,
+            discard,
+            kept,
+            ..
+        } = plan;
         self.teach(&kept, false);
         if let Some(r) = &mut self.review {
             r.relabel = None;
-            r.chosen.clear();
+            for key in moves.values().flatten().chain(&discard).chain(&kept) {
+                r.chosen.remove(key);
+            }
         }
         self.review_kept.clear();
         let filed: usize = moves.values().map(Vec::len).sum();
