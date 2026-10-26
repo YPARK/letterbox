@@ -315,9 +315,10 @@ map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
 `←` and `→` go round them, and back to none chosen; a click picks one, and
-again leaves it. Nothing is done until `$`, or the Apply button, asks and
-is told `y`: then each chosen is filed, kept, or moved to the Trash, at
-once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
+again leaves it. Nothing is done until `$`, or the Apply button, asks in
+a pop-up, saying how many go under each label, to the Trash and stay, and
+is told `y` or Do it: then each chosen is filed, kept, or moved to the
+Trash, at once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
 list, and `u` and `s` mark the one picked.

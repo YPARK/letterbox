@@ -7062,7 +7062,7 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     assert!(rows.iter().all(|&i| app.chosen(i).is_none()));
     press(&mut app, &["$"]);
     assert!(app.status.contains("nothing chosen"), "{}", app.status);
-    assert!(!app.review.as_ref().unwrap().asking);
+    assert!(!app.dialog.is_open());
     let s = app.map.snapshot.clone().unwrap();
     // The one picked is picked on the map too.
     assert_eq!(app.map.picked(), Some(rows[0]));
@@ -7124,8 +7124,8 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     // chosen, and only those.
     app.focus = app::Focus::Reader;
     press(&mut app, &["$"]);
-    assert!(app.status.contains("(y or n)"), "{}", app.status);
-    assert!(app.status.contains("left as they are"), "{}", app.status);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("left as they are"), "{screen}");
     press(&mut app, &["n"]);
     assert!(app.review.as_ref().unwrap().chosen.len() >= 2);
     let untouched: Vec<String> = rows
@@ -7158,6 +7158,68 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     // i closes it.
     press(&mut app, &["i"]);
     assert!(app.review.is_none());
+}
+
+#[test]
+fn what_is_chosen_in_the_inbox_is_asked_in_a_pop_up_before_it_is_done() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    // The first discarded, the second kept.
+    press(&mut app, &["d", "<space>"]);
+    press(&mut app, &["$"]);
+    assert!(matches!(app.dialog, app::Dialog::Apply(_)));
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("Do what was chosen?"), "{screen}");
+    assert!(screen.contains("Discard 1 to the Trash"), "{screen}");
+    assert!(screen.contains("keep 1 in the Inbox"), "{screen}");
+    let left = INBOX - 2;
+    assert!(screen.contains(&format!("The other {left}")), "{screen}");
+    assert!(
+        screen.contains("Do it") && screen.contains("Not yet"),
+        "{screen}"
+    );
+    // n: nothing done, what was chosen still chosen.
+    press(&mut app, &["n"]);
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.chosen(rows[0]), Some(app::Choice::Discard));
+    assert!(app.status.contains("nothing done"), "{}", app.status);
+    // Not yet, clicked: the same.
+    press(&mut app, &["$"]);
+    click_at(&mut app, app::Target::Button(app::Button::NotYet));
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.chosen(rows[1]), Some(app::Choice::Keep));
+    // Do it, clicked: done.
+    press(&mut app, &["$"]);
+    click_at(&mut app, app::Target::Button(app::Button::Apply));
+    assert!(!app.dialog.is_open());
+    assert!(app.review.as_ref().unwrap().chosen.is_empty());
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+}
+
+#[test]
+fn the_pop_up_names_the_labels_filed_under() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    let going = rows
+        .iter()
+        .position(|&i| s.suggestion(i).is_some())
+        .unwrap();
+    let label = s.suggestion(rows[going]).unwrap().to_string();
+    for _ in 0..going {
+        press(&mut app, &["j"]);
+    }
+    press(&mut app, &["y", "$"]);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(
+        screen.contains(&format!("File 1 under {label}")),
+        "{screen}"
+    );
+    press(&mut app, &["y"]);
+    assert!(!app.dialog.is_open());
+    assert!(!dot_labels(&app, &s.dots[rows[going]].subject).1);
 }
 
 #[test]

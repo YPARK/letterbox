@@ -171,6 +171,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
+        Dialog::Apply(said) => Some(applying(f, &t, said)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
         Dialog::Label(typed) => Some(asking(
             f,
@@ -1030,6 +1031,24 @@ fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) {
             "Remove {name} from letterbox? Its mail stays on its server; the password \
              letterbox kept for it is forgotten."
         ),
+        |_| row,
+    );
+    let targets = places
+        .into_iter()
+        .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b)))
+        .collect();
+    (area, targets)
+}
+
+/// Whether to do what was chosen in the Inbox looked through, `said`.
+fn applying(f: &mut Frame, t: &Theme, said: &str) -> (Rect, Targets) {
+    let (row, places) = buttons(t, &[("Do it", Button::Apply), ("Not yet", Button::NotYet)]);
+    let (area, buttons_at) = question(
+        f,
+        t,
+        "Do what was chosen?",
+        "y does it · n not yet",
+        said,
         |_| row,
     );
     let targets = places

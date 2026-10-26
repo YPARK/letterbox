@@ -498,6 +498,9 @@ pub enum Button {
     Cancel,
     Remove,
     Keep,
+    /// Do what was chosen in the Inbox looked through.
+    Apply,
+    NotYet,
 }
 
 /// What the message read has to open: an attachment, by its place among
@@ -603,8 +606,6 @@ pub struct Review {
     pub top: usize,
     /// Whether the message picked is read in its place.
     pub reading: bool,
-    /// Whether it is asked whether to do it all.
-    pub asking: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
 }
@@ -672,6 +673,9 @@ pub enum Dialog {
     /// The papers of the message read, each where it stands with
     /// paperstack, to put there.
     Papers(Box<PapersView>),
+    /// Whether to do what was chosen in the Inbox looked through: what it
+    /// is, as said.
+    Apply(String),
 }
 
 /// The papers of the message read, as listed: where each stands with
@@ -2562,15 +2566,6 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(key);
         }
-        if let Some(r) = self.review.as_mut().filter(|r| r.asking) {
-            r.asking = false;
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
-                self.apply_review();
-            } else {
-                self.status = "nothing done · $ when it is as you want it".to_string();
-            }
-            return;
-        }
         if self.searching {
             match key.code {
                 KeyCode::Esc => {
@@ -2846,6 +2841,14 @@ impl App {
                     edit_line(typed, key);
                 }
             },
+            Dialog::Apply(_) => {
+                self.dialog = Dialog::Closed;
+                if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
+                    self.apply_review();
+                } else {
+                    self.status = "nothing done · $ when it is as you want it".to_string();
+                }
+            }
             &mut Dialog::Remove(a) => {
                 self.dialog = Dialog::Closed;
                 if key.code == KeyCode::Char('y') {
@@ -2933,6 +2936,13 @@ impl App {
                 self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             }
             (Dialog::Remove(_), _) => {}
+            (Dialog::Apply(_), Some(Target::Button(Button::Apply))) => {
+                self.dialog_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            }
+            (Dialog::Apply(_), Some(Target::Button(Button::NotYet))) => {
+                self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            }
+            (Dialog::Apply(_), _) => {}
         }
     }
 
@@ -6169,12 +6179,33 @@ impl App {
                 "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
             return;
         }
-        if let Some(r) = &mut self.review {
-            r.asking = true;
+        let mut under: std::collections::BTreeMap<String, usize> = Default::default();
+        for i in self.review_rows() {
+            if let Some(Choice::Move(label)) = self.chosen(i) {
+                *under.entry(label).or_default() += 1;
+            }
         }
-        self.status = format!(
-            "File {filed}, discard {discarded}, keep {kept}; the other {left} left as they are? (y or n)"
-        );
+        let mut said: Vec<String> = under
+            .into_iter()
+            .map(|(label, n)| format!("file {n} under {label}"))
+            .collect();
+        if discarded > 0 {
+            said.push(format!("discard {discarded} to the Trash"));
+        }
+        if kept > 0 {
+            said.push(format!("keep {kept} in the Inbox"));
+        }
+        let mut said = said.join(", ");
+        if let Some(first) = said.get(..1) {
+            said.replace_range(..1, &first.to_uppercase());
+        }
+        said.push('.');
+        match left {
+            0 => {}
+            1 => said.push_str(" The other one is left as it is."),
+            _ => said.push_str(&format!(" The other {left} are left as they are.")),
+        }
+        self.dialog = Dialog::Apply(said);
     }
 
     /// Do what was chosen in the Inbox looked through: each to be moved
