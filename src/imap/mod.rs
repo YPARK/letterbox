@@ -2,6 +2,11 @@
 //! with RustCrypto's algorithms and Mozilla's roots, as paperstack's HTTPS.
 //! One connection, opened when first needed and again if it is lost.
 
+mod parse;
+mod wire;
+pub(crate) use self::parse::*;
+pub use self::wire::*;
+
 use crate::config::{Account, Auth, Security};
 use crate::index::labels;
 use crate::index::record::Indexed;
@@ -15,108 +20,12 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
-const CONNECT: Duration = Duration::from_secs(20);
-const WAIT: Duration = Duration::from_secs(90);
-
 /// What is fetched of each message listed: its flags and size, the
 /// headers shown, and the start of its text to preview it by, with the
 /// headers needed to decode that.
 const LISTED: &str = "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE \
                       MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
                       BODY.PEEK[TEXT]<0.2048>)";
-
-pub enum Stream {
-    Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
-}
-
-impl Read for Stream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Stream::Plain(s) => s.read(buf),
-            Stream::Tls(s) => s.read(buf),
-        }
-    }
-}
-
-impl Write for Stream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            Stream::Plain(s) => s.write(buf),
-            Stream::Tls(s) => s.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Stream::Plain(s) => s.flush(),
-            Stream::Tls(s) => s.flush(),
-        }
-    }
-}
-
-/// `tcp`, over TLS to `host`.
-pub(crate) fn tls(host: &str, tcp: TcpStream) -> anyhow::Result<Stream> {
-    // Once a process; again, it is already the provider.
-    let _ = rustls_rustcrypto::provider().install_default();
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .with_context(|| format!("{host} is not a host's name"))?;
-    let conn = rustls::ClientConnection::new(Arc::new(config), name)?;
-    Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
-}
-
-pub(crate) fn dial(host: &str, port: u16) -> anyhow::Result<TcpStream> {
-    let mut last = None;
-    for addr in (host, port)
-        .to_socket_addrs()
-        .with_context(|| format!("cannot find {host}"))?
-    {
-        match TcpStream::connect_timeout(&addr, CONNECT) {
-            Ok(tcp) => {
-                tcp.set_read_timeout(Some(WAIT))?;
-                tcp.set_write_timeout(Some(WAIT))?;
-                return Ok(tcp);
-            }
-            Err(e) => last = Some(e),
-        }
-    }
-    match last {
-        Some(e) => Err(e).with_context(|| format!("cannot reach {host}:{port}")),
-        None => bail!("cannot find {host}"),
-    }
-}
-
-/// Ask a server spoken to in plain for TLS, as RFC 3501 has it: its
-/// greeting read, `STARTTLS` sent, and its answer awaited.
-fn starttls(tcp: &TcpStream) -> anyhow::Result<()> {
-    let mut reader = BufReader::new(tcp.try_clone()?);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    if !line.starts_with("* OK") {
-        bail!("the server greeted letterbox with {}", line.trim());
-    }
-    (&*tcp).write_all(b"s1 STARTTLS\r\n")?;
-    loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            bail!("the server hung up when asked for TLS");
-        }
-        if let Some(answer) = line.strip_prefix("s1 ") {
-            if answer.starts_with("OK") {
-                return Ok(());
-            }
-            bail!("the server would not start TLS: {}", answer.trim());
-        }
-    }
-}
-
-type Session = imap::Session<Stream>;
 
 pub struct Imap {
     account: Account,
@@ -215,117 +124,6 @@ impl Imap {
         }
         unreachable!("the second attempt returns")
     }
-}
-
-/// The folder selected, as SELECT said it was then.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Selected {
-    folder: String,
-    /// How many messages it held.
-    exists: u32,
-    validity: u32,
-    next: u32,
-    /// Whether it keeps keywords of any name: `\*` among its PERMANENTFLAGS.
-    keywords: bool,
-    modseq: Option<u64>,
-}
-
-/// Select `folder`, unless it is already, or `fresh` asks for its count now;
-/// how many messages it holds.
-fn select(
-    s: &mut Session,
-    selected: &mut Option<Selected>,
-    folder: &str,
-    fresh: bool,
-) -> imap::Result<u32> {
-    match selected {
-        Some(sel) if sel.folder == folder && !fresh => Ok(sel.exists),
-        _ => {
-            *selected = None;
-            let m = s.select(folder)?;
-            let keywords = m
-                .permanent_flags
-                .iter()
-                .any(|f| matches!(f, imap::types::Flag::MayCreate));
-            *selected = Some(Selected {
-                folder: folder.to_string(),
-                exists: m.exists,
-                validity: m.uid_validity.unwrap_or(0),
-                next: m.uid_next.unwrap_or(0),
-                keywords,
-                modseq: m.highest_mod_seq,
-            });
-            Ok(m.exists)
-        }
-    }
-}
-
-/// Whether a keyword is a mail program's own, not one of yours: `$Junk`
-/// and the like, and Junk, NonJunk and NotJunk, as Apple's Mail and
-/// Thunderbird keep them.
-pub(crate) fn programs(name: &str) -> bool {
-    name.starts_with('$')
-        || ["junk", "nonjunk", "notjunk"].contains(&name.to_ascii_lowercase().as_str())
-}
-
-/// The flags of a message, by their names as a server gives them: those
-/// letterbox shows, and its keywords, but for those that are a mail
-/// program's own.
-pub(crate) fn flags_named<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-) -> (mail::Flags, Vec<String>) {
-    let mut f = mail::Flags::default();
-    let mut keywords = Vec::new();
-    for name in names {
-        match name.to_ascii_lowercase().as_str() {
-            "\\seen" => f.seen = true,
-            "\\flagged" => f.flagged = true,
-            "\\answered" => f.answered = true,
-            k if k.starts_with('\\') || k.is_empty() || programs(k) => {}
-            _ => keywords.push(name.to_string()),
-        }
-    }
-    (f, keywords)
-}
-
-/// A fetched message's flags, and its keywords.
-fn flags(fetch: &imap::types::Fetch) -> (mail::Flags, Vec<String>) {
-    let names: Vec<String> = fetch.flags().iter().map(|f| f.to_string()).collect();
-    flags_named(names.iter().map(String::as_str))
-}
-
-fn summaries(fetches: &imap::types::Fetches) -> Vec<(u32, Summary)> {
-    fetches
-        .iter()
-        .filter_map(|f| {
-            let uid = f.uid?;
-            let mut raw = f.header().unwrap_or_default().to_vec();
-            raw.extend_from_slice(f.text().unwrap_or_default());
-            Some((
-                f.message,
-                mail::summary(uid, flags(f).0, f.size.unwrap_or(0), &raw),
-            ))
-        })
-        .collect()
-}
-
-fn special(attributes: &[NameAttribute]) -> Option<Role> {
-    attributes.iter().find_map(|a| match a {
-        NameAttribute::Drafts => Some(Role::Drafts),
-        NameAttribute::Sent => Some(Role::Sent),
-        NameAttribute::Archive => Some(Role::Archive),
-        NameAttribute::Junk => Some(Role::Junk),
-        NameAttribute::Trash => Some(Role::Trash),
-        _ => None,
-    })
-}
-
-/// `words` as an IMAP quoted string: control characters as spaces, as a
-/// quoted string cannot hold a line's end, which would end the command and
-/// start another.
-fn astring(words: &str) -> String {
-    let words = mail::controls(words);
-    format!("\"{}\"", words.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 impl Store for Imap {
@@ -814,111 +612,6 @@ impl Store for Imap {
     }
 }
 
-/// What a connection can do, as far as the map asks.
-#[derive(Clone, Copy, Debug, Default)]
-struct Caps {
-    /// Gmail's labels and IDs: `X-GM-EXT-1`.
-    gmail: bool,
-    /// Mod-sequences: CONDSTORE, asked for on the connection.
-    condstore: bool,
-}
-
-/// What the index fetches of each message: what is listed, and its
-/// `List-Id`; on Gmail, its IDs and labels too.
-pub(crate) fn indexed_items(gmail: bool) -> String {
-    let gmail = if gmail {
-        " X-GM-MSGID X-GM-THRID X-GM-LABELS"
-    } else {
-        ""
-    };
-    format!(
-        "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID \
-         IN-REPLY-TO REFERENCES LIST-ID LIST-UNSUBSCRIBE PRECEDENCE CONTENT-TYPE \
-         CONTENT-TRANSFER-ENCODING \
-         MIME-VERSION)] \
-         BODY.PEEK[TEXT]<0.2048>{gmail})"
-    )
-}
-
-/// `uids` as an IMAP set, runs of them as ranges: `1:4,7,9:12`.
-pub(crate) fn uid_set(uids: &[u32]) -> String {
-    let mut sorted = uids.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    let mut parts: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < sorted.len() {
-        let start = sorted[i];
-        let mut end = start;
-        while i + 1 < sorted.len() && sorted[i + 1] == end + 1 {
-            i += 1;
-            end = sorted[i];
-        }
-        parts.push(if start == end {
-            start.to_string()
-        } else {
-            format!("{start}:{end}")
-        });
-        i += 1;
-    }
-    parts.join(",")
-}
-
-/// Each `FETCH` in a server's answer, with what it holds: read here, not
-/// by the imap crate, which keeps Gmail's IDs to itself.
-fn fetched(buf: &[u8]) -> Vec<Vec<imap_proto::AttributeValue<'_>>> {
-    let mut out = Vec::new();
-    let mut rest = buf;
-    while !rest.is_empty() {
-        match imap_proto::parser::parse_response(rest) {
-            Ok((left, imap_proto::Response::Fetch(_, attributes))) => {
-                out.push(attributes);
-                rest = left;
-            }
-            Ok((left, _)) => rest = left,
-            Err(_) => break,
-        }
-    }
-    out
-}
-
-/// A message as the index takes it, from what was fetched of it.
-fn indexed(attributes: Vec<imap_proto::AttributeValue<'_>>) -> Option<Indexed> {
-    use imap_proto::{AttributeValue as A, MessageSection, SectionPath};
-    let mut i = Indexed::default();
-    let (mut uid, mut header, mut text) = (None, Vec::new(), Vec::new());
-    for a in attributes {
-        match a {
-            A::Uid(u) => uid = Some(u),
-            A::Flags(names) => {
-                let (flags, keywords) = flags_named(names.iter().map(|n| n.as_ref()));
-                i.flags = flags;
-                i.labels.extend(keywords);
-            }
-            A::Rfc822Size(n) => i.size = n,
-            A::GmailLabels(labels) => i.labels.extend(labels.iter().map(|l| l.to_string())),
-            A::GmailMsgId(id) => i.gmail = Some(id),
-            A::GmailThrId(id) => i.thread = Some(id),
-            A::ModSeq(m) => i.modseq = Some(m),
-            A::BodySection {
-                section: Some(SectionPath::Full(MessageSection::Header)),
-                data: Some(d),
-                ..
-            } => header = d.to_vec(),
-            A::BodySection {
-                section: Some(SectionPath::Full(MessageSection::Text)),
-                data: Some(d),
-                ..
-            } => text = d.to_vec(),
-            _ => {}
-        }
-    }
-    i.uid = uid?;
-    header.extend(text);
-    i.raw = header;
-    Some(i)
-}
-
 impl Imap {
     /// Change the flags or labels of the message `uid` of `folder`, as
     /// `change` says: `+FLAGS.SILENT (Grant)`, say.
@@ -969,58 +662,6 @@ impl Imap {
         self.create("Sent")?;
         Ok("Sent".to_string())
     }
-}
-
-fn gmail(host: &str) -> bool {
-    matches!(
-        host.to_ascii_lowercase().as_str(),
-        "imap.gmail.com" | "imap.googlemail.com"
-    )
-}
-
-/// Where a moved message was found again, or why it was not.
-enum Found {
-    Uid(u32),
-    /// It has no `Message-ID`, and was left unmoved.
-    NoId,
-    /// It was moved, and the search did not find it.
-    Lost,
-}
-
-/// The one UID `COPYUID` names as the copy, when the response has one.
-fn copied_uid(response: &[u8]) -> Option<u32> {
-    let text = String::from_utf8_lossy(response);
-    let rest = text.split("[COPYUID ").nth(1)?;
-    let inside = rest.split(']').next()?;
-    let mut parts = inside.split_whitespace();
-    parts.next()?;
-    parts.next()?;
-    let dest = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    if let Ok(uid) = dest.parse() {
-        return Some(uid);
-    }
-    let (start, end) = dest.split_once(':')?;
-    let start: u32 = start.parse().ok()?;
-    let end: u32 = end.parse().ok()?;
-    (start == end).then_some(start)
-}
-
-/// `UID MOVE` or `UID COPY`, and the UID the copy was given when the
-/// server says it. `uid_mv` checks the response and then drops it.
-fn transferred(s: &mut Session, command: &str, uid: u32, to: &str) -> imap::Result<Option<u32>> {
-    let (buf, _) = s.run(format!("UID {command} {uid} {}", astring(to)))?;
-    Ok(copied_uid(&buf))
-}
-
-/// The message's `Message-ID`, from its header only. The search for a
-/// moved message uses it when the server did not send `COPYUID`.
-fn message_id_of(s: &mut Session, uid: u32) -> imap::Result<Option<String>> {
-    let fetches = s.uid_fetch(uid.to_string(), "BODY.PEEK[HEADER]")?;
-    let raw = fetches.iter().find_map(|f| f.header()).unwrap_or_default();
-    Ok(mail::field(raw, "Message-ID"))
 }
 
 impl Drop for Imap {
