@@ -36,7 +36,7 @@ webpki-roots = "1.0.10"
 # A message's pages, typeset by ohp and drawn in the terminal where it can
 # show images: `--features pages`. Typst comes with it, so it is not built
 # unless asked for.
-ohp = { git = "https://github.com/YPARK/ohp", branch = "lib", optional = true, default-features = false, features = ["markdown"] }
+ohp = { version = "0.1.9", optional = true, default-features = false, features = ["markdown"] }
 ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true, default-features = false }
 

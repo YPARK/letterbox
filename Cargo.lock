@@ -3449,7 +3449,8 @@ dependencies = [
 [[package]]
 name = "ohp"
 version = "0.1.9"
-source = "git+https://github.com/YPARK/ohp?branch=lib#b0f1410d8754adebfdcce1af236d6949181c92f3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20da7251e2bc00c15eea3a5a94f65d58a35373053cc3f0e218e4c00873a051f2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
