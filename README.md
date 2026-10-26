@@ -35,6 +35,21 @@ cargo install letterbox --features pages
 That brings typst, so it builds for longer, and typst's evaluator
 assembles one small file with the system's C toolchain.
 
+To check the grammar of what you write, `M-$`, build it with a small
+model's reader:
+
+```sh
+cargo install letterbox --features grammar
+```
+
+The model is a T5 from Hugging Face, made to correct English grammar, read
+with candle, in pure Rust; it is fetched the first time it is asked for,
+once, into `~/.cache/letterbox/models`. The default is
+`visheratin/t5-efficient-tiny-grammar-correction`: 62 MB, MIT, a sentence
+in a few hundredths of a second. `--grammar` (or `LETTERBOX_GRAMMAR`)
+names another, as `visheratin/t5-efficient-mini-grammar-correction`, twice
+the size.
+
 Pure Rust, as paperstack and ohp: built without pages, nothing in C is
 compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
@@ -202,6 +217,14 @@ it. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
 never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
+
+`M-$`, as Emacs checks spelling, checks the grammar of what you wrote,
+built with `--features grammar`: not the head, what it quotes, the line
+saying who wrote it, nor the signature. Each change the model would make
+is said in turn, as Emacs's query-replace says it, marked in the text:
+`y` or `space` takes it, `n` leaves it, `!` takes all that are left, `q`
+stops, and any other key stops and is written. Nothing changes but what
+you take.
 
 If Emacs is new to you, this is all you need:
 

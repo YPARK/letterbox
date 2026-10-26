@@ -16,6 +16,9 @@ pub enum Done {
     Quit,
     /// `C-c C-a`: a file to be attached is asked for.
     Attach,
+    /// `M-$`, Emacs's key to check spelling: the grammar of what is written
+    /// checked.
+    Check,
 }
 
 pub struct Buffer {
@@ -141,6 +144,20 @@ impl Buffer {
     }
 
     /// `new` as lines above the row `at`, point staying on its text.
+    /// The characters `start` to `end` of the row `row` made `with`, and
+    /// the cursor past it.
+    pub fn replace(&mut self, row: usize, start: usize, end: usize, with: &str) {
+        let Some(line) = self.lines.get(row) else {
+            return;
+        };
+        let (a, b) = (byte_at(line, start), byte_at(line, end));
+        self.edited();
+        self.lines[row].replace_range(a..b, with);
+        self.row = row;
+        self.col = start + with.chars().count();
+        self.preferred = self.col;
+    }
+
     pub fn insert_lines(&mut self, at: usize, new: &[String]) {
         self.edited();
         let at = at.min(self.lines.len());
@@ -664,6 +681,7 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
         KeyCode::Char('w') if alt => buf.copy_region(),
         KeyCode::Char('s') if ctrl => buf.begin_search(false),
         KeyCode::Char('r') if ctrl => buf.begin_search(true),
+        KeyCode::Char('$') if alt => return Done::Check,
         KeyCode::Char('f') if alt => buf.word(1),
         KeyCode::Char('b') if alt => buf.word(-1),
         KeyCode::Char('d') if alt => {

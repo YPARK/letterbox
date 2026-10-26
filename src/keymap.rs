@@ -577,6 +577,13 @@ pub const KEYS: &[Binding] = &[
         help: "",
     },
     Binding {
+        keys: &[],
+        name: "M-$",
+        hint: "M-$",
+        foot: &[(Writing, "grammar")],
+        help: "in the message being written, check its grammar with a small model from Hugging Face: each change said in turn, y takes it, n leaves it, ! takes all, q stops; built with --features grammar",
+    },
+    Binding {
         keys: &[("?", Help), ("F1", Help)],
         name: "? F1",
         hint: "?",

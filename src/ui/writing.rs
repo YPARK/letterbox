@@ -169,7 +169,15 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         .skip(scroll)
         .take(rows)
         .map(|(i, line)| {
-            let region = compose.buffer.marked(i);
+            // The change a model would make, looked at, marked as the region
+            // is: what it would take out, or where it would put in.
+            let checked = app
+                .checking
+                .as_ref()
+                .and_then(|c| c.edit())
+                .filter(|e| e.row == i)
+                .map(|e| e.start..e.end.max(e.start + 1));
+            let region = checked.unwrap_or_else(|| compose.buffer.marked(i));
             let mut shown = compose_line(line, i == cursor_row, cursor_col, width, t, region);
             if i < head
                 && let Some(value) = line.strip_prefix("Attach:").map(str::trim)

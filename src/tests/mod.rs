@@ -20,6 +20,7 @@ mod accounts;
 mod agents;
 mod filing;
 mod filter;
+mod grammar;
 mod imap_server;
 mod keys_index;
 mod labels_model;

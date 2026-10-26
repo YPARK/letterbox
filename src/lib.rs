@@ -12,6 +12,7 @@ mod demo;
 mod edit;
 mod filter;
 mod forest;
+mod grammar;
 mod imap;
 mod index;
 mod keymap;
@@ -96,6 +97,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             };
             let mut app = app::App::with_index(stores, args.config.clone(), index);
             app.theme = theme::Theme::of(args.theme);
+            app.grammar_model = args.grammar.clone();
             if args.demo {
                 app.fix_accounts();
             } else {

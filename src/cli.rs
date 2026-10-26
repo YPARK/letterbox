@@ -19,6 +19,15 @@ pub(super) struct Args {
         global = true
     )]
     pub(super) theme: theme::Name,
+    /// The model the grammar of what is written is checked with, by its name
+    /// on Hugging Face; letterbox built with --features grammar
+    #[arg(
+        long,
+        env = "LETTERBOX_GRAMMAR",
+        default_value = grammar::DEFAULT,
+        global = true
+    )]
+    pub(super) grammar: String,
     #[command(subcommand)]
     pub(super) command: Option<Command>,
 }
