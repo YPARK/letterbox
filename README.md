@@ -180,7 +180,7 @@ letterbox search grant report --account Work
 | `v` | in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
-| `q` | quit |
+| `C-x` `C-c` | quit, as Emacs does; `C-c` alone too |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 ⌘G and Super+G reach letterbox only in a terminal that speaks kitty's

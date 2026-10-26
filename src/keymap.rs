@@ -52,7 +52,6 @@ pub enum Act {
     Rename,
     Remove,
     Help,
-    Quit,
     /// The map's view, to be changed: the keys of `VIEW`.
     View,
     /// In the map, read mail shown or hidden.
@@ -564,9 +563,11 @@ pub const KEYS: &[Binding] = &[
         help: "all the keys",
     },
     Binding {
-        keys: &[("q", Quit)],
-        name: "q",
-        hint: "q",
+        // A chord the app reads itself, as Emacs has it: q alone was too
+        // easily pressed.
+        keys: &[],
+        name: QUIT,
+        hint: QUIT,
         foot: &[
             (Side, "quit"),
             (List, "quit"),
@@ -576,6 +577,9 @@ pub const KEYS: &[Binding] = &[
         help: "quit",
     },
 ];
+
+/// The keys that quit, pressed in turn, as Emacs has them.
+pub const QUIT: &str = "C-x C-c";
 
 /// What `key` does, by the table.
 pub fn act(key: KeyEvent) -> Option<Act> {
@@ -602,7 +606,7 @@ pub fn foot(pane: Pane) -> Vec<Hint> {
     KEYS.iter()
         .filter_map(|b| {
             let &(_, what) = b.foot.iter().find(|(p, _)| *p == pane)?;
-            let kept = b.keys.iter().any(|&(_, a)| matches!(a, Help | Quit));
+            let kept = b.keys.iter().any(|&(_, a)| a == Help) || b.name == QUIT;
             Some(Hint {
                 key: b.hint,
                 what,

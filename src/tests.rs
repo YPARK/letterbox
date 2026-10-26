@@ -4030,11 +4030,29 @@ fn space_pages_the_message_and_leaves_the_sidebar_alone() {
 }
 
 #[test]
+fn c_x_c_c_quits_as_emacs_does_and_q_alone_does_not() {
+    let mut app = demo();
+    press(&mut app, &["q"]);
+    assert!(!app.quit, "q alone quits no more");
+    assert!(app.status.contains("C-x C-c quits"), "{}", app.status);
+    // C-x, then anything but C-c, goes on as before.
+    press(&mut app, &["<c-x>"]);
+    assert!(app.status.contains("C-x"), "{}", app.status);
+    press(&mut app, &["j"]);
+    assert!(!app.quit);
+    press(&mut app, &["<c-x>", "<c-c>"]);
+    assert!(app.quit);
+    let mut app = demo();
+    let screen = app::screen(&mut app, 140, 40);
+    assert!(screen.contains("C-x C-c quit"), "{screen}");
+}
+
+#[test]
 fn a_narrow_foot_leaves_hints_out_but_help_and_quit() {
     let mut app = demo();
     let screen = app::screen(&mut app, 40, 20);
     assert!(
-        screen.contains(" ? help") && screen.contains(" q quit"),
+        screen.contains(" ? help") && screen.contains(" C-x C-c quit"),
         "{screen}"
     );
     assert!(!screen.contains("new mail"), "{screen}");

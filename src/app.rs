@@ -964,7 +964,9 @@ pub struct App {
     due: Option<(Instant, Due)>,
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
-    quit: bool,
+    pub quit: bool,
+    /// Whether C-x was pressed, the key after it waited for: C-c quits.
+    c_x: bool,
     /// The index the map reads, shared with each account's sync.
     pub index: Arc<Mutex<Index>>,
     /// Why there is no map, if there is none: as its key could not be had.
@@ -1217,6 +1219,7 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            c_x: false,
             index: Arc::new(Mutex::new(index)),
             map_off,
             map_later,
@@ -2700,8 +2703,24 @@ impl App {
             }
             return self.compose_key(key);
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && key.code == KeyCode::Char('c') {
             self.quit = true;
+            return;
+        }
+        // C-x C-c quits, as Emacs does; C-x and anything else, nothing.
+        if std::mem::take(&mut self.c_x) {
+            self.status = format!("{} quits", keymap::QUIT);
+            return;
+        }
+        if ctrl
+            && key.code == KeyCode::Char('x')
+            && !self.dialog.is_open()
+            && self.menu.is_none()
+            && !self.searching
+        {
+            self.c_x = true;
+            self.status = "C-x-".to_string();
             return;
         }
         if self.dialog.is_open() {
@@ -2750,6 +2769,9 @@ impl App {
         }
         if let Some(act) = self.review_emacs(key).or_else(|| keymap::act(key)) {
             self.act(act);
+        } else if key.code == KeyCode::Char('q') && key.modifiers == KeyModifiers::NONE {
+            // q quit once: said how it is done now.
+            self.status = format!("{} quits", keymap::QUIT);
         }
     }
 
@@ -2794,7 +2816,6 @@ impl App {
         }
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
-            Act::Quit => self.quit = true,
             Act::Help => self.dialog = Dialog::Help(0),
             Act::Review => self.open_review(),
             Act::Apply => {
