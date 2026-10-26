@@ -513,27 +513,77 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                                 }
                             }
                         }
-                        let b = &mut boxes[selected.unwrap()];
-                        for l in b.letters.iter_mut().filter(|l| within(&uids, l.uid)) {
-                            let list = if how.contains("X-GM-LABELS") {
-                                &mut l.labels
-                            } else {
-                                &mut l.flags
+                        // On Gmail a label is the message's, wherever it is
+                        // seen: changed in one folder, it is changed in all.
+                        // The label of the folder selected is not taken
+                        // off, as Gmail does not, though it says OK.
+                        if mode == Mode::Gmail && how.contains("X-GM-LABELS") {
+                            let here = selected.unwrap();
+                            let own = match boxes[here].name.as_str() {
+                                "INBOX" => "\\Inbox".to_string(),
+                                name => name.to_string(),
                             };
-                            for name in listed(what) {
-                                // A server without `\*` keeps no keyword it
-                                // was not made with.
-                                let keyword = !name.starts_with('\\');
-                                if keyword && mode == Mode::Folders && !how.contains("X-GM") {
-                                    continue;
-                                }
-                                list.retain(|f| !f.eq_ignore_ascii_case(&name));
-                                if how.starts_with('+') {
-                                    list.push(name);
+                            let ids: Vec<u64> = boxes[here]
+                                .letters
+                                .iter()
+                                .filter(|l| within(&uids, l.uid))
+                                .map(|l| l.msgid)
+                                .collect();
+                            for b in boxes.iter_mut() {
+                                for l in b.letters.iter_mut().filter(|l| ids.contains(&l.msgid)) {
+                                    for name in listed(what) {
+                                        if how.starts_with('-') && name.eq_ignore_ascii_case(&own) {
+                                            continue;
+                                        }
+                                        l.labels.retain(|f| !f.eq_ignore_ascii_case(&name));
+                                        if how.starts_with('+') {
+                                            l.labels.push(name);
+                                        }
+                                    }
+                                    l.modseq = seq;
                                 }
                             }
-                            l.modseq = seq;
+                            // Out of the Inbox, without its label.
+                            let inbox = boxes.iter().position(|b| b.name == "INBOX");
+                            if let Some(i) = inbox {
+                                boxes[i]
+                                    .letters
+                                    .retain(|l| l.labels.iter().any(|x| x == "\\Inbox"));
+                            }
+                        } else {
+                            let b = &mut boxes[selected.unwrap()];
+                            for l in b.letters.iter_mut().filter(|l| within(&uids, l.uid)) {
+                                let list = if how.contains("X-GM-LABELS") {
+                                    &mut l.labels
+                                } else {
+                                    &mut l.flags
+                                };
+                                for name in listed(what) {
+                                    // A server without `\*` keeps no keyword it
+                                    // was not made with.
+                                    let keyword = !name.starts_with('\\');
+                                    if keyword && mode == Mode::Folders && !how.contains("X-GM") {
+                                        continue;
+                                    }
+                                    list.retain(|f| !f.eq_ignore_ascii_case(&name));
+                                    if how.starts_with('+') {
+                                        list.push(name);
+                                    }
+                                }
+                                l.modseq = seq;
+                            }
                         }
+                    }
+                    "SEARCH" if args.to_uppercase().starts_with("X-GM-MSGID ") => {
+                        let b = &boxes[selected.unwrap()];
+                        let id: u64 = args[11..].trim().parse().unwrap_or(0);
+                        let uids: Vec<String> = b
+                            .letters
+                            .iter()
+                            .filter(|l| l.msgid == id)
+                            .map(|l| l.uid.to_string())
+                            .collect();
+                        reply.extend(format!("* SEARCH {}\r\n", uids.join(" ")).bytes());
                     }
                     "SEARCH" => {
                         let b = &boxes[selected.unwrap()];
