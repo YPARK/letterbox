@@ -615,7 +615,7 @@ fn papers_dialog(f: &mut Frame, t: &Theme, p: &crate::app::PapersView) -> (Rect,
     let first = lines.len();
     for (i, paper) in p.papers.iter().enumerate() {
         let ground = if i == p.at { t.focus } else { t.page };
-        let (said, style) = match &p.standing[i] {
+        let (said, style) = match p.standing.get(i).and_then(Option::as_ref) {
             None => ("…".to_string(), Style::new().fg(t.dim)),
             Some(Standing::Have { starred: true, .. }) => (
                 "★ in your library".to_string(),
