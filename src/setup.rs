@@ -137,6 +137,18 @@ pub fn account(name: &str, email: &str, host: &str, port: u16, user: &str) -> Ac
     }
 }
 
+/// The server mail is sent through, as typed: its name, and the port after
+/// a colon if it is not 587, as `smtp.example.com:465`; nothing if nothing
+/// is typed, and `None` if the port is not a number.
+pub fn outgoing(typed: &str) -> Option<(Option<String>, Option<u16>)> {
+    let typed = typed.trim();
+    let (host, port) = match typed.rsplit_once(':') {
+        Some((host, port)) => (host.trim(), Some(port.trim().parse().ok()?)),
+        None => (typed, None),
+    };
+    Some(((!host.is_empty()).then(|| host.to_string()), port))
+}
+
 /// The name an account is given by default: its address's domain, as
 /// `example.edu`.
 pub fn name_for(email: &str) -> String {

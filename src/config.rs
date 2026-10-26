@@ -96,13 +96,13 @@ impl Account {
     }
 
     /// Where mail is sent: `smtp_host` and `smtp_port` when they are set,
-    /// else the provider's submission server, on port 587.
+    /// else the submission server guessed, on port 587.
     pub fn submission(&self) -> (String, u16) {
         let host = self
             .smtp_host
             .clone()
             .filter(|h| !h.is_empty())
-            .unwrap_or_else(|| guess_smtp(&self.email));
+            .unwrap_or_else(|| guess_outgoing(&self.email, &self.host, self.auth));
         (host, self.smtp_port.unwrap_or(587))
     }
 
@@ -231,7 +231,7 @@ const PROVIDERS: &[Provider] = &[
     Provider {
         domains: &["outlook.com", "hotmail.com", "live.com", "msn.com"],
         imap: crate::oauth::IMAP_HOST,
-        smtp: "smtp.office365.com",
+        smtp: crate::oauth::SMTP_HOST,
         note: MICROSOFT_NOTE,
         page: None,
         grouped: false,
@@ -286,6 +286,16 @@ pub fn guess_smtp(email: &str) -> String {
         None if domain.is_empty() => String::new(),
         None => format!("smtp.{domain}"),
     }
+}
+
+/// The submission server of an account: Microsoft's, if it signs in
+/// there; its provider's, if its IMAP server is a provider's, as a domain
+/// of its own on Google Workspace has it; else as its address says.
+pub fn guess_outgoing(email: &str, host: &str, auth: Auth) -> String {
+    if auth == Auth::Microsoft {
+        return crate::oauth::SMTP_HOST.to_string();
+    }
+    provider_at(host).map_or_else(|| guess_smtp(email), |p| p.smtp.to_string())
 }
 
 /// What to know to make an app password for the account at `host`, or
@@ -524,7 +534,7 @@ host = "imap.example.com"
 # letterbox keeps it: in the system's store, or with keep = "vault" in its
 # vault. Or it is printed by a command of yours:
 # password_command = "pass show mail/work"
-# The server mail is sent through, when it is not smtp. and the domain:
+# The server mail is sent through, when it is not the one guessed:
 # smtp_host = "smtp.example.com"
 # smtp_port = 587
 # The folder d moves mail to, when the server marks none as Trash:

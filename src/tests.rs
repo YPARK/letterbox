@@ -1475,6 +1475,7 @@ fn fill_form(app: &mut App, port: u16, password: &str) {
             "me",
             "<tab>",
             "<tab>",
+            "<tab>",
             password,
             "<enter>",
         ],
@@ -1565,6 +1566,7 @@ fn fill_gmail_form(app: &mut App, port: u16) {
             "me",
             "<tab>",
             "<tab>",
+            "<tab>",
         ],
     );
 }
@@ -1599,6 +1601,7 @@ fn a_mistake_in_the_form_is_said_without_the_providers_note() {
             "<tab>",
             "<c-u>",
             "x",
+            "<tab>",
             "<tab>",
             "<tab>",
             "<tab>",
@@ -1704,6 +1707,105 @@ fn providers_servers_are_guessed_from_the_address() {
         crate::config::guess_smtp("x@example.edu"),
         "smtp.example.edu"
     );
+}
+
+#[test]
+fn mail_is_sent_where_the_account_signs_in_not_where_its_address_says() {
+    let at = |email: &str, host: &str, auth| {
+        let mut a = crate::setup::account("A", email, host, 993, email);
+        a.auth = auth;
+        a.submission()
+    };
+    use crate::config::Auth::{Microsoft, Password};
+    assert_eq!(
+        at("me@uni.example", "outlook.office365.com", Microsoft),
+        ("smtp.office365.com".to_string(), 587),
+        "an organisation's Microsoft 365"
+    );
+    assert_eq!(
+        at("me@firm.example", "imap.gmail.com", Password),
+        ("smtp.gmail.com".to_string(), 587),
+        "Google Workspace"
+    );
+    assert_eq!(
+        at("me@example.edu", "mail.example.edu", Password),
+        ("smtp.example.edu".to_string(), 587)
+    );
+    assert_eq!(
+        crate::config::guess_outgoing("me@uni.example", "outlook.office365.com", Microsoft),
+        "smtp.office365.com"
+    );
+}
+
+#[test]
+fn the_form_says_where_mail_is_sent_and_takes_another_server() {
+    let (account, _) = server();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = empty_app(path.clone());
+    press(&mut app, &["A", "me@example.com"]);
+    let form = app.dialog.form().unwrap();
+    assert_eq!(form.fields[app::OUTGOING], "smtp.example.com");
+    assert!(app::screen(&mut app, 120, 30).contains("Outgoing"));
+    press(&mut app, &["<esc>", "A", "me@uni.example", "<tab>"]);
+    assert_eq!(
+        app.dialog.form().unwrap().fields[app::OUTGOING],
+        "smtp.office365.com",
+        "Microsoft's, as it signs in there"
+    );
+    press(&mut app, &["<esc>"]);
+
+    let port = account.port.unwrap().to_string();
+    press(
+        &mut app,
+        &[
+            "A",
+            "me@example.com",
+            "<tab>",
+            "<tab>",
+            "<c-u>",
+            "127.0.0.1",
+            "<tab>",
+            "<c-u>",
+            &port,
+            "<tab>",
+            "<c-u>",
+            "me",
+            "<tab>",
+        ],
+    );
+    assert_eq!(app.dialog.form().unwrap().at, app::OUTGOING);
+    press(
+        &mut app,
+        &[
+            "<c-u>",
+            "mail.example.com:465",
+            "<tab>",
+            "<tab>",
+            "secret",
+            "<enter>",
+        ],
+    );
+    assert!(
+        app.dialog.form().is_none(),
+        "{:?}",
+        app.dialog.form().and_then(|f| f.note.clone())
+    );
+    let added = &crate::config::load(&path).unwrap()[0];
+    assert_eq!(added.submission(), ("mail.example.com".to_string(), 465));
+
+    press(
+        &mut app,
+        &["A", "me@example.com", "<tab>", "<tab>", "<tab>"],
+    );
+    press(
+        &mut app,
+        &["<tab>", "<tab>", "<c-u>", "mail.example.com:port"],
+    );
+    press(&mut app, &["<tab>", "<tab>", "secret", "<enter>"]);
+    let form = app.dialog.form().unwrap();
+    assert_eq!(form.at, app::OUTGOING);
+    assert_eq!(form.failed, Some(app::Failure::Mistake));
 }
 
 #[test]
@@ -1925,14 +2027,14 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     press(
         &mut app,
         &[
-            &port, "<tab>", "<c-u>", "me", "<tab>", "<tab>", "secret", "<tab>", "<right>",
+            &port, "<tab>", "<c-u>", "me", "<tab>", "<tab>", "<tab>", "secret", "<tab>", "<right>",
         ],
     );
     let form = app.dialog.form().unwrap();
     assert_eq!(form.kept(), Some(Keeper::Vault));
     assert_eq!(
         form.shown(),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [0, 1, 2, 3, 4, app::OUTGOING, 5, 6, 7, 8, 9],
         "a new vault's passphrase, twice"
     );
     press(

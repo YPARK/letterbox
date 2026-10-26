@@ -29,6 +29,8 @@ pub const CLIENT_ID: &str = "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
 /// Any organisation's account, or a personal one.
 pub const TENANT: &str = "common";
 pub const IMAP_HOST: &str = "outlook.office365.com";
+/// Where mail signed in with Microsoft is sent, as its token allows.
+pub const SMTP_HOST: &str = "smtp.office365.com";
 const SCOPE: &str = "https://outlook.office.com/IMAP.AccessAsUser.All \
      https://outlook.office.com/SMTP.Send offline_access";
 /// How long signing in is waited for: in tests, not long.

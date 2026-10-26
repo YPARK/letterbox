@@ -104,8 +104,9 @@ pub enum Row {
 /// The fields of the form an account is added with, in their order; where
 /// its password is kept is picked rather than typed, and the vault's
 /// passphrase asked for only if it is kept there and the vault is locked,
-/// twice if there is no vault yet.
-pub const FIELDS: [&str; 10] = [
+/// twice if there is no vault yet. Where mail is sent is shown after the
+/// user, though it is kept last.
+pub const FIELDS: [&str; 11] = [
     "Email",
     "Name",
     "Server",
@@ -116,6 +117,7 @@ pub const FIELDS: [&str; 10] = [
     "Keep in",
     "Passphrase",
     "Again",
+    "Outgoing",
 ];
 pub(crate) const EMAIL: usize = 0;
 pub(crate) const NAME: usize = 1;
@@ -127,6 +129,7 @@ pub const PASSWORD: usize = 6;
 pub const KEEP: usize = 7;
 pub const PASSPHRASE: usize = 8;
 pub const AGAIN: usize = 9;
+pub const OUTGOING: usize = 10;
 
 /// Why the form could not add its account: a mistake in what is typed, or
 /// the server refused to sign in.
@@ -139,9 +142,9 @@ pub enum Failure {
 /// An account being added: what is typed, the field typed in, and which
 /// fields were typed rather than filled in from the address.
 pub struct Form {
-    pub fields: [String; 10],
+    pub fields: [String; 11],
     pub at: usize,
-    typed: [bool; 10],
+    typed: [bool; 11],
     /// How it signs in: with a password, or on Microsoft's page.
     pub auth: Auth,
     /// The address Microsoft was last asked about.
@@ -161,12 +164,12 @@ pub struct Form {
 
 impl Form {
     fn new(keepers: Vec<Keeper>) -> Self {
-        let mut fields: [String; 10] = Default::default();
+        let mut fields: [String; 11] = Default::default();
         fields[PORT] = "993".to_string();
         Form {
             fields,
             at: EMAIL,
-            typed: [false; 10],
+            typed: [false; 11],
             auth: Auth::Password,
             asked: None,
             keepers,
@@ -186,7 +189,8 @@ impl Form {
     /// The fields shown, by their place: the password only if it signs in
     /// with one; the vault's passphrase only if it is to be opened, or made.
     pub fn shown(&self) -> Vec<usize> {
-        let mut all: Vec<usize> = (EMAIL..=SIGN_IN).collect();
+        let mut all: Vec<usize> = (EMAIL..=USER).collect();
+        all.extend([OUTGOING, SIGN_IN]);
         if self.auth == Auth::Password {
             all.push(PASSWORD);
         }
@@ -236,8 +240,18 @@ impl Form {
         if !self.typed[SERVER] {
             self.fields[SERVER] = oauth::IMAP_HOST.to_string();
         }
+        self.outgoing();
         if self.failed.is_none() {
             self.note = Some(config::MICROSOFT_NOTE.to_string());
+        }
+    }
+
+    /// Where mail is sent, as the address, the server and the way it signs
+    /// in say, where it was not typed.
+    fn outgoing(&mut self) {
+        if !self.typed[OUTGOING] {
+            self.fields[OUTGOING] =
+                config::guess_outgoing(&self.fields[EMAIL], &self.fields[SERVER], self.auth);
         }
     }
 
@@ -1936,6 +1950,13 @@ impl App {
             form.note = Some("the port is a number, as 993".to_string());
             return;
         };
+        let Some((smtp_host, smtp_port)) = setup::outgoing(&f[OUTGOING]) else {
+            form.at = OUTGOING;
+            form.failed = Some(Failure::Mistake);
+            form.note =
+                Some("a port after the colon is a number, as smtp.example.com:465".to_string());
+            return;
+        };
         let Some(keeper) = form.kept() else {
             return;
         };
@@ -1962,6 +1983,8 @@ impl App {
         }
         let mut account = setup::account(&f[NAME], &f[EMAIL], &f[SERVER], port, &f[USER]);
         account.auth = form.auth;
+        account.smtp_host = smtp_host;
+        account.smtp_port = smtp_port;
         if !microsoft {
             account.password = Some(f[PASSWORD].clone());
         }
@@ -2173,6 +2196,9 @@ impl App {
         if form.at == EMAIL && !form.checking {
             form.failed = None;
             form.fill();
+        }
+        if !form.checking {
+            form.outgoing();
         }
         if before == EMAIL && form.at != EMAIL {
             self.ask_microsoft();
