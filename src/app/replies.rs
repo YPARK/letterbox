@@ -71,8 +71,19 @@ impl App {
         result: Result<(), &str>,
     ) {
         let result = result.map_err(|e| first_line(e).to_string());
+        let failed = result.as_ref().err().cloned();
         if !self.batch.answered(account, folder, uid, result) {
             return;
+        }
+        // Failed: said at once, not only once the rest has settled.
+        if let Some(why) = failed
+            && let Some(j) = self
+                .batch
+                .jobs
+                .iter()
+                .find(|j| j.account == account && j.folder == folder && j.uid == uid)
+        {
+            self.status = format!("✗ {} {}: {why}", j.subject, j.goal.said());
         }
         if self.syncs.get(account).and_then(Option::as_ref).is_none() {
             self.batch.trust(account);
@@ -353,9 +364,14 @@ impl App {
                 uid,
                 filed,
             } => {
-                let result = filed.as_ref().map(|_| ()).map_err(String::as_str);
-                self.took(a, &folder, uid, result);
-                self.filed(a, key, label, filed)
+                let result: Result<(), String> = filed.as_ref().map(|_| ()).map_err(Clone::clone);
+                self.filed(a, key, label, filed);
+                self.took(
+                    a,
+                    &folder,
+                    uid,
+                    result.as_ref().map(|_| ()).map_err(String::as_str),
+                );
             }
             Answer::LabelRenamed { old, result } => match result {
                 Ok(()) => self.map_pass(a),
@@ -366,26 +382,31 @@ impl App {
                 uid,
                 result,
             } => {
+                match &result {
+                    Ok(()) => {
+                        self.reload(a);
+                        self.map_pass(a);
+                    }
+                    Err(e) => {
+                        self.status = format!("cannot archive it: {}", first_line(e));
+                        self.reload(a);
+                    }
+                }
                 self.took(
                     a,
                     &folder,
                     uid,
                     result.as_ref().map(|_| ()).map_err(String::as_str),
                 );
-                match result {
-                    Ok(()) => {
-                        self.reload(a);
-                        self.map_pass(a);
-                    }
-                    Err(e) => {
-                        self.status = format!("cannot archive it: {}", first_line(&e));
-                        self.reload(a);
-                    }
-                }
             }
             Answer::Mapped(passed) => {
+                // A look that failed is one that cannot tell: as many such,
+                // and its server's word is taken.
                 if passed.is_ok() {
                     self.looked_again(a);
+                } else {
+                    self.batch.looked(a, |_| None);
+                    self.say_settled();
                 }
                 self.mapping = match passed {
                     Ok(_) => String::new(),
@@ -516,8 +537,10 @@ impl App {
                 new_uid,
                 email,
             } => {
-                let result = new_uid.as_ref().map(|_| ()).map_err(String::as_str);
-                self.took(a, &from, uid, result);
+                // Its following taken last, as what it says of a failure is
+                // the more: the message, and what was asked.
+                let result: Result<(), String> = new_uid.as_ref().map(|_| ()).map_err(Clone::clone);
+                let was = from.clone();
                 match new_uid {
                     Ok(new_uid) => {
                         if !email.is_empty() {
@@ -549,6 +572,12 @@ impl App {
                         self.reload(a);
                     }
                 }
+                self.took(
+                    a,
+                    &was,
+                    uid,
+                    result.as_ref().map(|_| ()).map_err(String::as_str),
+                );
             }
             Answer::Expunged {
                 folder,

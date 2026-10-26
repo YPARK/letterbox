@@ -27,7 +27,11 @@ pub(super) fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
     // While what was asked of the servers is waited for, how far it has
     // come, over anything else said.
     let (said, style) = if app.batch.busy() {
-        (app.batch.said(), Style::new().fg(t.flag).bold())
+        let said = match app.status.is_empty() {
+            true => app.batch.said(),
+            false => format!("{} · {}", app.batch.said(), app.status),
+        };
+        (said, Style::new().fg(t.flag).bold())
     } else {
         (app.status.clone(), Style::new().fg(t.text).bold())
     };
