@@ -2898,6 +2898,13 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let mut y = area.y + 3;
     let menu_for = app.menu.as_ref().and_then(|m| s.find(&m.key));
     let mut menu_at = None;
+    // What is selected with Shift and the arrows, as the one picked is when
+    // the pane is not looked at.
+    let selected: std::collections::HashSet<usize> = app
+        .review
+        .iter()
+        .flat_map(|r| r.selected.iter().filter_map(|k| s.find(k)))
+        .collect();
     for (row, &i) in rows.iter().enumerate().skip(top).take(room) {
         if Some(i) == menu_for {
             menu_at = Some(y + 1);
@@ -2906,7 +2913,7 @@ fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         let is_picked = Some(i) == picked;
         let ground = if is_picked && focused {
             t.focus
-        } else if is_picked {
+        } else if is_picked || selected.contains(&i) {
             t.row
         } else {
             t.page
@@ -3581,16 +3588,25 @@ fn lay(list: &[keymap::Hint], width: u16) -> Vec<Vec<(String, String)>> {
 }
 
 fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
-    let rows = keymap::help().chain([("click", "pick; the wheel scrolls")]);
-    // Each key's line wrapped under itself, past the keys' column.
+    let rows: Vec<(&str, &str)> = keymap::help()
+        .chain([("click", "pick; the wheel scrolls")])
+        .collect();
+    // Each key's line wrapped under itself, past the keys' column: as wide
+    // as the widest keys, and a space.
+    let key = rows
+        .iter()
+        .map(|(k, _)| k.width() + 1)
+        .max()
+        .unwrap_or(KEY)
+        .max(KEY);
     let width = f.area().width.min(80);
-    let room = (width as usize).saturating_sub(4 + KEY);
+    let room = (width as usize).saturating_sub(4 + key);
     let mut lines: Vec<Line> = Vec::new();
     for (k, what) in rows {
         for (i, l) in wrap(what, room).into_iter().enumerate() {
             let k = if i == 0 { k } else { "" };
             lines.push(Line::from(vec![
-                Span::styled(format!("{k:<KEY$}"), Style::new().fg(t.title).bold()),
+                Span::styled(format!("{k:<key$}"), Style::new().fg(t.title).bold()),
                 Span::raw(l),
             ]));
         }

@@ -143,7 +143,8 @@ letterbox search grant report --account Work
 | `j` / `k`, the arrows, `C-n` / `C-p` | move; in a message, scroll |
 | `h` / `l`, `C-b` / `C-f`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
-| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys |
+| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys. In the list, `space` marks the message picked and goes on, as `v` |
+| `S-down` / `S-up` | Shift and an arrow: in the list, mark from the message picked down, or up, to where it goes, back fewer; in the Inbox looked through, select so, and `m`, `d`, `space` or `y` choose for all of it; `esc` lets it go |
 | `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G`, `M-<` / `M->` | go to the top, or the end |

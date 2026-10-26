@@ -629,6 +629,10 @@ pub struct Review {
     pub reading: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
+    /// What is selected with Shift and the arrows, to choose for all of
+    /// it at once; and the row it was begun from.
+    pub selected: Vec<crate::index::Key>,
+    anchor: Option<usize>,
 }
 
 /// The labels a message may be moved to, dropped down under it, in the
@@ -969,6 +973,9 @@ pub struct App {
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
     pub quit: bool,
+    /// Marking in the list with Shift and the arrows: the row it was begun
+    /// from, and what was marked before.
+    marking: Option<(usize, Vec<crate::index::Key>)>,
     /// When the wheel last went in or out a level on the map, and which way.
     wheeled: Option<(Instant, isize)>,
     /// Whether C-x was pressed, the key after it waited for: C-c quits.
@@ -1225,6 +1232,7 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            marking: None,
             wheeled: None,
             c_x: false,
             index: Arc::new(Mutex::new(index)),
@@ -2790,6 +2798,14 @@ impl App {
 
     /// Do what a key in the table does, where the focus is.
     fn act(&mut self, act: Act) {
+        // Shift and the arrows mark on from where they began; any other key
+        // begins anew.
+        if !matches!(act, Act::MarkDown | Act::MarkUp) {
+            self.marking = None;
+            if let Some(r) = &mut self.review {
+                r.anchor = None;
+            }
+        }
         if self.review_act(act) {
             return;
         }
@@ -2881,6 +2897,15 @@ impl App {
             },
             Act::Down => self.step(1),
             Act::Up => self.step(-1),
+            // In the list, space marks the one picked and goes on, as v.
+            Act::ScreenDown if self.map.mode == Mode::List && self.focus == Focus::List => {
+                self.list_mark()
+            }
+            Act::MarkDown | Act::MarkUp
+                if self.map.mode == Mode::List && self.focus == Focus::List =>
+            {
+                self.list_extend(if act == Act::MarkDown { 1 } else { -1 })
+            }
             Act::PageDown if self.focus == Focus::Side => self.step(5),
             Act::PageUp if self.focus == Focus::Side => self.step(-5),
             Act::ScreenDown | Act::ScreenUp if self.focus == Focus::Side => {}
@@ -2908,6 +2933,9 @@ impl App {
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
             Act::Mark if self.map.mode == Mode::List => self.list_mark(),
             Act::Mark => self.mark_cluster(),
+            // Elsewhere, Shift and the arrows move, as the arrows do.
+            Act::MarkDown => self.step(1),
+            Act::MarkUp => self.step(-1),
             Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt
                 if self.map.mode == Mode::List =>
             {
@@ -5578,6 +5606,43 @@ impl App {
         self.step(1);
     }
 
+    /// Mark from the row Shift and the arrows began at to the one picked,
+    /// `by` past it, with what was marked before: back, fewer.
+    fn list_extend(&mut self, by: isize) {
+        let Some(at) = self.list.selected() else {
+            return;
+        };
+        let before = self.map.region.as_ref().map(|r| r.keys.clone());
+        let (from, mut keys) = self
+            .marking
+            .get_or_insert_with(|| (at, before.unwrap_or_default()))
+            .clone();
+        self.step(by);
+        let to = self.list.selected().unwrap_or(at);
+        for l in &self.shown[from.min(to)..=from.max(to).min(self.shown.len().saturating_sub(1))] {
+            if let Some(key) = self.listed_key(l)
+                && !keys.contains(&key)
+            {
+                keys.push(key);
+            }
+        }
+        let n = keys.len();
+        self.map.region = (n > 0).then_some(map::Region { keys });
+        self.status = format!(
+            "{n} marked: d trashes them, e archives them, m moves them, u and s mark them, esc lets them go"
+        );
+    }
+
+    /// What the index knows the message listed `l` by, once the map has
+    /// read it.
+    fn listed_key(&self, l: &Listed) -> Option<crate::index::Key> {
+        let ident = &self.accounts.get(l.account)?.ident;
+        self.index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .key_at(ident, &l.folder, l.summary.uid)
+    }
+
     /// What a key does to what is marked in the list; whether it was its
     /// to do.
     fn list_marked_act(&mut self, act: Act) -> bool {
@@ -6113,7 +6178,7 @@ impl App {
 
     /// The message picked in the Inbox looked through, by its place in the
     /// map, and in it.
-    fn review_at(&self) -> Option<(usize, usize)> {
+    pub fn review_at(&self) -> Option<(usize, usize)> {
         let s = self.map.snapshot.as_ref()?;
         let i = s.find(self.review.as_ref()?.picked.as_ref()?)?;
         let at = self.review_rows().iter().position(|&j| j == i)?;
@@ -6275,6 +6340,19 @@ impl App {
             return;
         }
         match item {
+            Some(Pick::Label(name, _) | Pick::New(name)) if !menu.with.is_empty() => {
+                let Some(s) = self.map.snapshot.clone() else {
+                    return;
+                };
+                let all: Vec<usize> = std::iter::once(i)
+                    .chain(menu.with.iter().filter_map(|k| s.find(k)))
+                    .collect();
+                for &j in &all {
+                    self.decide(j, Some(Choice::Move(name.clone())), false);
+                }
+                self.status = format!("{} to go to {name} · $ does it, with the rest", all.len());
+                self.after_selected(&all);
+            }
             Some(Pick::Label(name, _) | Pick::New(name)) => {
                 self.status = format!("to go to {name} · $ does it, with the rest");
                 self.choose(i, Choice::Move(name), true);
@@ -6343,7 +6421,12 @@ impl App {
             return true;
         }
         let picked = self.review_at().map(|(i, _)| i);
+        if self.review_all(act) {
+            return true;
+        }
         match (act, picked) {
+            (Act::MarkDown, _) => self.review_extend(1),
+            (Act::MarkUp, _) => self.review_extend(-1),
             (Act::Down, _) => self.review_step(1),
             (Act::Up, _) => self.review_step(-1),
             (Act::Top, _) => self.review_step(isize::MIN / 2),
@@ -6412,6 +6495,106 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Select from the row Shift and the arrows began at to the one picked,
+    /// `by` past it: back, fewer.
+    fn review_extend(&mut self, by: isize) {
+        let Some((_, at)) = self.review_at() else {
+            return;
+        };
+        if let Some(r) = &mut self.review {
+            r.anchor.get_or_insert(at);
+        }
+        self.review_step(by);
+        let rows = self.review_rows();
+        let (Some(s), Some((_, to))) = (self.map.snapshot.clone(), self.review_at()) else {
+            return;
+        };
+        let Some(r) = &mut self.review else {
+            return;
+        };
+        let from = r.anchor.unwrap_or(at);
+        r.selected = rows[from.min(to)..=from.max(to)]
+            .iter()
+            .map(|&i| s.dots[i].key.clone())
+            .collect();
+        self.status = format!(
+            "{} selected: m moves them, d discards them, space keeps them, y as suggested; esc lets them go",
+            r.selected.len()
+        );
+    }
+
+    /// What a key chooses for all that is selected in the Inbox looked
+    /// through, if any is: then the selection let go, and the one after
+    /// the last of it picked. Whether it was its to do.
+    fn review_all(&mut self, act: Act) -> bool {
+        let Some(s) = self.map.snapshot.clone() else {
+            return false;
+        };
+        let selected: Vec<usize> = self
+            .review
+            .as_ref()
+            .map(|r| r.selected.iter().filter_map(|k| s.find(k)).collect())
+            .unwrap_or_default();
+        if selected.is_empty() {
+            return false;
+        }
+        let choice = |i: usize| match act {
+            Act::Trash => Some(Choice::Discard),
+            Act::ScreenDown => Some(Choice::Keep),
+            Act::FileFirst => Some(Self::suggested(&s, i)),
+            _ => None,
+        };
+        match act {
+            Act::Trash | Act::ScreenDown | Act::FileFirst => {
+                for &i in &selected {
+                    self.decide(i, choice(i), false);
+                }
+            }
+            // The labels dropped down for the one picked, the rest with it.
+            Act::Move => {
+                let Some(i) = self.review_at().map(|(i, _)| i) else {
+                    return true;
+                };
+                self.open_menu(i);
+                if let Some(menu) = &mut self.menu {
+                    menu.with = selected
+                        .iter()
+                        .filter(|&&j| j != i)
+                        .map(|&j| s.dots[j].key.clone())
+                        .collect();
+                }
+                return true;
+            }
+            Act::Back => {
+                self.unselect();
+                self.status = "let go".to_string();
+                return true;
+            }
+            _ => return false,
+        }
+        self.after_selected(&selected);
+        true
+    }
+
+    /// The selection let go, and the message after the last of `selected`
+    /// picked.
+    fn after_selected(&mut self, selected: &[usize]) {
+        let rows = self.review_rows();
+        let last = rows.iter().rposition(|i| selected.contains(i));
+        self.unselect();
+        if let Some(next) = last.and_then(|at| rows.get(at + 1)) {
+            self.pick_review(Some(*next));
+        }
+    }
+
+    /// Let go of what is selected in the Inbox looked through.
+    fn unselect(&mut self) {
+        if let Some(r) = &mut self.review {
+            r.selected.clear();
+            r.anchor = None;
+        }
     }
 
     /// How many of the Inbox looked through are chosen to be filed,
@@ -7103,6 +7286,8 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
     if let Some(name) = spec.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
         && let Some(key) = keymap::key_named(&match name {
             "s-tab" => "S-tab".to_string(),
+            "s-up" => "S-up".to_string(),
+            "s-down" => "S-down".to_string(),
             _ => name
                 .replace("c-s-", "C-S-")
                 .replace("c-", "C-")
