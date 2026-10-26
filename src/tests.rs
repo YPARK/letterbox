@@ -7073,7 +7073,7 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     assert!(rows.iter().all(|&i| app.chosen(i).is_none()));
     press(&mut app, &["$"]);
     assert!(app.status.contains("nothing chosen"), "{}", app.status);
-    assert!(!app.review.as_ref().unwrap().asking);
+    assert!(!app.dialog.is_open());
     let s = app.map.snapshot.clone().unwrap();
     // The one picked is picked on the map too.
     assert_eq!(app.map.picked(), Some(rows[0]));
@@ -7135,8 +7135,8 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     // chosen, and only those.
     app.focus = app::Focus::Reader;
     press(&mut app, &["$"]);
-    assert!(app.status.contains("(y or n)"), "{}", app.status);
-    assert!(app.status.contains("left as they are"), "{}", app.status);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("left as they are"), "{screen}");
     press(&mut app, &["n"]);
     assert!(app.review.as_ref().unwrap().chosen.len() >= 2);
     let untouched: Vec<String> = rows
@@ -7169,6 +7169,92 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     // i closes it.
     press(&mut app, &["i"]);
     assert!(app.review.is_none());
+}
+
+#[test]
+fn what_is_chosen_in_the_inbox_is_asked_in_a_pop_up_before_it_is_done() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    // The first discarded, the second kept.
+    press(&mut app, &["d", "<space>"]);
+    press(&mut app, &["$"]);
+    assert!(matches!(app.dialog, app::Dialog::Apply(_)));
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("Do what was chosen?"), "{screen}");
+    assert!(screen.contains("Discard 1 to the Trash"), "{screen}");
+    assert!(screen.contains("keep 1 in the Inbox"), "{screen}");
+    let left = INBOX - 2;
+    assert!(screen.contains(&format!("The other {left}")), "{screen}");
+    assert!(
+        screen.contains("Do it") && screen.contains("Not yet"),
+        "{screen}"
+    );
+    // n: nothing done, what was chosen still chosen.
+    press(&mut app, &["n"]);
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.chosen(rows[0]), Some(app::Choice::Discard));
+    assert!(app.status.contains("nothing done"), "{}", app.status);
+    // Not yet, clicked: the same.
+    press(&mut app, &["$"]);
+    click_at(&mut app, app::Target::Button(app::Button::NotYet));
+    assert!(!app.dialog.is_open());
+    assert_eq!(app.chosen(rows[1]), Some(app::Choice::Keep));
+    // Do it, clicked: done.
+    press(&mut app, &["$"]);
+    click_at(&mut app, app::Target::Button(app::Button::Apply));
+    assert!(!app.dialog.is_open());
+    assert!(app.review.as_ref().unwrap().chosen.is_empty());
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+}
+
+#[test]
+fn only_what_the_pop_up_said_is_done() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    let s = app.map.snapshot.clone().unwrap();
+    press(&mut app, &["<space>", "$"]);
+    // Chosen after it was asked, as a pass of the map might change what is
+    // there: not done, as it was not said.
+    let later = s.dots[rows[1]].key.clone();
+    app.review
+        .as_mut()
+        .unwrap()
+        .chosen
+        .insert(later, app::Choice::Discard);
+    press(&mut app, &["y"]);
+    assert!(app.status.contains("1 kept"), "{}", app.status);
+    assert!(!app.status.contains("Trash"), "{}", app.status);
+    assert!(
+        dot_labels(&app, &s.dots[rows[1]].subject).1,
+        "still in the Inbox"
+    );
+}
+
+#[test]
+fn the_pop_up_names_the_labels_filed_under() {
+    let mut app = demo_map();
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    let going = rows
+        .iter()
+        .position(|&i| s.suggestion(i).is_some())
+        .unwrap();
+    let label = s.suggestion(rows[going]).unwrap().to_string();
+    for _ in 0..going {
+        press(&mut app, &["j"]);
+    }
+    press(&mut app, &["y", "$"]);
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(
+        screen.contains(&format!("File 1 under {label}")),
+        "{screen}"
+    );
+    press(&mut app, &["y"]);
+    assert!(!app.dialog.is_open());
+    assert!(!dot_labels(&app, &s.dots[rows[going]].subject).1);
 }
 
 #[test]
@@ -8827,6 +8913,33 @@ fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
 }
 
 #[test]
+fn in_the_list_a_message_filed_is_out_of_it_at_once_and_the_next_picked() {
+    let mut app = demo();
+    let at = app.list.selected().unwrap();
+    let subject = app.shown[at].summary.subject.clone();
+    let uid = app.shown[at].summary.uid;
+    let next = app.shown[at + 1].summary.subject.clone();
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.reading.is_some());
+    // Filed while read: out of the list, and the next picked, before the
+    // server has said so.
+    press(&mut app, &["m", "<enter>"]);
+    assert!(
+        !app.shown.iter().any(|l| l.summary.subject == subject),
+        "still listed"
+    );
+    assert_eq!(app.current().unwrap().summary.subject, next);
+    assert!(
+        app.reading.as_ref().is_none_or(|r| r.uid != uid),
+        "still read"
+    );
+    // And once it has, still out of it.
+    app.settle(Duration::from_secs(5));
+    assert!(!app.shown.iter().any(|l| l.summary.subject == subject));
+}
+
+#[test]
 fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
     let mut app = demo();
     let s = app.map.snapshot.clone().unwrap();
@@ -9195,6 +9308,199 @@ fn where_mail_would_go_is_voted_by_the_filed_mail_nearest_it() {
     assert!(voted[0].is_none());
     let voted = model.voted(|i, l| i == at(&course) && l == "projects");
     assert_ne!(voted[at(&course)].as_deref(), Some("Projects"));
+}
+
+// ---- a message's pages, in the terminal ----
+
+#[cfg(not(feature = "pages"))]
+#[test]
+fn v_built_without_pages_says_how_to_have_them() {
+    let mut app = demo();
+    press(&mut app, &["<enter>", "V"]);
+    assert!(app.status.contains("--features pages"), "{}", app.status);
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .expect("Noether's letter, in HTML");
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    // Not asked of the terminal as letterbox starts: only once V is.
+    assert!(app.picker.is_none(), "not asked yet");
+    // A terminal that draws no images: said, and O offered.
+    app.picker = Some(None);
+    press(&mut app, &["V"]);
+    assert!(app.paged.is_none());
+    assert!(app.status.contains("O"), "{}", app.status);
+    // One that does: typeset, and shown a page at a time.
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["V"]);
+    app.settle(Duration::from_secs(60));
+    let paged = app.paged.as_ref().expect("its pages");
+    assert!(!paged.is_empty());
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("page 1 of"), "{screen}");
+    // V again: its text.
+    press(&mut app, &["V"]);
+    assert!(app.paged.is_none());
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(screen.contains("differentiable symmetry"), "{screen}");
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_turn_as_far_as_there_are() {
+    let blank = || image::RgbaImage::new(10, 14);
+    let mut paged =
+        crate::pages::Paged::new((0, "INBOX".to_string(), 1), vec![blank(), blank(), blank()]);
+    paged.step(1);
+    paged.step(1);
+    paged.step(1);
+    assert_eq!(paged.at, 2);
+    paged.step(-5);
+    assert_eq!(paged.at, 0);
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    assert!(paged.drawn(&picker).is_some());
+    // Turned on and back, each page still there to draw.
+    paged.step(1);
+    assert!(paged.drawn(&picker).is_some());
+    paged.step(-1);
+    assert!(paged.drawn(&picker).is_some());
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_are_made_to_fit_the_pane_whole() {
+    let tall = image::RgbaImage::new(100, 200);
+    let wide = image::RgbaImage::new(100, 50);
+    let fitted = crate::pages::fit(vec![tall, wide], 100, 100);
+    assert_eq!(fitted[0].dimensions(), (50, 100));
+    assert_eq!(fitted[1].dimensions(), (100, 50));
+}
+
+/// The demo's Noether letter read, in HTML, shown as its pages.
+#[cfg(feature = "pages")]
+fn noether_paged() -> App {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .expect("Noether's letter, in HTML");
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["V"]);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_some(), "{}", app.status);
+    app
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn pages_are_of_the_message_read_and_let_go_once_another_is() {
+    let mut app = noether_paged();
+    // Of the same number in another folder: not its pages.
+    app.paged.as_mut().unwrap().place.1 = "Archive".to_string();
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(!screen.contains("page 1 of"), "{screen}");
+    assert!(app.paged.is_none(), "let go");
+    // Another message read: its pages let go, and V shows the new one's
+    // at once.
+    let mut app = noether_paged();
+    let uid = app.reading.as_ref().unwrap().uid;
+    press(&mut app, &["n"]);
+    app.settle(Duration::from_secs(5));
+    assert_ne!(
+        app.reading.as_ref().map(|r| r.uid),
+        Some(uid),
+        "n reads the next"
+    );
+    let _ = app::screen(&mut app, 120, 40);
+    assert!(app.paged.is_none());
+    press(&mut app, &["V"]);
+    assert!(!app.status.starts_with("its text"), "{}", app.status);
+    app.settle(Duration::from_secs(60));
+    assert_eq!(
+        app.paged.as_ref().map(|p| p.place.clone()),
+        app.read_place(),
+        "{}",
+        app.status
+    );
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn v_while_its_pages_are_typeset_lets_them_go() {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .unwrap();
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["V", "V"]);
+    assert!(app.status.contains("its text"), "{}", app.status);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_none(), "shown after all");
+    assert!(!app.status.contains("pages"), "{}", app.status);
+}
+
+#[cfg(feature = "pages")]
+#[test]
+fn only_a_terminal_that_says_it_draws_images_is_asked() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |k: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    };
+    for says in [
+        env(&[("KITTY_WINDOW_ID", "1")]),
+        env(&[("TERM", "xterm-kitty")]),
+        env(&[("TERM_PROGRAM", "WezTerm")]),
+        env(&[("TERM_PROGRAM", "ghostty")]),
+        env(&[("TERM_PROGRAM", "iTerm.app")]),
+    ] {
+        assert!(crate::pages::draws_images(says));
+    }
+    // Terminal, and one that says nothing: never asked, never kept waiting.
+    assert!(!crate::pages::draws_images(env(&[(
+        "TERM_PROGRAM",
+        "Apple_Terminal"
+    )])));
+    assert!(!crate::pages::draws_images(env(&[(
+        "TERM",
+        "xterm-256color"
+    )])));
+    assert!(!crate::pages::draws_images(env(&[])));
+    // Within tmux or screen, which pass no images on, though the terminal
+    // outside them would draw them.
+    assert!(!crate::pages::draws_images(env(&[
+        ("KITTY_WINDOW_ID", "1"),
+        ("TMUX", "/tmp/tmux-501/default,1,0")
+    ])));
+    assert!(!crate::pages::draws_images(env(&[
+        ("WEZTERM_EXECUTABLE", "/Applications/WezTerm.app"),
+        ("STY", "1.ttys001.host")
+    ])));
+    assert!(!crate::pages::draws_images(env(&[
+        ("GHOSTTY_RESOURCES_DIR", "/x"),
+        ("TERM", "screen-256color")
+    ])));
 }
 
 // ---- as reviewed ----

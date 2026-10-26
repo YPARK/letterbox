@@ -18,6 +18,8 @@ mod mcp;
 mod model;
 mod net;
 mod oauth;
+#[cfg(feature = "pages")]
+mod pages;
 mod papers;
 mod paperstack;
 mod pick;

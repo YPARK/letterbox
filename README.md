@@ -25,7 +25,18 @@ or `cargo install --path .` in a clone of this repository.
 This installs `letterbox`, and `lbx`, the same program by a shorter name:
 `lbx` for the TUI, `lbx list -n 5`, and so on.
 
-Pure Rust, as paperstack and ohp: nothing in C is compiled. TLS is rustls
+To read a message as its pages, typeset by ohp and drawn in the terminal
+where it draws images, `V`, build it with them:
+
+```sh
+cargo install letterbox --features pages
+```
+
+That brings typst, so it builds for longer, and typst's evaluator
+assembles one small file with the system's C toolchain.
+
+Pure Rust, as paperstack and ohp: built without pages, nothing in C is
+compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
 
 ## Accounts
@@ -145,6 +156,7 @@ letterbox search grant report --account Work
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` saves the one picked to `~/Downloads` (`$LETTERBOX_DOWNLOADS`), `S` all its files |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
+| `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text. In a letterbox built `--features pages` |
 | `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `C-n` | look for new mail now; it is looked for every two minutes |
@@ -304,9 +316,10 @@ map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
 `←` and `→` go round them, and back to none chosen; a click picks one, and
-again leaves it. Nothing is done until `$`, or the Apply button, asks and
-is told `y`: then each chosen is filed, kept, or moved to the Trash, at
-once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
+again leaves it. Nothing is done until `$`, or the Apply button, asks in
+a pop-up, saying how many go under each label, to the Trash and stay, and
+is told `y` or Do it: then each chosen is filed, kept, or moved to the
+Trash, at once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
 list, and `u` and `s` mark the one picked.
