@@ -177,6 +177,11 @@ enum AccountAction {
         /// The name signed in with, if not the address
         #[arg(long)]
         user: Option<String>,
+        /// The server mail is sent through, and its port after a colon if
+        /// not 587; Microsoft's for an account signed in there, the
+        /// provider's, or smtp. and the domain, else
+        #[arg(long)]
+        outgoing: Option<String>,
         /// A command that prints the password, instead of keeping it
         #[arg(long, conflicts_with = "keep")]
         password_command: Option<String>,
@@ -336,6 +341,7 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         host,
         port,
         user,
+        outgoing,
         password_command,
         keep,
         auth,
@@ -367,6 +373,21 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         Some(h) => h.clone(),
         None => ask("IMAP server", &guessed)?,
     };
+    let auth = if microsoft {
+        config::Auth::Microsoft
+    } else {
+        config::Auth::Password
+    };
+    let outgoing = match outgoing {
+        Some(o) => o.clone(),
+        None => ask(
+            "Outgoing server",
+            &config::guess_outgoing(&email, &host, auth),
+        )?,
+    };
+    let Some((smtp_host, smtp_port)) = setup::outgoing(&outgoing) else {
+        bail!("{outgoing}: a port after the colon is a number, as smtp.example.com:465");
+    };
     let mut account = setup::account(
         &name,
         &email,
@@ -374,6 +395,8 @@ fn add_account(args: &Args, action: &AccountAction) -> anyhow::Result<()> {
         *port,
         user.as_deref().unwrap_or(&email),
     );
+    account.smtp_host = smtp_host;
+    account.smtp_port = smtp_port;
     let keepers = secret::keepers();
     let keeper = match keep {
         Some(k) if keepers.contains(k) => *k,

@@ -53,7 +53,9 @@ letterbox accounts rename Work Office      # only letterbox's name for it
 
 The server is filled in from the address, as the large providers have it
 (Gmail, iCloud, Yahoo and Fastmail take an app password, which letterbox
-says), else `imap.` and the domain. An account is added only once it signs
+says), else `imap.` and the domain; and the server mail is sent through,
+`Outgoing` in the form, `--outgoing` from the shell, as [Sending](#sending)
+says, to be changed if it is not that one. An account is added only once it signs
 in, so a mistyped server or password is said at once. In the TUI, `D`
 removes the account picked in the sidebar, or the one listed, after asking.
 
@@ -109,7 +111,8 @@ An address Microsoft says is its own, Outlook.com's or an organisation's
 in Microsoft 365, as a university's, is signed into as Microsoft has mail
 apps do: on Microsoft's page, where the password and any second factor
 are given to Microsoft alone. letterbox asks Microsoft as the address is
-typed, and fills in `outlook.office365.com`; `Sign in` in the form, or
+typed, and fills in `outlook.office365.com`, and `smtp.office365.com` to
+send through, whatever the address's domain; `Sign in` in the form, or
 `--auth microsoft`, picks it by hand.
 
 Two ways are offered at once, whichever is done first: Microsoft's page,
@@ -427,9 +430,13 @@ lbx map key --export            # the map's key, as age and rage read one
 ## Sending
 
 A message is sent by SMTP submission, on port 587, over TLS once the server
-is asked for it. The server is the provider's, as the IMAP server is guessed
-from the address (Gmail `smtp.gmail.com`, Microsoft `smtp.office365.com`,
-and so on), else `smtp.` and the domain. An account may name another:
+is asked for it. The server is the one given as the account was added
+(`Outgoing`, as `smtp.example.com:465` with a port), else guessed: Microsoft's
+`smtp.office365.com` for an account signed in on Microsoft's page, whatever
+its address; the provider's, where the IMAP server is a provider's (Gmail's
+`smtp.gmail.com` for a domain on Google Workspace too); else the provider's
+of the address, or `smtp.` and the domain. An account may name another in
+the file:
 
 ```toml
 smtp_host = "smtp.example.com"
