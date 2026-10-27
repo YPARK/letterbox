@@ -35,6 +35,21 @@ cargo install letterbox --features pages
 That brings typst, so it builds for longer, and typst's evaluator
 assembles one small file with the system's C toolchain.
 
+To check the grammar of what you write, `C-c C-s`, build it with a small
+model's reader:
+
+```sh
+cargo install letterbox --features grammar
+```
+
+The model is a T5 from Hugging Face, made to correct English grammar, read
+with candle, in pure Rust; it is fetched the first time it is asked for,
+once, into `~/.cache/letterbox/models`. The default is
+`visheratin/t5-efficient-tiny-grammar-correction`: 62 MB, MIT, a sentence
+in a few hundredths of a second. `--grammar` (or `LETTERBOX_GRAMMAR`)
+names another, as `visheratin/t5-efficient-mini-grammar-correction`, twice
+the size.
+
 Pure Rust, as paperstack and ohp: built without pages, nothing in C is
 compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
@@ -143,7 +158,8 @@ letterbox search grant report --account Work
 | `j` / `k`, the arrows, `C-n` / `C-p` | move; in a message, scroll |
 | `h` / `l`, `C-b` / `C-f`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
-| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys |
+| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys. In the list, `space` marks the message picked and goes on, as `v` |
+| `S-down` / `S-up` | Shift and an arrow: in the list, mark from the message picked down, or up, to where it goes, back fewer; in the Inbox looked through, select so, and `m`, `d`, `space` or `y` choose for all of it; `esc` lets it go |
 | `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G`, `M-<` / `M->` | go to the top, or the end |
@@ -169,15 +185,15 @@ letterbox search grant report --account Work
 | `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
 | `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
-| `z` / `Z` / `0` | in the map, look nearer, about the message picked, or farther; `0` all of it. Farther than all of it, the clusters are a mosaic, each a block as big as how many it holds, gone into by `⏎`, its parts a mosaic too, and `esc` out a level. The wheel zooms too |
+| `z` / `Z` / `0` | in the map, into the block picked, its parts a mosaic too, or out a level; `0` all the clusters. The wheel too, up over a block and down |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
-| `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `c` colours by what it is about, by how near the message picked, or by its state; `r` shows or hides read mail; `s` the mail you sent, drawn ▹ beside the mail it answers; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
+| `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `r` shows or hides read mail; `s` the mail you sent; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first, on the map or in the list; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
-| `v` | in the map, mark the cluster of the message picked, or drag a box over some; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
+| `v` | in the map, mark the cluster of the message picked, its block boxed and said all marked; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more |
@@ -193,7 +209,8 @@ map in any terminal, and `M` or List goes back.
 `c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
-back, `M-f` `M-b` `M-d` by word. `C-SPC` sets the mark: `C-w` kills the
+back, `M-f` `M-b` `M-d` by word. `tab` goes from field to field, To, Cc,
+Subject, then what is written, and round, `S-tab` back. `C-SPC` sets the mark: `C-w` kills the
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
 again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
@@ -201,6 +218,16 @@ it. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
 never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
+
+`C-c C-s`, or the Grammar button on its top edge, checks the grammar of
+what you wrote, built with `--features grammar`; `M-$`, as Emacs checks
+spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
+saying who wrote it, nor the signature. Each change the model would make
+is said in turn, as Emacs's query-replace says it, marked in red in the
+text:
+`y` or `space` takes it, `n` leaves it, `!` takes all that are left, `q`
+stops, and any other key stops and is written. Nothing changes but what
+you take.
 
 If Emacs is new to you, this is all you need:
 
@@ -243,56 +270,48 @@ trash = "Deleted Items"
 
 `M` (or `M-g`, ⌘G or Super+G where the terminal passes it on, or a click
 on Map at the top right) shows a second way into your mail, in place of the sidebar and the list: every
-message of every account laid out as a map, near what it is about and
-who it is from, in clusters, coloured by how they are related. Filing a
+message of every account in its cluster, near what it is about and who it is
+from, as a mosaic, as paperstack shows its themes. Filing a
 message is moving it onto a cluster; letterbox learns from what you file
 and says what else would go there. `M` or `M-l` goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 
-Each message is a dot, as big as how many share its cell: `•` one, `●` a
-few, `⬤` five or more; unread mail is bright, read mail softer. One alone
-is `▹` if you sent it, `⚑` if flagged, `▪` if labelled by you. Mail you
-sent is placed by whom it went to, as mail come in is by whom it is
-from, so an answer lies beside the mail it answers. Mail come since the map was last
-looked at, and still in the Inbox, is drawn reversed. Its colour is what
-it is about, at one lightness for every hue; `,` `c` turns it to how near
-the message picked, by angle, or to its state. Each label has an anchor,
-`◆` in its hue with its name; a cluster that is no label yet has a
-tinted `◇` with its three commonest words, or its senders when the map
-is laid out by people. The line under the map says how faithful it is:
-of each message's ten nearest by what they say, how many are near it on
-the map too. Below 70%, `M-r` (or `,` `l`) lays it out again from where it is, and
-shows what moved, with trails, to keep or drop.
+Each cluster is a block, boxed, as big as how many messages it holds,
+beside the clusters it lies by, the blocks filling the map between them.
+Each message is a tile of its block, bright where it is unread, or found
+by a search, and the message picked in the accent's colour; where the
+mail is too much for a tile each, those unread at least are seen. On
+each block are its name, a label's `◆` with its name, a cluster that is
+no label yet `◇` with its three commonest words, or its senders when the
+map is laid out by people; how many it holds, and what is new in it.
+Mail you sent lies by whom it went to, as mail come in by whom it is
+from, so an answer lies beside the mail it answers. Under the map, the
+message picked is named: what the keys act on, its block's name lit. The
+line below says how faithful the map is: of each message's ten nearest
+by what they say, how many are near it on the map too. Below 70%, `M-r`
+(or `,` `l`) lays it out again from where it is, the blocks shown where
+they would be, to keep with `⏎` or drop with `esc`.
 
-The arrows and `h` `j` `k` `l` go to the nearest message that way, and
-the message read beside the map follows, with its labels, the cluster it
-is in, and the five messages nearest it. `[` and `]` narrow the map to
-one cluster after another. `z` looks nearer, about the message picked,
-`Z` farther, and `0` at all of it; the wheel zooms about where it is, and
-what is seen follows the message picked as it moves. `Z` from all of it
-shows its clusters as a mosaic, as paperstack shows its themes: each
-cluster a block, boxed, as big as how many messages it holds and beside
-the clusters it lies by on the map, the blocks filling the map between
-them; each message a half of a cell of its block, bright where it is
-unread, or found by a search; and on each block its name, how many it
-holds and what is new in it. The arrows go from block to block, and `⏎`
-or a click goes into one: a mosaic of its parts, by what they are
-about, each a block, its messages each a tile, the unread bright; the
-way in said over the map, as `Grant › budget aims`. A part of twelve
-messages or more is gone into alike, in finer parts of its own, and so
-on, four deep at most; one too small to split shows its threads, by
-their subject, and their messages, oldest first, as a tree drawn from
-the left, so that new mail comes at the end and nothing else moves.
-Only the branch picked and those it is under are open; the rest are
-closed, as big as how many they hold. In a mosaic the arrows go from
-block to block; in a tree, `j` and `k` go along a level, `l` or `⏎` into
-the branch picked and `h` out of it, and `⏎` on a message reads it.
-`esc` goes out a level, and out of the parts back to the clusters; `[`
-`]` go to the next cluster. `z` from the clusters
-goes back to all of the map, its dots. The map opens at its clusters;
-after that, letterbox opens as you left it: the list or the map, its
-clusters if they were shown, and the message read as wide as you made it. `/` searches it as you type: the messages
+The arrows and `h` `j` `k` `l` go from block to block, and the message
+read beside the map follows, with its labels, the cluster it is in, and
+the five messages nearest it. `⏎`, `z`, a click or the wheel up over a
+block goes into it: a mosaic of its parts, by what they are about, each
+a block, its messages each a tile; the way in said over the map, as
+`Grant › budget aims`. A part of twelve messages or more is gone into
+alike, in finer parts of its own, and so on, four deep at most; one too
+small to split shows its threads, by their subject, and their messages,
+oldest first, as a tree drawn from the left, so that new mail comes at
+the end and nothing else moves. Only the branch picked and those it is
+under are open; the rest are closed, as big as how many they hold. In a
+tree, `j` and `k` go along a level, `l` or `⏎` into the branch picked and
+`h` out of it, the wheel along it, and `⏎` on a message reads it. `esc`,
+`Z` or the wheel down goes out a level, and out of the parts back to the
+clusters, no farther; `0` goes to all of them at once, and `[` `]` to the
+next cluster. A message picked elsewhere, by a search or in the Inbox
+looked through, takes the map into its cluster. The map opens at its
+clusters; letterbox opens as you left it: the list or the map, and the
+message read as wide as you made it. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.
@@ -328,7 +347,14 @@ discards it, and `y` takes what is suggested; each goes on to the next.
 again leaves it. Nothing is done until `$`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the
-Trash, at once, and the rest are left in the Inbox as they are. `esc` goes back to the map and `tab` comes
+Trash, at once, and the rest are left in the Inbox as they are. Each is
+followed till its server says it is done and the next look at the mail
+finds it so: the foot says how far it has come, and once all have
+settled a pop-up says how it went, each that failed with why. What failed
+is left where it was, marked `✗`, chosen as it was, for `$` again; `$`
+waits while the last is still followed. What is deleted, archived or filed
+in the list or on the map is followed alike, one message alone said
+`✓ confirmed` at the foot. `esc` goes back to the map and `tab` comes
 back; `i` closes it; either way what was chosen is kept until it is done.
 While it is looked through, the map shows where it is heading, as
 chosen and, where not yet, as suggested: each label's cluster from grey,
@@ -398,11 +424,10 @@ clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages
 that fit nowhere; `M-l` lists the cluster the map is narrowed to.
 
-`m` moves the message picked onto a cluster: `enter` on a message of
-it, or a click on its anchor. It is given the cluster's label and taken
-out of the Inbox; `N` gives it a new label instead. `v` marks a cluster,
-or drag a box with the mouse; then `m`, `d`, `e`, `u` and `s` act on all
-of it. Once a message is filed, the message read says what would go to
+`m` moves the message picked onto a cluster: `enter` on its block, or
+a click on it. It is given the cluster's label and taken out of the
+Inbox; `N` gives it a new label instead. `v` marks a cluster; then `m`,
+`d`, `e`, `u` and `s` act on all of it. Once a message is filed, the message read says what would go to
 the label too: `y` files the first, `Y` all of them, and `-` says the
 first is not one, which the map learns from. `R` renames a label.
 
