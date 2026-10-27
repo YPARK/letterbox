@@ -163,6 +163,12 @@ pub enum Answer {
     Mapping(String),
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
+    /// What a model would change of `text`, the message being written as it
+    /// was sent to be checked, or why it could not say.
+    Checked {
+        text: String,
+        edits: Result<Vec<crate::grammar::Edit>, String>,
+    },
     /// The message `uid` of `folder` out of the Inbox, or why not.
     Archived {
         folder: String,

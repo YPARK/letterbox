@@ -189,6 +189,9 @@ impl App {
         if let Answer::Relaid { lens, keys, at } = reply.answer {
             return self.relaid(lens, &keys, &at);
         }
+        if let Answer::Checked { text, edits } = reply.answer {
+            return self.checked(&text, edits);
+        }
         #[cfg(feature = "pages")]
         if let Answer::Paged { place, pages } = reply.answer {
             // Let go, or of a message no longer read: not shown, nor said.
@@ -331,6 +334,7 @@ impl App {
             | Answer::Mapping(_)
             | Answer::Drawn(_)
             | Answer::Relaid { .. }
+            | Answer::Checked { .. }
             | Answer::Realm { .. } => {}
             #[cfg(feature = "pages")]
             Answer::Paged { .. } => {}

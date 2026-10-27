@@ -158,6 +158,10 @@ impl App {
     }
 
     pub(super) fn compose_key(&mut self, key: KeyEvent) {
+        // The model's changes gone through: what is a key of theirs, theirs.
+        if self.checking.is_some() && self.checking_key(key) {
+            return;
+        }
         let Some(compose) = &mut self.compose else {
             return;
         };
@@ -187,6 +191,7 @@ impl App {
                 self.status = "not sent".to_string();
             }
             Done::Send => self.send_compose(),
+            Done::Check => self.check_grammar(),
             Done::Attach => {
                 let dir = self
                     .attach_dir

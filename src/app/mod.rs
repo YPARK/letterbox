@@ -2,6 +2,7 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+mod checking;
 mod dialog;
 mod files;
 mod filing;
@@ -18,6 +19,7 @@ mod review;
 mod screen;
 mod trashing;
 mod writing;
+pub use self::checking::*;
 pub use self::dialog::*;
 pub use self::files::*;
 pub use self::form::*;
@@ -271,6 +273,13 @@ pub struct App {
     refreshed: Instant,
     clicked: Option<(Instant, usize)>,
     pub quit: bool,
+    /// The model the grammar is checked with, by its name on Hugging Face,
+    /// how it is read, and the thread it is kept on once it is; and the
+    /// changes it would make, gone through one by one.
+    pub grammar_model: String,
+    pub grammar_open: fn(&str) -> anyhow::Result<Box<dyn crate::grammar::Corrector>>,
+    checker: Option<std::sync::mpsc::Sender<String>>,
+    pub checking: Option<Checking>,
     /// What was asked of the servers, moving mail, followed till each is
     /// confirmed or failed; what was chosen in the Inbox looked through for
     /// what is being asked now; and whether what is asked now is done on its
@@ -537,6 +546,10 @@ impl App {
             refreshed: Instant::now(),
             clicked: None,
             quit: false,
+            grammar_model: crate::grammar::DEFAULT.to_string(),
+            grammar_open: crate::grammar::open,
+            checker: None,
+            checking: None,
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,

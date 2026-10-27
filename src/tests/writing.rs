@@ -884,3 +884,33 @@ fn the_search_and_the_region_keep_to_emacs_in_the_corners() {
     );
     assert_eq!(buffer.text(), "abc def\n");
 }
+
+#[test]
+fn tab_and_shift_tab_go_from_field_to_field_in_the_message_written() {
+    let mut app = demo();
+    press(&mut app, &["c", "ada@analytical.example"]);
+    let at = |app: &App| {
+        let b = &app.compose.as_ref().unwrap().buffer;
+        (b.row(), b.col())
+    };
+    // To, Cc, Subject, then what is written, and round to To again; each
+    // field at the end of what it says.
+    press(&mut app, &["<tab>"]);
+    assert_eq!(at(&app), (1, 4), "Cc");
+    press(&mut app, &["<tab>"]);
+    assert_eq!(at(&app), (2, 9), "Subject");
+    press(&mut app, &["Plans", "<tab>"]);
+    assert_eq!(at(&app).0, 4, "what is written");
+    press(&mut app, &["Hello", "<tab>"]);
+    assert_eq!(at(&app), (0, 26), "To again");
+    // Shift-Tab, back: what is written, then Subject.
+    press(&mut app, &["<s-tab>"]);
+    assert_eq!(at(&app), (4, 5), "what is written");
+    press(&mut app, &["<s-tab>"]);
+    assert_eq!(at(&app), (2, 14), "Subject");
+    let text = app.compose.as_ref().unwrap().buffer.text();
+    assert!(
+        text.starts_with("To: ada@analytical.example\nCc: \nSubject: Plans\n\nHello"),
+        "{text}"
+    );
+}

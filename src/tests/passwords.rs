@@ -308,7 +308,12 @@ fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
         .find(|l| l.contains("From "))
         .unwrap()
         .to_string();
-    for b in ["Send  C-c C-c", "Attach  C-c C-a", "Discard  C-c C-k"] {
+    for b in [
+        "Send  C-c C-c",
+        "Attach  C-c C-a",
+        "Grammar  C-c C-s",
+        "Discard  C-c C-k",
+    ] {
         assert!(top.contains(b), "{top}");
     }
     let discard = (

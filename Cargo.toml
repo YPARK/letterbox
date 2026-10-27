@@ -27,6 +27,10 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 rustls-rustcrypto = "=0.0.2-alpha"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"], optional = true }
 sha2 = "0.10"
 toml = "1.1.8"
 toml_edit = "0.25.17"
@@ -43,6 +47,8 @@ image = { version = "0.25", optional = true, default-features = false }
 [features]
 default = []
 pages = ["dep:ohp", "dep:ratatui-image", "dep:image"]
+# The grammar of what is written checked by a small model from Hugging Face.
+grammar = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
