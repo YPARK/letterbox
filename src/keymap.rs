@@ -81,6 +81,10 @@ pub enum Act {
     NewOnly,
     /// The cluster of the message picked marked, or let go.
     Mark,
+    /// From the message picked, down or up, and all between marked, or
+    /// selected in the Inbox looked through.
+    MarkDown,
+    MarkUp,
     /// The message picked, or what is marked, moved onto a cluster; and, as
     /// it is, onto a new label.
     Move,
@@ -209,8 +213,8 @@ pub const KEYS: &[Binding] = &[
         ],
         name: "space b C-v M-v",
         hint: "␣",
-        foot: &[(Reader, "page"), (Reviewing, "keep")],
-        help: "a page down, or up, in the message; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
+        foot: &[(Reader, "page"), (List, "select"), (Reviewing, "keep")],
+        help: "a page down, or up, in the message; in the list, space marks the message picked and goes on, as v; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
         keys: &[("n", NextMessage), ("p", PreviousMessage)],
@@ -477,7 +481,14 @@ pub const KEYS: &[Binding] = &[
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go; m, d, e, u and s then act on all of it, and esc lets it go",
+        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go, as space does; m, d, e, u and s then act on all of it, and esc lets it go",
+    },
+    Binding {
+        keys: &[("S-down", MarkDown), ("S-up", MarkUp)],
+        name: "S-down S-up",
+        hint: "S-↓/S-↑",
+        foot: &[(List, "select"), (Reviewing, "select")],
+        help: "in the list, mark from the message picked down, or up, to where it goes, and back fewer; in the Inbox looked through, select so: m, d, space or y then choose for all of them, and esc lets them go",
     },
     // The message being written: edit's keys.
     Binding {
@@ -564,6 +575,27 @@ pub const KEYS: &[Binding] = &[
         hint: "C-k",
         foot: &[(Writing, "kill")],
         help: "",
+    },
+    Binding {
+        keys: &[],
+        name: "C-c C-s",
+        hint: "C-c C-s",
+        foot: &[(Writing, "grammar")],
+        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change said in turn, y takes it, n leaves it, ! takes all, q stops; built with --features grammar",
+    },
+    Binding {
+        keys: &[],
+        name: "tab S-tab",
+        hint: "",
+        foot: &[],
+        help: "in the message being written, from field to field, To, Cc, Subject, then what is written, and round; S-tab back",
+    },
+    Binding {
+        keys: &[],
+        name: "M-$",
+        hint: "",
+        foot: &[],
+        help: "in the message being written, as C-c C-s: Emacs's key to check spelling",
     },
     Binding {
         keys: &[("?", Help), ("F1", Help)],
@@ -681,6 +713,10 @@ pub fn chord(key: KeyEvent) -> Chord {
             };
             (KeyCode::Char(c.to_ascii_lowercase()), held | shift)
         }
+        // Shift and an arrow up or down marks as it goes: a key of its own.
+        code @ (KeyCode::Up | KeyCode::Down) if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            (code, KeyModifiers::SHIFT)
+        }
         code => (code, KeyModifiers::NONE),
     }
 }
@@ -698,6 +734,8 @@ pub fn key_named(name: &str) -> Option<KeyEvent> {
         "esc" => Some(KeyCode::Esc),
         "tab" => Some(KeyCode::Tab),
         "S-tab" => Some(KeyCode::BackTab),
+        "S-up" | "S-↑" => return Some(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)),
+        "S-down" | "S-↓" => return Some(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT)),
         "up" | "↑" => Some(KeyCode::Up),
         "down" | "↓" => Some(KeyCode::Down),
         "left" | "←" => Some(KeyCode::Left),

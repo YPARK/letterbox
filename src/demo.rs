@@ -43,9 +43,25 @@ struct Mail {
     next: u32,
     /// The mod-sequence of the last change.
     modseq: u64,
+    /// The subjects of the messages it will not move or label, as a server
+    /// that says no: for tests.
+    refused: Vec<String>,
 }
 
 impl Mail {
+    /// Whether the message `uid` of `folder` is one it says no to moving.
+    fn refuses(&mut self, folder: &str, uid: u32) -> anyhow::Result<()> {
+        if self.refused.is_empty() {
+            return Ok(());
+        }
+        let refused = self.refused.clone();
+        let letter = self.changing(folder, uid)?;
+        if refused.contains(&summary(letter).subject) {
+            anyhow::bail!("the server said no");
+        }
+        Ok(())
+    }
+
     fn letters(&mut self, folder: &str) -> anyhow::Result<&mut Vec<Letter>> {
         self.folders
             .get_mut(folder)
@@ -583,9 +599,17 @@ impl Demo {
                 next: uid + 1,
                 folders,
                 modseq: 1,
+                refused: Vec::new(),
             })),
             ident: "demo".to_string(),
         }
+    }
+
+    /// The message with `subject` not moved nor labelled, as a server
+    /// that says no: for tests.
+    #[cfg(test)]
+    pub fn refuse(&self, subject: &str) {
+        self.mail().refused.push(subject.to_string());
     }
 
     /// The demo known by `ident` in the index, as a second account of it
@@ -671,6 +695,7 @@ impl Store for Demo {
         if !mail.folders.contains_key(to) {
             anyhow::bail!("no folder {to}");
         }
+        mail.refuses(from, uid)?;
         let letter = {
             let letters = mail.letters(from)?;
             let at = letters
@@ -818,6 +843,7 @@ impl Store for Demo {
     fn label(&mut self, folder: &str, uid: u32, label: &str, on: bool) -> anyhow::Result<()> {
         let keyword = labels::keyword(label);
         let mut mail = self.mail();
+        mail.refuses(folder, uid)?;
         let letter = mail.changing(folder, uid)?;
         letter
             .keywords
