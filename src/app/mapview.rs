@@ -453,6 +453,51 @@ impl App {
         self.map.looked = None;
     }
 
+    /// The message read let go once it is out of what is shown, beside
+    /// the list or the map it was not read from: in the list, once it is
+    /// not listed; on the map, in a cluster gone into, once it is not in
+    /// the part or the threads drawn.
+    pub fn keep_reading_in_view(&mut self) {
+        let Some(r) = &self.reading else {
+            return;
+        };
+        let (account, folder, uid) = (r.account, r.folder.clone(), r.uid);
+        let kept = match self.map.mode {
+            Mode::List => !r.on_map && self.shown.iter().any(|l| l.is(account, &folder, uid)),
+            Mode::Map => {
+                r.on_map && (self.map.tree.is_none() || self.in_tree(account, &folder, uid))
+            }
+        };
+        if !kept {
+            self.reading = None;
+            if self.focus == Focus::Reader {
+                self.focus = Focus::List;
+            }
+        }
+    }
+
+    /// Whether the message `uid` of `folder` is in the part or the threads
+    /// drawn of the cluster gone into; else, it cannot be told, and it is.
+    fn in_tree(&mut self, account: usize, folder: &str, uid: u32) -> bool {
+        let now = jiff::Timestamp::now().as_second();
+        let Some((root, _, level)) = self.map.level(now) else {
+            return true;
+        };
+        let (crate::forest::Level::Mosaic(path) | crate::forest::Level::Tree(path)) = &level;
+        let Some(shown) = root.at(path) else {
+            return true;
+        };
+        let key = self.accounts.get(account).and_then(|a| {
+            self.index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .key_at(&a.ident, folder, uid)
+        });
+        let s = self.map.snapshot.as_ref();
+        key.and_then(|k| s?.find(&k))
+            .is_some_and(|i| shown.messages.contains(&i))
+    }
+
     /// The message picked on the map.
     pub(super) fn dot(&self) -> Option<map::Dot> {
         let s = self.map.snapshot.as_ref()?;
@@ -505,6 +550,7 @@ impl App {
             folder,
             uid,
             body,
+            on_map: true,
         });
         if !self.side_by_side {
             self.focus = Focus::Reader;

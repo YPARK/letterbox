@@ -144,6 +144,9 @@ pub struct Reading {
     pub folder: String,
     pub uid: u32,
     pub body: Body,
+    /// Read on the map, not from the list: shown beside the one it was
+    /// read from alone.
+    pub on_map: bool,
 }
 
 /// What the terminal is given over to, or the system asked to do, once
