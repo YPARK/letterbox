@@ -643,21 +643,26 @@ fn a_path_typed_to_save_in_is_saved_in_and_a_name_new_there_made() {
     std::fs::create_dir_all(dir.path().join("docs/archive")).unwrap();
     let docs = dir.path().join("docs");
 
-    // A path typed to its folder's `/` stays on saving there.
-    let mut p = Picker::folder(dir.path().to_path_buf());
-    key(&mut p, &format!("{}/", docs.display()));
-    assert_eq!(p.dir, docs);
-    assert_eq!(p.current(), Some(&Entry::Here));
-    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.clone()));
+    // A path typed to its folder's `/` stays on saving there: a path is
+    // typed from `/`, as no Windows one begins.
+    if cfg!(unix) {
+        let mut p = Picker::folder(dir.path().to_path_buf());
+        key(&mut p, &format!("{}/", docs.display()));
+        assert_eq!(p.dir, docs);
+        assert_eq!(p.current(), Some(&Entry::Here));
+        assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.clone()));
+    }
 
     // A name no folder there has is a new folder, made as it is saved in.
     let mut p = Picker::folder(docs.clone());
     key(&mut p, "newproj");
     assert_eq!(p.current(), Some(&Entry::Here));
     assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newproj")));
-    let mut p = Picker::folder(dir.path().to_path_buf());
-    key(&mut p, &format!("{}/newer", docs.display()));
-    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newer")));
+    if cfg!(unix) {
+        let mut p = Picker::folder(dir.path().to_path_buf());
+        key(&mut p, &format!("{}/newer", docs.display()));
+        assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newer")));
+    }
 }
 
 #[cfg(unix)]
