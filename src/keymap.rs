@@ -114,6 +114,8 @@ pub enum Pane {
     Picking,
     /// Picking files to attach to the message being written.
     Attaching,
+    /// Picking the folder to save the message's files in.
+    Saving,
     /// The map's view, being changed.
     Viewing,
     /// The map, in the middle pane.
@@ -139,7 +141,9 @@ pub struct Binding {
 }
 
 use Act::*;
-use Pane::{Attaching, List, Map, Picking, Reader, Review as Reviewing, Side, Viewing, Writing};
+use Pane::{
+    Attaching, List, Map, Picking, Reader, Review as Reviewing, Saving, Side, Viewing, Writing,
+};
 
 /// What the map's view menu changes, by the key that changes it there.
 pub const VIEW: &[(char, Act, &str)] = &[
@@ -163,6 +167,7 @@ pub const KEYS: &[Binding] = &[
             (Picking, "this folder"),
             (Map, "read"),
             (Attaching, "attach"),
+            (Saving, "save"),
             (Reviewing, "read"),
         ],
         help: "open the folder, or read the message",
@@ -307,7 +312,7 @@ pub const KEYS: &[Binding] = &[
         name: "o",
         hint: "o",
         foot: &[(Reader, "open")],
-        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked to Downloads, S all its files",
+        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked in a folder picked as files to attach are, begun where the last was saved, else in Downloads: ⏎ goes into a folder, and on . saves there; S saves all its files",
     },
     Binding {
         keys: &[("V", Pages)],
@@ -352,6 +357,7 @@ pub const KEYS: &[Binding] = &[
             (Reader, "back"),
             (Picking, "cancel"),
             (Attaching, "cancel"),
+            (Saving, "cancel"),
             (Viewing, "close"),
         ],
         help: "back to the list; clear the search; out of a cluster gone into, a level. C-g too, as Emacs has it",
@@ -531,14 +537,14 @@ pub const KEYS: &[Binding] = &[
         keys: &[],
         name: "←",
         hint: "←",
-        foot: &[(Attaching, "up")],
+        foot: &[(Attaching, "up"), (Saving, "up")],
         help: "",
     },
     Binding {
         keys: &[],
         name: "~",
         hint: "~",
-        foot: &[(Attaching, "home")],
+        foot: &[(Attaching, "home"), (Saving, "home")],
         help: "",
     },
     Binding {

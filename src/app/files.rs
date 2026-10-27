@@ -9,6 +9,14 @@ pub struct Files {
     pub note: Option<String>,
 }
 
+/// The folder to save the message's files in, being picked: all of them,
+/// or the one picked in the files listed, which are shown again after.
+pub struct SaveTo {
+    pub picker: crate::pick::Picker,
+    pub files: Files,
+    pub all: bool,
+}
+
 /// Whether ohp presents a file of this name: PDFs, and markdown and R
 /// Markdown, which it typesets.
 pub fn ohp_reads(name: &str) -> bool {
@@ -211,8 +219,6 @@ impl App {
         }
     }
 
-    /// Save the message's attachments to the downloads folder, each under
-    /// a name not yet taken there.
     /// List the attachments and links of the message read, to open.
     pub(super) fn list_files(&mut self) {
         let Some(m) = self.message().cloned() else {
@@ -244,10 +250,19 @@ impl App {
             (Some(Act::Down), _) => self.dialog.step(1),
             (Some(Act::Up), _) => self.dialog.step(-1),
             (Some(Act::Open), _) | (_, KeyCode::Char('o')) => self.open_item(),
-            (_, KeyCode::Char('s')) => self.save_item(),
+            (_, KeyCode::Char('s')) => {
+                if matches!(files.items.get(files.at), Some(Item::File { .. })) {
+                    self.pick_save_dir(false);
+                } else {
+                    files.note = Some("a link is opened, not saved: ⏎".to_string());
+                }
+            }
             (_, KeyCode::Char('S')) => {
-                self.dialog = Dialog::Closed;
-                self.save_attachments();
+                if !files.items.iter().any(|i| matches!(i, Item::File { .. })) {
+                    files.note = Some("no attachments".to_string());
+                } else {
+                    self.pick_save_dir(true);
+                }
             }
             (_, KeyCode::Char('y')) => {
                 if let Some(Item::Link(url)) = files.items.get(files.at) {
@@ -305,9 +320,62 @@ impl App {
         }
     }
 
-    /// Save the attachment picked to the downloads folder, under a name not
-    /// yet taken there.
-    pub(super) fn save_item(&mut self) {
+    /// Pick the folder to save in, the files listed put by till it is:
+    /// begun where the last was saved, else in the downloads folder.
+    fn pick_save_dir(&mut self, all: bool) {
+        let Dialog::Files(files) = std::mem::take(&mut self.dialog) else {
+            return;
+        };
+        let dir = self
+            .save_dir
+            .clone()
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(downloads);
+        self.dialog = Dialog::SaveTo(Box::new(SaveTo {
+            picker: crate::pick::Picker::folder(dir),
+            files,
+            all,
+        }));
+    }
+
+    /// A key while the folder to save in is picked.
+    pub(super) fn save_to_key(&mut self, key: KeyEvent) {
+        let Dialog::SaveTo(s) = &mut self.dialog else {
+            return;
+        };
+        let picked = s.picker.key(key);
+        self.saved_to(picked);
+    }
+
+    /// What came of picking the folder to save in: the files listed again,
+    /// and the one picked saved there; or all of them, and closed.
+    pub(super) fn saved_to(&mut self, picked: crate::pick::Picked) {
+        use crate::pick::Picked;
+        let dir = match picked {
+            Picked::Stay => return,
+            Picked::Cancel => None,
+            Picked::Take(mut dirs) => dirs.pop(),
+        };
+        let Dialog::SaveTo(s) = std::mem::take(&mut self.dialog) else {
+            return;
+        };
+        let SaveTo { files, all, .. } = *s;
+        let Some(dir) = dir else {
+            self.dialog = Dialog::Files(files);
+            return;
+        };
+        self.save_dir = Some(dir.clone());
+        if all {
+            self.save_attachments(&dir);
+        } else {
+            self.dialog = Dialog::Files(files);
+            self.save_item(&dir);
+        }
+    }
+
+    /// Save the attachment picked to `dir`, under a name not yet taken
+    /// there.
+    pub(super) fn save_item(&mut self, dir: &std::path::Path) {
         let m = self.message().cloned();
         let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
             return;
@@ -319,17 +387,18 @@ impl App {
         let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
             return;
         };
-        let dir = downloads();
-        let path = unused(&dir, &safe_name(&name));
+        let path = unused(dir, &safe_name(&name));
         files.note = Some(
-            match std::fs::create_dir_all(&dir).and_then(|_| write_new(&path, &bytes)) {
+            match std::fs::create_dir_all(dir).and_then(|_| write_new(&path, &bytes)) {
                 Ok(()) => format!("saved {}", tilde(&path)),
                 Err(e) => format!("cannot save {name}: {e}"),
             },
         );
     }
 
-    pub(super) fn save_attachments(&mut self) {
+    /// Save the message's attachments to `dir`, each under a name not yet
+    /// taken there.
+    pub(super) fn save_attachments(&mut self, dir: &std::path::Path) {
         let Some(m) = self.message().cloned() else {
             self.status = "nothing to save: ⏎ reads the message picked".to_string();
             return;
@@ -339,11 +408,10 @@ impl App {
             self.status = "no attachments".to_string();
             return;
         }
-        let dir = downloads();
         let mut saved = Vec::new();
         for (Attachment { name, .. }, bytes) in files {
-            let path = unused(&dir, &safe_name(&name));
-            match std::fs::create_dir_all(&dir).and_then(|_| write_new(&path, &bytes)) {
+            let path = unused(dir, &safe_name(&name));
+            match std::fs::create_dir_all(dir).and_then(|_| write_new(&path, &bytes)) {
                 Ok(()) => saved.push(
                     path.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -355,6 +423,6 @@ impl App {
                 }
             }
         }
-        self.status = format!("saved to {}: {}", tilde(&dir), saved.join(", "));
+        self.status = format!("saved to {}: {}", tilde(dir), saved.join(", "));
     }
 }

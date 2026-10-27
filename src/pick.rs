@@ -4,7 +4,8 @@
 //! that hold what is typed; typed from a `/`, it is a path, followed as
 //! soon as its folder is there, and into a folder its name alone begins.
 //! Space marks a file, `C-a` all those shown, and enter takes the marked,
-//! or the one picked.
+//! or the one picked. A folder to save in is picked so too, its folders
+//! alone shown, and `.` under `..` to save in the one it is in.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
@@ -14,14 +15,20 @@ use std::time::SystemTime;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entry {
     Up,
+    /// The folder shown itself, to save in.
+    Here,
     Dir(String),
-    File { name: String, size: u64 },
+    File {
+        name: String,
+        size: u64,
+    },
 }
 
 impl Entry {
     pub fn name(&self) -> &str {
         match self {
             Entry::Up => "..",
+            Entry::Here => ".",
             Entry::Dir(n) | Entry::File { name: n, .. } => n,
         }
     }
@@ -50,11 +57,22 @@ pub struct Picker {
     pub newest: Option<String>,
     /// Why the folder could not be read, if it could not.
     pub note: Option<String>,
+    /// Picking a folder, not files: its folders alone shown.
+    pub folders: bool,
 }
 
 impl Picker {
     /// The picker in `dir`, on its newest file.
     pub fn open(dir: PathBuf) -> Picker {
+        Picker::new(dir, false)
+    }
+
+    /// The picker of a folder in `dir`, on `dir` itself.
+    pub fn folder(dir: PathBuf) -> Picker {
+        Picker::new(dir, true)
+    }
+
+    fn new(dir: PathBuf, folders: bool) -> Picker {
         let mut p = Picker {
             dir,
             entries: Vec::new(),
@@ -63,6 +81,7 @@ impl Picker {
             marked: BTreeSet::new(),
             newest: None,
             note: None,
+            folders,
         };
         p.read(None);
         p
@@ -75,9 +94,19 @@ impl Picker {
         self.load();
         let want = select.map(str::to_string).or_else(|| self.newest.clone());
         let shown = self.shown();
-        self.row = want
-            .and_then(|w| shown.iter().position(|e| e.name() == w))
-            .unwrap_or(usize::from(shown.len() > 1));
+        let at = want.and_then(|w| shown.iter().position(|e| e.name() == w));
+        self.row = at.unwrap_or_else(|| self.first());
+    }
+
+    /// The entry picked when no other is: the first folder narrowed to
+    /// when picking a folder, else saving here; the first after `..`.
+    fn first(&self) -> usize {
+        let shown = self.shown();
+        let narrowed = !self.filter.is_empty() && !self.completed();
+        match shown.iter().position(|e| matches!(e, Entry::Dir(_))) {
+            Some(at) if self.folders && narrowed => at,
+            _ => usize::from(shown.len() > 1),
+        }
     }
 
     /// List the folder: its folders, then its files, each by name; the
@@ -97,7 +126,7 @@ impl Picker {
                     };
                     if meta.is_dir() {
                         dirs.push(name);
-                    } else {
+                    } else if !self.folders {
                         // As new as another: the first by name, whatever
                         // order the folder is read in.
                         if !name.starts_with('.')
@@ -118,7 +147,9 @@ impl Picker {
         dirs.sort_by(|a, b| by(a, b));
         files.sort_by(|a, b| by(&a.0, &b.0));
         self.newest = newest.map(|(_, n)| n);
+        let here = self.folders.then_some(Entry::Here);
         self.entries = std::iter::once(Entry::Up)
+            .chain(here)
             .chain(dirs.into_iter().map(Entry::Dir))
             .chain(
                 files
@@ -181,7 +212,8 @@ impl Picker {
         })
     }
 
-    /// The entries what is typed lets through, `..` always first; those
+    /// The entries what is typed lets through, `..` always first, and `.`
+    /// when picking a folder; those
     /// whose names begin with `.` only when what is typed does.
     pub fn shown(&self) -> Vec<&Entry> {
         let f = match self.typed_path() {
@@ -193,7 +225,7 @@ impl Picker {
         self.entries
             .iter()
             .filter(|e| {
-                matches!(e, Entry::Up)
+                matches!(e, Entry::Up | Entry::Here)
                     || ((hidden || !e.name().starts_with('.'))
                         && e.name().to_lowercase().contains(&f))
             })
@@ -255,13 +287,15 @@ impl Picker {
     }
 
     /// The entry `i` of those shown, clicked: a folder opened, a file
-    /// marked or let go.
-    pub fn click(&mut self, i: usize) {
+    /// marked or let go, or the folder shown taken.
+    pub fn click(&mut self, i: usize) -> Picked {
         self.row = i.min(self.shown().len().saturating_sub(1));
         match self.current() {
+            Some(Entry::Here) => return Picked::Take(vec![self.dir.clone()]),
             Some(Entry::File { .. }) => self.mark_here(),
             _ => self.open_here(),
         }
+        Picked::Stay
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Picked {
@@ -285,11 +319,12 @@ impl Picker {
                     self.up();
                 } else {
                     self.follow();
-                    self.row = usize::from(self.shown().len() > 1);
+                    self.row = self.first();
                 }
             }
             KeyCode::Enter => match self.current() {
                 Some(Entry::File { .. }) => return self.take(),
+                Some(Entry::Here) => return Picked::Take(vec![self.dir.clone()]),
                 _ => self.open_here(),
             },
             KeyCode::Char(' ') => {
@@ -317,17 +352,19 @@ impl Picker {
             // Typing narrows the list, the picked entry kept where it is
             // still shown.
             KeyCode::Char(c) if !ctrl && !alt => {
-                let on = self.current().map(|e| e.name().to_string());
+                let on = self
+                    .current()
+                    .filter(|e| matches!(e, Entry::Dir(_) | Entry::File { .. }))
+                    .map(|e| e.name().to_string());
                 self.filter.push(c);
                 self.follow();
                 let shown = self.shown();
                 let at = |name: &str| shown.iter().position(|e| e.name() == name);
-                self.row = on
+                let kept = on
                     .as_deref()
-                    .filter(|n| *n != "..")
                     .and_then(at)
-                    .or_else(|| self.newest.as_deref().and_then(at))
-                    .unwrap_or(usize::from(shown.len() > 1));
+                    .or_else(|| self.newest.as_deref().and_then(at));
+                self.row = kept.unwrap_or_else(|| self.first());
             }
             _ => {}
         }

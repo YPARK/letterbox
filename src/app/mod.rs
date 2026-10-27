@@ -339,6 +339,8 @@ pub struct App {
     map_corpus: Option<crate::model::Corpus>,
     /// The folder files were last attached from.
     pub attach_dir: Option<PathBuf>,
+    /// The folder the message's files were last saved in.
+    pub save_dir: Option<PathBuf>,
     /// How wide the message read is, as it was dragged; else as the
     /// screen's width has it.
     pub reader_width: Option<u16>,
@@ -592,6 +594,7 @@ impl App {
             map: Map::default(),
             map_corpus: None,
             attach_dir: None,
+            save_dir: None,
             reader_width: None,
             resizing: false,
             panes_right: 0,

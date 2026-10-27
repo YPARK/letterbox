@@ -172,6 +172,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Form(form) => Some(form_dialog(f, &t, form)),
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),
+        Dialog::SaveTo(s) => Some(attach_dialog(f, &t, &s.picker)),
         Dialog::View => Some(view_dialog(f, &t, &app.map)),
         Dialog::Debrief(d) => Some(debrief_dialog(f, &t, d)),
         Dialog::Papers(p) => Some(papers_dialog(f, &t, p)),

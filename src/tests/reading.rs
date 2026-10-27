@@ -347,8 +347,9 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         app.message().unwrap().subject,
         "Computable numbers: the paper, and the figures"
     );
-    // All of them, twice, from what o opens: S.
-    press(&mut app, &["o", "S", "o", "S"]);
+    // All of them, twice, from what o opens: S, into the folder picked,
+    // begun on the downloads folder.
+    press(&mut app, &["o", "S", "<enter>", "o", "S", "<enter>"]);
     assert!(dir.path().join("states.txt").is_file());
     assert!(
         dir.path().join("states (2).txt").is_file(),
@@ -369,8 +370,9 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         "the message, in the browser and in ohp, two attachments, no links"
     );
     assert_eq!(files.at, 2, "begun on the first file");
-    press(&mut app, &["j", "s"]);
+    press(&mut app, &["j", "s", "<enter>"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
+    assert!(app.dialog.files().is_some(), "back to its files");
 
     // ⏎ hands a PDF to ohp, and another file to the system; the mouse too.
     press(&mut app, &["<enter>"]);
@@ -562,4 +564,67 @@ fn long_words_break_after_a_slash_or_a_dot() {
     for l in &lines {
         assert!(unicode_width::UnicodeWidthStr::width(l.as_str()) <= 24);
     }
+}
+
+#[test]
+fn an_attachment_is_saved_into_the_folder_picked_and_the_next_begins_there() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("papers")).unwrap();
+    std::fs::create_dir(dir.path().join("photos")).unwrap();
+    std::fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+    let mut app = demo();
+    app.save_dir = Some(dir.path().to_path_buf());
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(&mut app, &["<enter>", "o", "j", "s"]);
+    // Its folders alone, to save in, begun on saving here.
+    let Some(p) = app.dialog.saving() else {
+        panic!("no folder to pick");
+    };
+    assert_eq!(p.dir, dir.path());
+    let names: Vec<&str> = p.shown().iter().map(|e| e.name()).collect();
+    assert_eq!(names, ["..", ".", "papers", "photos"]);
+    assert_eq!(p.current(), Some(&crate::pick::Entry::Here));
+    let screen = app::screen(&mut app, 120, 40);
+    assert!(
+        screen.contains("Save to") && screen.contains("save here"),
+        "{screen}"
+    );
+
+    // Esc, and back to its files, nothing saved.
+    press(&mut app, &["<esc>"]);
+    assert!(app.dialog.files().is_some());
+    assert!(!dir.path().join("computable-numbers.pdf").exists());
+
+    // Typing narrows to a folder, ⏎ goes in, and ⏎ again saves there.
+    press(&mut app, &["s", "pap", "<enter>", "<enter>"]);
+    let saved = dir.path().join("papers").join("computable-numbers.pdf");
+    assert!(saved.is_file(), "{:?}", app.dialog.files().map(|f| &f.note));
+    assert_eq!(
+        app.save_dir.as_deref(),
+        Some(dir.path().join("papers").as_path())
+    );
+
+    // The next begins where the last was saved; S saves all there.
+    press(&mut app, &["S"]);
+    assert_eq!(
+        app.dialog.saving().map(|p| p.dir.clone()),
+        Some(dir.path().join("papers"))
+    );
+    press(&mut app, &["<enter>"]);
+    assert!(dir.path().join("papers").join("states.txt").is_file());
+    assert!(!app.dialog.is_open(), "{}", app.status);
+
+    // Kept for next time, as how the mail is looked at is.
+    let look = dir.path().join("look");
+    app.look_file = Some(look.clone());
+    app.remember_look();
+    let mut again = demo();
+    again.look_file = Some(look);
+    again.recall_look();
+    assert_eq!(again.save_dir, Some(dir.path().join("papers")));
 }
