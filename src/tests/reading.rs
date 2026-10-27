@@ -370,7 +370,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         "the message, in the browser and in ohp, two attachments, no links"
     );
     assert_eq!(files.at, 2, "begun on the first file");
-    press(&mut app, &["j", "s", "<enter>"]);
+    press(&mut app, &["j", "s", "<enter>", "<enter>"]);
     assert!(dir.path().join("computable-numbers (3).pdf").is_file());
     assert!(app.dialog.files().is_some(), "back to its files");
 
@@ -601,7 +601,7 @@ fn an_attachment_is_saved_into_the_folder_picked_and_the_next_begins_there() {
     assert!(!dir.path().join("computable-numbers.pdf").exists());
 
     // Typing narrows to a folder, ⏎ goes in, and ⏎ again saves there.
-    press(&mut app, &["s", "pap", "<enter>", "<enter>"]);
+    press(&mut app, &["s", "pap", "<enter>", "<enter>", "<enter>"]);
     let saved = dir.path().join("papers").join("computable-numbers.pdf");
     assert!(saved.is_file(), "{:?}", app.dialog.files().map(|f| &f.note));
     assert_eq!(
@@ -683,7 +683,7 @@ fn a_folder_that_could_not_be_saved_in_is_not_begun_in_next() {
     app.list.select(Some(turing));
     press(
         &mut app,
-        &["<enter>", "o", "s", "shut", "<enter>", "<enter>"],
+        &["<enter>", "o", "s", "shut", "<enter>", "<enter>", "<enter>"],
     );
     let note = app.dialog.files().and_then(|f| f.note.clone());
     assert!(

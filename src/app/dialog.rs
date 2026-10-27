@@ -153,6 +153,15 @@ impl Dialog {
         }
     }
 
+    /// The name to save under, being typed, if it is.
+    #[cfg(test)]
+    pub fn naming(&self) -> Option<&Name> {
+        match self {
+            Dialog::SaveTo(s) => s.naming.as_ref().map(|(_, name)| name),
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     pub fn trash_mut(&mut self) -> Option<&mut TrashPick> {
         match self {
@@ -316,7 +325,11 @@ impl App {
             (Dialog::Trash(_), _) => self.cancel_trash(),
             (Dialog::Files(files), Some(Target::Item(i))) => {
                 files.at = i;
-                self.open_item();
+                if files.saving {
+                    self.pick_save_dir(false);
+                } else {
+                    self.open_item();
+                }
             }
             (Dialog::Files(_), _) => self.dialog = Dialog::Closed,
             (Dialog::Attach(picker), Some(Target::Item(i))) => {

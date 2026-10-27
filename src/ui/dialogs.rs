@@ -68,12 +68,12 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
                 ..
             } => {
                 let kind = mime.rsplit('/').next().unwrap_or(mime).to_uppercase();
-                let how = if ohp_reads(name) { "ohp" } else { "open" };
-                (
-                    "▤",
-                    name.clone(),
-                    format!("{kind} · {} · {how}", size(*bytes)),
-                )
+                let what = match (files.saving, ohp_reads(name)) {
+                    (true, _) => format!("{kind} · {}", size(*bytes)),
+                    (false, true) => format!("{kind} · {} · ohp", size(*bytes)),
+                    (false, false) => format!("{kind} · {} · open", size(*bytes)),
+                };
+                ("▤", name.clone(), what)
             }
             Item::Link(url) => {
                 let what = match crate::net::pdf_of(url) {
@@ -116,11 +116,15 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(
-            t,
-            "Open",
-            "⏎ open · s save · S save all · y copy address · esc close",
-        )),
+        Paragraph::new(lines).block(if files.saving {
+            dialog(t, "Save", "⏎ save · a save all · esc close")
+        } else {
+            dialog(
+                t,
+                "Open",
+                "⏎ open · s save · S save all · y copy address · esc close",
+            )
+        }),
         area,
     );
     let targets = (0..files.items.len())
@@ -535,6 +539,45 @@ pub(super) fn question(
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(dialog(t, title, foot)), area);
     (area, last_at)
+}
+
+/// The name to save a file under, in `dir`: the part picked lit, to be
+/// typed over, else the cursor where it is.
+pub(super) fn save_as(
+    f: &mut Frame,
+    t: &Theme,
+    dir: &std::path::Path,
+    name: &crate::app::Name,
+) -> (Rect, Targets) {
+    let field = Style::new().fg(t.text).bg(t.field);
+    let lit = Style::new().fg(t.on_accent).bg(t.accent);
+    let asked = format!("In {}/, saved as:", crate::compose::named(dir));
+    let (area, _) = question(
+        f,
+        t,
+        "Save as",
+        "⏎ save · ← → edit · esc back",
+        &asked,
+        |room| {
+            let chars: Vec<char> = name.text.chars().collect();
+            let (a, b) = name.range().unwrap_or((name.at, name.at));
+            let part = |r: std::ops::Range<usize>| chars[r].iter().collect::<String>();
+            let (before, picked, after) = (part(0..a), part(a..b), part(b..chars.len()));
+            let cursor = if picked.is_empty() { "▏" } else { "" };
+            let used = before.width() + picked.width() + after.width() + cursor.width();
+            // Its end shown, if it is longer than the field.
+            let skip = used.saturating_sub(room);
+            let before = before.chars().skip(skip).collect::<String>();
+            let pad = " ".repeat(room.saturating_sub(used));
+            Line::from(vec![
+                Span::styled(before, field),
+                Span::styled(cursor, field.fg(t.accent)),
+                Span::styled(picked, lit),
+                Span::styled(format!("{after}{pad}"), field),
+            ])
+        },
+    );
+    (area, Vec::new())
 }
 
 /// A question answered by a name typed: what is asked, and the field.

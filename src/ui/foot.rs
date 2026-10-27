@@ -93,6 +93,7 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
         _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
+        _ if matches!(&app.dialog, Dialog::SaveTo(s) if s.naming.is_some()) => Pane::Naming,
         _ if matches!(app.dialog, Dialog::SaveTo(_)) => Pane::Saving,
         _ if matches!(app.dialog, Dialog::View) => Pane::Viewing,
         _ if app.compose.is_some() => Pane::Writing,
