@@ -76,6 +76,137 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
         }
     }
     compose_pane(f, app, inner);
+    grammar_popup(f, app, area);
+}
+
+/// Over the message being written, the change a model would make, asked:
+/// the sentence it is in, what it is in red, what it would be, and a button
+/// for each answer, each pressed by its key; or, gone through to be sent,
+/// whether it is to go now.
+fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
+    let t = app.theme;
+    let (title, foot, lines, buttons) = if let Some(e) = app.checking.as_ref().and_then(|c| {
+        let e = c.edit()?;
+        Some((e.clone(), c.at + 1, c.edits.len()))
+    }) {
+        let (e, at, of) = e;
+        let line = app
+            .compose
+            .as_ref()
+            .and_then(|c| c.buffer.lines().get(e.row).cloned())
+            .unwrap_or_default();
+        let chars: Vec<char> = line.chars().collect();
+        let room = usize::from(area.width.min(76)).saturating_sub(6);
+        let said_w = e.said.chars().count().max(1);
+        let side = room.saturating_sub(said_w) / 2;
+        let from = e.start.saturating_sub(side).min(e.start);
+        let to = (e.end + side).min(chars.len());
+        // An ellipsis only where the line is cut.
+        let before = format!(
+            "{}{}",
+            if from > 0 { "…" } else { "" },
+            chars[from..e.start.min(chars.len())]
+                .iter()
+                .collect::<String>()
+        );
+        let after = format!(
+            "{}{}",
+            chars[e.end.min(chars.len())..to].iter().collect::<String>(),
+            if to < chars.len() { "…" } else { "" }
+        );
+        let red = Style::new()
+            .fg(t.title)
+            .bg(crate::theme::mix(t.error, t.page, 0.55))
+            .bold();
+        let marked = if e.said.is_empty() {
+            "▴".to_string()
+        } else {
+            e.said.clone()
+        };
+        let (said, with) = (e.said.trim(), e.with.trim());
+        let what = match (said.is_empty(), with.is_empty()) {
+            (true, _) => format!("put in “{with}”"),
+            (_, true) => format!("take out “{said}”"),
+            _ => format!("“{said}” → “{with}”"),
+        };
+        let lines = vec![
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled(before, Style::new().fg(t.text)),
+                Span::styled(marked, red),
+                Span::styled(after, Style::new().fg(t.text)),
+            ]),
+            Line::raw(""),
+            Line::styled(what, Style::new().fg(t.title).bold()),
+            Line::raw(""),
+        ];
+        let buttons = vec![
+            ("Yes", 'y', t.accent, t.on_accent),
+            ("Skip", 'n', t.focus, t.title),
+            ("Accept all", 'a', t.flag, t.on_accent),
+            ("Ignore all", 'i', t.error, t.on_accent),
+        ];
+        (format!("Grammar · {at} of {of}"), "y n a i", lines, buttons)
+    } else if app.sending_asked {
+        let lines = vec![
+            Line::raw(""),
+            Line::styled("Its grammar is gone through.", Style::new().fg(t.title)),
+            Line::raw(""),
+        ];
+        let buttons = vec![
+            ("Send", 'y', t.accent, t.on_accent),
+            ("Keep writing", 'n', t.focus, t.title),
+        ];
+        (
+            "Send it now?".to_string(),
+            "y sends · any other key goes on writing",
+            lines,
+            buttons,
+        )
+    } else {
+        return;
+    };
+    // The buttons, a line of their own, each its own colour and key.
+    let said: Vec<String> = buttons
+        .iter()
+        .map(|(what, key, ..)| format!(" {what}  {key} "))
+        .collect();
+    let row_w: u16 = said.iter().map(|s| s.width() as u16 + 1).sum();
+    let width = area.width.min(76).max(row_w + 4).min(f.area().width);
+    let height = lines.len() as u16 + 3;
+    // Low in the message, beneath what is written at its top.
+    let y = area.bottom().saturating_sub(height + 4).max(area.y + 1);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let popup = Rect::new(x, y, width, height.min(f.area().height));
+    f.render_widget(Clear, popup);
+    let title = title.as_str();
+    f.render_widget(
+        Paragraph::new(lines.clone()).block(dialog(&t, title, foot)),
+        popup,
+    );
+    let row = popup.y + lines.len() as u16 + 1;
+    let mut bx = popup.x + 2;
+    let buf = f.buffer_mut();
+    for ((_, key, bg, fg), said) in buttons.iter().zip(&said) {
+        let w = said.width() as u16;
+        if row >= popup.bottom() || bx + w > popup.right() {
+            break;
+        }
+        buf.set_stringn(
+            bx,
+            row,
+            said,
+            usize::from(w),
+            Style::new().fg(*fg).bg(*bg).bold(),
+        );
+        let pressed = KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(*key),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        );
+        app.targets
+            .push((Rect::new(bx, row, w, 1), Target::Key(pressed)));
+        bx += w + 1;
+    }
 }
 
 /// What an `Attach` line's file is: its size, or why it cannot be sent.

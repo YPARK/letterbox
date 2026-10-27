@@ -170,6 +170,28 @@ fn filing_on_gmail_gives_the_label_and_takes_the_inbox_off() {
 }
 
 #[test]
+fn filed_and_archived_from_the_gmail_inbox_it_is_out_of_the_inbox() {
+    // As the list does: from the Inbox, by its UID there. Gmail does not
+    // take off the label of the folder selected, though it says OK.
+    let (account, boxes) = serve_boxes(gmail_boxes());
+    let index = Mutex::new(Index::memory());
+    let mut imap = Imap::new(account);
+    sync_once(&mut imap, &index);
+    imap.file("INBOX", 2, "Grant", "").unwrap();
+    imap.archive("INBOX", 1, "").unwrap();
+    {
+        let boxes = boxes.lock().unwrap();
+        assert!(boxes[0].letters.is_empty(), "the Inbox is empty");
+        assert_eq!(boxes[2].letters[1].labels, ["\\Important", "Grant"]);
+        assert_eq!(boxes[2].letters[0].labels, ["Projects/Grant"]);
+    }
+    sync_at(&mut imap, &index, 1_000_100);
+    let (_, labels, inbox) = labelled(&index, "R01 resubmission");
+    assert_eq!((labels, inbox), (vec!["Grant".to_string()], false));
+    assert!(!labelled(&index, "Aims page, third pass").2, "archived");
+}
+
+#[test]
 fn what_one_machine_does_on_gmail_another_sees_at_its_next_pass() {
     let (account, _boxes) = serve_boxes(gmail_boxes());
     let (here, there) = (Mutex::new(Index::memory()), Mutex::new(Index::memory()));

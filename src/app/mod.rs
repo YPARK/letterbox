@@ -2,6 +2,7 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+mod bringing;
 mod checking;
 mod dialog;
 mod files;
@@ -19,6 +20,7 @@ mod review;
 mod screen;
 mod trashing;
 mod writing;
+use self::bringing::*;
 pub use self::checking::*;
 pub use self::dialog::*;
 pub use self::files::*;
@@ -142,6 +144,9 @@ pub struct Reading {
     pub folder: String,
     pub uid: u32,
     pub body: Body,
+    /// Read on the map, not from the list: shown beside the one it was
+    /// read from alone.
+    pub on_map: bool,
 }
 
 /// What the terminal is given over to, or the system asked to do, once
@@ -280,6 +285,17 @@ pub struct App {
     pub grammar_open: fn(&str) -> anyhow::Result<Box<dyn crate::grammar::Corrector>>,
     checker: Option<std::sync::mpsc::Sender<String>>,
     pub checking: Option<Checking>,
+    /// Whether the grammar is checked before a message is sent, as it is
+    /// where letterbox is built with it; whether it was, and it is asked if
+    /// it is to go now; whether the next send goes as it is, its checking
+    /// let go by C-c; and what is said of the grammar once it is sent.
+    pub check_on_send: bool,
+    pub sending_asked: bool,
+    send_as_is: bool,
+    send_note: Option<String>,
+    checking_for_send: bool,
+    /// The messages on their way to another account, by where each was.
+    bringing: std::collections::BTreeMap<(usize, String, u32), Bringing>,
     /// What was asked of the servers, moving mail, followed till each is
     /// confirmed or failed; what was chosen in the Inbox looked through for
     /// what is being asked now; and whether what is asked now is done on its
@@ -550,6 +566,13 @@ impl App {
             grammar_open: crate::grammar::open,
             checker: None,
             checking: None,
+            // Never in tests, which would fetch the model: those of it say so.
+            check_on_send: cfg!(feature = "grammar") && !cfg!(test),
+            sending_asked: false,
+            send_as_is: false,
+            send_note: None,
+            checking_for_send: false,
+            bringing: std::collections::BTreeMap::new(),
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,

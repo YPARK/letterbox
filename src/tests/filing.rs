@@ -456,20 +456,32 @@ fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
     // The wheel: up over a block goes into it; down, out again, and no
     // farther than all of it.
     let _ = app::screen(&mut app, 150, 45);
+    // The biggest other cluster, as it has parts to go into; a small one's
+    // threads the wheel goes along.
+    let s = app.map.snapshot.clone().unwrap();
     let (r, other) = app
         .targets
         .iter()
-        .find_map(|&(r, t)| match t {
+        .filter_map(|&(r, t)| match t {
             app::Target::Anchor(g) if g != id => Some((r, g)),
             _ => None,
         })
+        .max_by_key(|&(_, g)| s.group(g).map_or(0, |g| g.members.len()))
         .unwrap();
     app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
-    let _ = app::screen(&mut app, 150, 45);
+    // Down over the map as it is drawn now, wherever the block was.
+    let on_map = |app: &mut App| {
+        let _ = app::screen(app, 150, 45);
+        app.targets
+            .iter()
+            .find_map(|&(r, t)| matches!(t, app::Target::Map).then_some(r))
+            .unwrap()
+    };
+    let r = on_map(&mut app);
     app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
     assert!(app.map.tree.is_none());
-    let _ = app::screen(&mut app, 150, 45);
+    let r = on_map(&mut app);
     app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
     assert!(app.map.tree.is_none());
     let screen = app::screen(&mut app, 150, 45);
@@ -498,6 +510,32 @@ fn the_map_follows_the_message_picked_into_its_cluster() {
     let text = app.compose.as_ref().unwrap().buffer.text();
     let reply = crate::compose::reply_subject(&s.dots[rows[2]].subject);
     assert!(text.contains(&format!("Subject: {reply}")), "{text}");
+}
+
+#[test]
+fn a_message_read_is_let_go_once_the_map_has_gone_into_another_cluster() {
+    let (mut app, grant) = grant_tree();
+    let s = app.map.snapshot.clone().unwrap();
+    // Read in another cluster, and out to every cluster: still read.
+    let other = s.groups.iter().position(|g| g.id != grant).unwrap();
+    let i = s.central(other).unwrap();
+    let subject = s.dots[i].subject.clone();
+    app.map.cursor = Some(s.dots[i].key.clone());
+    read_on_map(&mut app);
+    assert!(app::screen(&mut app, 150, 45).contains(&subject));
+    app.map.zoom_all();
+    assert!(app::screen(&mut app, 150, 45).contains(&subject));
+    // Into the Grant: what was read there is out of it, and not shown.
+    app.map.open_block(grant);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(!screen.contains(&subject), "{screen}");
+    assert!(screen.contains("reads the message picked"), "{screen}");
+    // One of the Grant's read is shown, as it is in what is shown.
+    read_on_map(&mut app);
+    let picked = app.map.picked().unwrap();
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains(&s.dots[picked].subject), "{screen}");
+    assert!(!screen.contains("reads the message picked"), "{screen}");
 }
 
 /// The demo's map, its Grant opened as its tree, drawn.

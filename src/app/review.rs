@@ -56,6 +56,9 @@ pub enum Pick {
     Label(String, f32),
     /// A label not yet made, as typed.
     New(String),
+    /// Another account's folder, as `(account, path, name)`: the message
+    /// moved there.
+    Elsewhere(usize, String, String),
     /// Where it goes, picked on the map.
     OnMap,
 }
@@ -65,6 +68,8 @@ pub enum Pick {
 pub enum Choice {
     /// Filed under the label, out of the Inbox.
     Move(String),
+    /// Moved to another account's folder, as `(account, path)`.
+    Bring(usize, String),
     Keep,
     /// To the Trash.
     Discard,
@@ -128,6 +133,8 @@ pub struct Plan {
     pub(super) moves: std::collections::BTreeMap<String, Vec<crate::index::Key>>,
     pub(super) discard: Vec<crate::index::Key>,
     pub(super) kept: Vec<crate::index::Key>,
+    /// Each to go to another account's folder, as `(account, path)`.
+    pub(super) brings: Vec<(crate::index::Key, usize, String)>,
 }
 
 impl App {
@@ -170,6 +177,7 @@ impl App {
                     .iter()
                     .find(|g| g.label.as_deref() == Some(label.as_str()))
                     .map_or(Bound::Elsewhere, |g| Bound::To(g.id)),
+                Choice::Bring(..) => Bound::Elsewhere,
                 Choice::Discard => Bound::Trash,
                 Choice::Keep => Bound::Kept,
             };
@@ -347,7 +355,26 @@ impl App {
         } else {
             MENU_TYPED
         });
+        // Other accounts' folders: those named as a label shown, or holding
+        // what is typed.
+        let shown: Vec<String> = labels.iter().map(|(n, _)| crate::index::fold(n)).collect();
+        let elsewhere: Vec<Pick> = self
+            .place_of(&s.dots[i])
+            .map(|(a, _, _)| self.elsewhere(a))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, path, name)| {
+                if typed.is_empty() {
+                    shown.contains(&crate::index::fold(name))
+                } else {
+                    name.to_lowercase().contains(&typed) || path.to_lowercase().contains(&typed)
+                }
+            })
+            .take(MENU_TYPED)
+            .map(|(b, path, name)| Pick::Elsewhere(b, path, name))
+            .collect();
         let mut items: Vec<Pick> = labels.into_iter().map(|(n, d)| Pick::Label(n, d)).collect();
+        items.extend(elsewhere);
         if !typed.is_empty() && !named {
             items.push(Pick::New(menu.typed.trim().to_string()));
         }
@@ -406,6 +433,17 @@ impl App {
                     keys.extend(menu.with);
                     self.file_keys(keys, &name)
                 }
+                // To another account: each marked, moved there.
+                Some(Pick::Elsewhere(to, path, _)) => {
+                    let Some(s) = self.map.snapshot.clone() else {
+                        return;
+                    };
+                    for key in std::iter::once(&menu.key).chain(&menu.with) {
+                        if let Some(j) = s.find(key) {
+                            self.bring(&s.dots[j].clone(), to, &path, None);
+                        }
+                    }
+                }
                 Some(Pick::OnMap) => {
                     self.show_map();
                     self.map.cursor = Some(menu.key.clone());
@@ -421,8 +459,20 @@ impl App {
             }
             return;
         }
-        match item {
-            Some(Pick::Label(name, _) | Pick::New(name)) if !menu.with.is_empty() => {
+        // What is chosen, and how it is said: a label, or another account's
+        // folder.
+        let chosen = match &item {
+            Some(Pick::Label(name, _) | Pick::New(name)) => {
+                Some((Choice::Move(name.clone()), name.clone()))
+            }
+            Some(Pick::Elsewhere(to, path, name)) => Some((
+                Choice::Bring(*to, path.clone()),
+                format!("{name} · {}", self.accounts[*to].name),
+            )),
+            _ => None,
+        };
+        match (item, chosen) {
+            (_, Some((choice, said))) if !menu.with.is_empty() => {
                 let Some(s) = self.map.snapshot.clone() else {
                     return;
                 };
@@ -430,17 +480,17 @@ impl App {
                     .chain(menu.with.iter().filter_map(|k| s.find(k)))
                     .collect();
                 for &j in &all {
-                    self.decide(j, Some(Choice::Move(name.clone())), false);
+                    self.decide(j, Some(choice.clone()), false);
                 }
-                self.status = format!("{} to go to {name} · $ does it, with the rest", all.len());
+                self.status = format!("{} to go to {said} · $ does it, with the rest", all.len());
                 self.after_selected(&all);
             }
-            Some(Pick::Label(name, _) | Pick::New(name)) => {
-                self.status = format!("to go to {name} · $ does it, with the rest");
-                self.choose(i, Choice::Move(name), true);
+            (_, Some((choice, said))) => {
+                self.status = format!("to go to {said} · $ does it, with the rest");
+                self.choose(i, choice, true);
             }
-            Some(Pick::OnMap) => self.pick_on_map(i),
-            None => {}
+            (Some(Pick::OnMap), _) => self.pick_on_map(i),
+            _ => {}
         }
     }
 
@@ -685,7 +735,7 @@ impl App {
         let (mut filed, mut discarded, mut kept, mut left) = (0, 0, 0, 0);
         for i in self.review_rows() {
             match self.chosen(i) {
-                Some(Choice::Move(_)) => filed += 1,
+                Some(Choice::Move(_) | Choice::Bring(..)) => filed += 1,
                 Some(Choice::Discard) => discarded += 1,
                 Some(Choice::Keep) => kept += 1,
                 None => left += 1,
@@ -713,12 +763,17 @@ impl App {
             let key = s.dots[i].key.clone();
             match self.chosen(i) {
                 Some(Choice::Move(label)) => plan.moves.entry(label).or_default().push(key),
+                Some(Choice::Bring(to, path)) => plan.brings.push((key, to, path)),
                 Some(Choice::Discard) => plan.discard.push(key),
                 Some(Choice::Keep) => plan.kept.push(key),
                 None => left += 1,
             }
         }
-        if plan.moves.is_empty() && plan.discard.is_empty() && plan.kept.is_empty() {
+        if plan.moves.is_empty()
+            && plan.discard.is_empty()
+            && plan.kept.is_empty()
+            && plan.brings.is_empty()
+        {
             self.status =
                 "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
             return;
@@ -728,6 +783,12 @@ impl App {
             .iter()
             .map(|(label, keys)| format!("file {} under {label}", keys.len()))
             .collect();
+        if !plan.brings.is_empty() {
+            said.push(format!(
+                "move {} to other accounts, their originals to the Trash once copied",
+                plan.brings.len()
+            ));
+        }
         if !plan.discard.is_empty() {
             said.push(format!("discard {} to the Trash", plan.discard.len()));
         }
@@ -758,13 +819,30 @@ impl App {
             moves,
             discard,
             kept,
+            brings,
             ..
         } = plan;
         self.teach(&kept, false);
         if let Some(r) = &mut self.review {
             r.relabel = None;
-            for key in moves.values().flatten().chain(&discard).chain(&kept) {
+            let brought = brings.iter().map(|(k, _, _)| k);
+            for key in moves
+                .values()
+                .flatten()
+                .chain(&discard)
+                .chain(&kept)
+                .chain(brought)
+            {
                 r.chosen.remove(key);
+            }
+        }
+        // Each to another account: copied there, then its original trashed.
+        if let Some(s) = self.map.snapshot.clone() {
+            for (key, to, path) in &brings {
+                if let Some(i) = s.find(key) {
+                    let choice = Choice::Bring(*to, path.clone());
+                    self.bring(&s.dots[i].clone(), *to, path, Some(choice));
+                }
             }
         }
         self.review_kept.clear();

@@ -33,6 +33,11 @@ impl App {
         let mut filed = 0;
         let mut pending = Vec::new();
         let mut asks = Vec::new();
+        // Filed from a folder's list, it is moved from that folder.
+        let listed = match self.listing.as_ref().map(|l| &l.view) {
+            Some(View::Folder(a, path)) => Some((*a, path.clone())),
+            _ => None,
+        };
         for key in &keys {
             let Some(i) = s.find(key) else { continue };
             let dot = &s.dots[i];
@@ -53,6 +58,10 @@ impl App {
                     label: label.clone(),
                     message_id: dot.message_id.clone(),
                     key: key.clone(),
+                    from: listed
+                        .as_ref()
+                        .filter(|(at, _)| *at == a)
+                        .map(|(_, path)| path.clone()),
                 },
             ));
             filed += 1;
@@ -247,11 +256,18 @@ impl App {
     pub(super) fn listed_on_map(&self) -> Option<usize> {
         let l = self.current()?;
         let ident = &self.accounts.get(l.account)?.ident;
-        let key = self
-            .index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .key_at(ident, &l.folder, l.summary.uid)?;
+        let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        // On Gmail the map reads All Mail, not the Inbox listed: there the
+        // message is found by its Message-ID.
+        let key = index.key_at(ident, &l.folder, l.summary.uid).or_else(|| {
+            let id = &l.summary.message_id;
+            index
+                .records
+                .values()
+                .find(|r| r.key.account == *ident && !id.is_empty() && r.message_id == *id)
+                .map(|r| r.key.clone())
+        })?;
+        drop(index);
         self.map.snapshot.as_ref()?.find(&key)
     }
 

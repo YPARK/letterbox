@@ -314,6 +314,16 @@ impl Store for Imap {
         })
     }
 
+    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+        let id = mail::brackets(message_id);
+        self.run(|s, selected| {
+            select(s, selected, folder, true)?;
+            Ok(!s
+                .uid_search(format!("HEADER Message-ID {}", astring(&id)))?
+                .is_empty())
+        })
+    }
+
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
         self.run(|s, selected| {
             let mut cmd = s.append(folder, raw);
@@ -472,7 +482,14 @@ impl Store for Imap {
     fn label(&mut self, folder: &str, uid: u32, label: &str, on: bool) -> anyhow::Result<()> {
         let sign = if on { '+' } else { '-' };
         let change = match self.kind()? {
-            Kind::Gmail => format!("{sign}X-GM-LABELS.SILENT ({})", astring(label)),
+            Kind::Gmail => {
+                let (folder, uid) = match on {
+                    true => (folder.to_string(), uid),
+                    false => self.where_to_take_off(folder, uid, label)?,
+                };
+                let change = format!("{sign}X-GM-LABELS.SILENT ({})", astring(label));
+                return self.store_flags(&folder, uid, &change);
+            }
             Kind::Keywords => format!("{sign}FLAGS.SILENT ({})", labels::keyword(label)),
             Kind::Folders => return Err(unsupported("keep a label on a message")),
         };
@@ -488,12 +505,7 @@ impl Store for Imap {
     ) -> anyhow::Result<Filed> {
         let kind = self.kind()?;
         if kind == Kind::Gmail {
-            self.label(folder, uid, label, true)?;
-            self.store_flags(folder, uid, "-X-GM-LABELS.SILENT (\\Inbox)")?;
-            return Ok(Filed {
-                moved: None,
-                on_server: true,
-            });
+            return self.gmail_file(folder, uid, label, None);
         }
         let folders = self.folders()?;
         let role = folders
@@ -547,11 +559,35 @@ impl Store for Imap {
         })
     }
 
+    fn file_from(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        message_id: &str,
+        listed: &str,
+    ) -> anyhow::Result<Filed> {
+        if self.kind()? != Kind::Gmail || listed == label {
+            return self.file(folder, uid, label, message_id);
+        }
+        // A label's folder on Gmail is its name: Gmail's own, under
+        // [Gmail], and the Inbox, Sent and the like are not.
+        let a_label = self.folders()?.iter().any(|f| {
+            f.path == listed
+                && f.selectable
+                && !f.all
+                && matches!(f.role, Role::Other | Role::Archive)
+                && !f.path.starts_with('[')
+        });
+        self.gmail_file(folder, uid, label, a_label.then_some(listed))
+    }
+
     fn archive(&mut self, folder: &str, uid: u32, message_id: &str) -> anyhow::Result<()> {
         if self.kind()? == Kind::Gmail {
             // On Gmail, out of the Inbox is without its label: All Mail
             // has it still.
-            return self.store_flags(folder, uid, "-X-GM-LABELS.SILENT (\\Inbox)");
+            let (folder, uid) = self.where_to_take_off(folder, uid, "\\Inbox")?;
+            return self.store_flags(&folder, uid, "-X-GM-LABELS.SILENT (\\Inbox)");
         }
         crate::store::to_archive(self, folder, uid, message_id)
     }
@@ -613,6 +649,94 @@ impl Store for Imap {
 }
 
 impl Imap {
+    /// File the message `uid` of `folder` on Gmail: given `label` first,
+    /// so that its folder may be where the others are taken off; then
+    /// without the label `from`, if it is moved from one, while it is where
+    /// it was; then without the Inbox's.
+    fn gmail_file(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        from: Option<&str>,
+    ) -> anyhow::Result<Filed> {
+        let change = format!("+X-GM-LABELS.SILENT ({})", astring(label));
+        self.store_flags(folder, uid, &change)?;
+        if let Some(from) = from {
+            let (at, n) = self.where_to_take_off(folder, uid, from)?;
+            self.store_flags(&at, n, &format!("-X-GM-LABELS.SILENT ({})", astring(from)))?;
+        }
+        // Filed from the folder of the label taken off, it was not in the
+        // Inbox, or it would have been filed from there.
+        if from != Some(folder) {
+            let (at, n) = self.where_to_take_off(folder, uid, "\\Inbox")?;
+            self.store_flags(&at, n, "-X-GM-LABELS.SILENT (\\Inbox)")?;
+        }
+        Ok(Filed {
+            moved: None,
+            on_server: true,
+        })
+    }
+
+    /// Where to take `label` off the message `uid` of `folder`, on Gmail:
+    /// where it is, unless `label` is the folder's own, the Inbox's from the
+    /// Inbox, which Gmail does not take off, though it says OK. Then where
+    /// else it is, found by its Gmail ID: in All Mail, else in the folder of
+    /// one of its other labels.
+    fn where_to_take_off(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+    ) -> anyhow::Result<(String, u32)> {
+        let folders = self.folders()?;
+        let inbox = folders
+            .iter()
+            .any(|f| f.path == folder && f.role == Role::Inbox);
+        let own = if inbox {
+            label == "\\Inbox"
+        } else {
+            label == folder
+        };
+        if !own {
+            return Ok((folder.to_string(), uid));
+        }
+        let found = self.run(|s, selected| {
+            select(s, selected, folder, false)?;
+            let (buf, _) = s.run(format!("UID FETCH {uid} (UID X-GM-MSGID X-GM-LABELS)"))?;
+            let Some(it) = fetched(&buf)
+                .into_iter()
+                .filter_map(indexed)
+                .find(|i| i.uid == uid)
+            else {
+                return Ok(None);
+            };
+            let Some(id) = it.gmail else {
+                return Ok(None);
+            };
+            let all = folders.iter().filter(|f| f.all);
+            let labelled = folders
+                .iter()
+                .filter(|f| !f.all && it.labels.contains(&f.path));
+            for f in all.chain(labelled) {
+                if f.path == folder || !f.selectable {
+                    continue;
+                }
+                select(s, selected, &f.path, false)?;
+                if let Some(at) = s.uid_search(format!("X-GM-MSGID {id}"))?.into_iter().next() {
+                    return Ok(Some((f.path.clone(), at)));
+                }
+            }
+            Ok(None)
+        })?;
+        found.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gmail does not take {label} off in {folder}, and it is in no other folder \
+                 shown: show All Mail in IMAP, in Gmail's settings, under Labels"
+            )
+        })
+    }
+
     /// Change the flags or labels of the message `uid` of `folder`, as
     /// `change` says: `+FLAGS.SILENT (Grant)`, say.
     fn store_flags(&mut self, folder: &str, uid: u32, change: &str) -> anyhow::Result<()> {

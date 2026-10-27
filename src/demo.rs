@@ -612,6 +612,15 @@ impl Demo {
         self.mail().refused.push(subject.to_string());
     }
 
+    /// A hand on the same mail, to see where a message is: for tests.
+    #[cfg(test)]
+    pub fn handle(&self) -> Demo {
+        Demo {
+            mail: self.mail.clone(),
+            ident: self.ident.clone(),
+        }
+    }
+
     /// The demo known by `ident` in the index, as a second account of it
     /// is in tests.
     #[cfg(test)]
@@ -727,6 +736,10 @@ impl Store for Demo {
 
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
         let mut mail = self.mail();
+        let subject = crate::mail::field(raw, "Subject").unwrap_or_default();
+        if mail.refused.contains(&subject) {
+            anyhow::bail!("the server said no");
+        }
         mail.letters(folder)?;
         let (uid, modseq) = mail.fresh();
         let flags = Flags {
@@ -736,6 +749,16 @@ impl Store for Demo {
         mail.letters(folder)?
             .push(Letter::new(uid, flags, raw.to_vec(), modseq));
         Ok(())
+    }
+
+    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+        let bare = |s: &str| s.trim().trim_matches(['<', '>']).to_lowercase();
+        let id = bare(message_id);
+        let mut mail = self.mail();
+        Ok(mail
+            .letters(folder)?
+            .iter()
+            .any(|l| crate::mail::field(&l.raw, "Message-ID").is_some_and(|m| bare(&m) == id)))
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {
