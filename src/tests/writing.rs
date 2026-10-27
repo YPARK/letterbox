@@ -299,9 +299,12 @@ fn reply_forward_and_new_mail_have_their_keys() {
         press(&mut app, &["?"]);
         app::screen(&mut app, 100, 60)
     };
-    for key in ["C-r", "f C-f", "C-n", "R"] {
+    for key in ["C-r", "C-n", "R"] {
         assert!(help.contains(key), "{key} in {help}");
     }
+    // f alone forwards: C-f moves, as Emacs has it.
+    assert!(help.contains("│ f "), "f in {help}");
+    assert!(!help.contains("f C-f"), "{help}");
 }
 
 #[test]
