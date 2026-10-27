@@ -134,9 +134,12 @@ impl Dialog {
         }
     }
 
+    /// The files listed: shown, or put by while the folder to save in is
+    /// picked.
     pub(super) fn files_mut(&mut self) -> Option<&mut Files> {
         match self {
             Dialog::Files(files) => Some(files),
+            Dialog::SaveTo(s) => Some(&mut s.files),
             _ => None,
         }
     }

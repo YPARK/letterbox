@@ -628,3 +628,63 @@ fn an_attachment_is_saved_into_the_folder_picked_and_the_next_begins_there() {
     again.recall_look();
     assert_eq!(again.save_dir, Some(dir.path().join("papers")));
 }
+
+#[test]
+fn a_path_typed_to_save_in_is_saved_in_and_a_name_new_there_made() {
+    use crate::pick::{Entry, Picked, Picker};
+    let key = |p: &mut Picker, s: &str| {
+        let mut last = Picked::Stay;
+        for k in app::keys(s) {
+            last = p.key(k);
+        }
+        last
+    };
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs/archive")).unwrap();
+    let docs = dir.path().join("docs");
+
+    // A path typed to its folder's `/` stays on saving there.
+    let mut p = Picker::folder(dir.path().to_path_buf());
+    key(&mut p, &format!("{}/", docs.display()));
+    assert_eq!(p.dir, docs);
+    assert_eq!(p.current(), Some(&Entry::Here));
+    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.clone()));
+
+    // A name no folder there has is a new folder, made as it is saved in.
+    let mut p = Picker::folder(docs.clone());
+    key(&mut p, "newproj");
+    assert_eq!(p.current(), Some(&Entry::Here));
+    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newproj")));
+    let mut p = Picker::folder(dir.path().to_path_buf());
+    key(&mut p, &format!("{}/newer", docs.display()));
+    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newer")));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_that_could_not_be_saved_in_is_not_begun_in_next() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let shut = dir.path().join("shut");
+    std::fs::create_dir(&shut).unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut app = demo();
+    app.save_dir = Some(dir.path().to_path_buf());
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    press(
+        &mut app,
+        &["<enter>", "o", "s", "shut", "<enter>", "<enter>"],
+    );
+    let note = app.dialog.files().and_then(|f| f.note.clone());
+    assert!(
+        note.as_deref()
+            .is_some_and(|n| n.starts_with("cannot save")),
+        "{note:?}"
+    );
+    assert_eq!(app.save_dir.as_deref(), Some(dir.path()));
+}

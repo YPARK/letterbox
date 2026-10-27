@@ -114,6 +114,15 @@ pub(super) fn downloads() -> PathBuf {
         })
 }
 
+/// Where a picker begins: in `last`, the folder it was last left in, if
+/// it is still there; else in the downloads folder, if there is one; else
+/// at home.
+pub(super) fn start_dir(last: Option<PathBuf>) -> PathBuf {
+    last.filter(|d| d.is_dir())
+        .or_else(|| Some(downloads()).filter(|d| d.is_dir()))
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()))
+}
+
 /// `$XDG_CACHE_HOME/letterbox`, else `~/.cache/letterbox`: in your home,
 /// not the temporary folder others on the machine may write in too.
 pub(super) fn cache() -> PathBuf {
@@ -174,6 +183,14 @@ pub(super) fn safe_name(name: &str) -> String {
     } else {
         base.to_string()
     }
+}
+
+/// Save `bytes`, an attachment named `name`, in `dir`, made if it is not
+/// there, under a name not yet taken there; and where it was saved.
+fn save_one(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let path = unused(dir, &safe_name(name));
+    std::fs::create_dir_all(dir).and_then(|_| write_new(&path, bytes))?;
+    Ok(path)
 }
 
 /// `dir/name`, or `dir/name (2)`, and so on, the first not there yet.
@@ -251,11 +268,11 @@ impl App {
             (Some(Act::Up), _) => self.dialog.step(-1),
             (Some(Act::Open), _) | (_, KeyCode::Char('o')) => self.open_item(),
             (_, KeyCode::Char('s')) => {
-                if matches!(files.items.get(files.at), Some(Item::File { .. })) {
-                    self.pick_save_dir(false);
-                } else {
-                    files.note = Some("a link is opened, not saved: ⏎".to_string());
-                }
+                files.note = match files.items.get(files.at) {
+                    Some(Item::File { .. }) => return self.pick_save_dir(false),
+                    Some(Item::Link(_)) => Some("a link is opened, not saved: ⏎".to_string()),
+                    _ => Some("only its files are saved: S saves them all".to_string()),
+                };
             }
             (_, KeyCode::Char('S')) => {
                 if !files.items.iter().any(|i| matches!(i, Item::File { .. })) {
@@ -326,11 +343,7 @@ impl App {
         let Dialog::Files(files) = std::mem::take(&mut self.dialog) else {
             return;
         };
-        let dir = self
-            .save_dir
-            .clone()
-            .filter(|d| d.is_dir())
-            .unwrap_or_else(downloads);
+        let dir = start_dir(self.save_dir.clone());
         self.dialog = Dialog::SaveTo(Box::new(SaveTo {
             picker: crate::pick::Picker::folder(dir),
             files,
@@ -354,7 +367,8 @@ impl App {
         let dir = match picked {
             Picked::Stay => return,
             Picked::Cancel => None,
-            Picked::Take(mut dirs) => dirs.pop(),
+            Picked::Folder(dir) => Some(dir),
+            Picked::Take(_) => return,
         };
         let Dialog::SaveTo(s) = std::mem::take(&mut self.dialog) else {
             return;
@@ -364,65 +378,58 @@ impl App {
             self.dialog = Dialog::Files(files);
             return;
         };
-        self.save_dir = Some(dir.clone());
-        if all {
-            self.save_attachments(&dir);
+        let saved = if all {
+            self.save_attachments(&dir)
         } else {
             self.dialog = Dialog::Files(files);
-            self.save_item(&dir);
+            self.save_item(&dir)
+        };
+        // Begun in next only once something was saved there.
+        if saved {
+            self.save_dir = Some(dir);
         }
     }
 
-    /// Save the attachment picked to `dir`, under a name not yet taken
-    /// there.
-    pub(super) fn save_item(&mut self, dir: &std::path::Path) {
+    /// Save the attachment picked in `dir`; whether it was.
+    fn save_item(&mut self, dir: &std::path::Path) -> bool {
         let m = self.message().cloned();
         let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
-            return;
+            return false;
         };
         let Some(Item::File { at, name, .. }) = files.items.get(files.at).cloned() else {
-            files.note = Some("a link is opened, not saved: ⏎".to_string());
-            return;
+            return false;
         };
         let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
-            return;
+            return false;
         };
-        let path = unused(dir, &safe_name(&name));
-        files.note = Some(
-            match std::fs::create_dir_all(dir).and_then(|_| write_new(&path, &bytes)) {
-                Ok(()) => format!("saved {}", tilde(&path)),
-                Err(e) => format!("cannot save {name}: {e}"),
-            },
-        );
+        let saved = save_one(dir, &name, &bytes);
+        files.note = Some(match &saved {
+            Ok(path) => format!("saved {}", tilde(path)),
+            Err(e) => format!("cannot save {name}: {e}"),
+        });
+        saved.is_ok()
     }
 
-    /// Save the message's attachments to `dir`, each under a name not yet
-    /// taken there.
-    pub(super) fn save_attachments(&mut self, dir: &std::path::Path) {
+    /// Save the message's attachments in `dir`; whether any were.
+    fn save_attachments(&mut self, dir: &std::path::Path) -> bool {
         let Some(m) = self.message().cloned() else {
-            self.status = "nothing to save: ⏎ reads the message picked".to_string();
-            return;
+            return false;
         };
-        let files = mail::attachments(&m.raw);
-        if files.is_empty() {
-            self.status = "no attachments".to_string();
-            return;
-        }
         let mut saved = Vec::new();
-        for (Attachment { name, .. }, bytes) in files {
-            let path = unused(dir, &safe_name(&name));
-            match std::fs::create_dir_all(dir).and_then(|_| write_new(&path, &bytes)) {
-                Ok(()) => saved.push(
+        for (Attachment { name, .. }, bytes) in mail::attachments(&m.raw) {
+            match save_one(dir, &name, &bytes) {
+                Ok(path) => saved.push(
                     path.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default(),
                 ),
                 Err(e) => {
                     self.status = format!("cannot save {name}: {e}");
-                    return;
+                    return !saved.is_empty();
                 }
             }
         }
         self.status = format!("saved to {}: {}", tilde(dir), saved.join(", "));
+        true
     }
 }

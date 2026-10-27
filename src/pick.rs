@@ -5,7 +5,8 @@
 //! soon as its folder is there, and into a folder its name alone begins.
 //! Space marks a file, `C-a` all those shown, and enter takes the marked,
 //! or the one picked. A folder to save in is picked so too, its folders
-//! alone shown, and `.` under `..` to save in the one it is in.
+//! alone shown, and `.` under `..` to save in the one it is in, or in a
+//! new one named by what is typed, when no folder there is so named.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
@@ -41,6 +42,8 @@ pub enum Picked {
     Cancel,
     /// The files taken, never none.
     Take(Vec<PathBuf>),
+    /// The folder to save in, perhaps not there yet.
+    Folder(PathBuf),
 }
 
 pub struct Picker {
@@ -95,17 +98,46 @@ impl Picker {
         let want = select.map(str::to_string).or_else(|| self.newest.clone());
         let shown = self.shown();
         let at = want.and_then(|w| shown.iter().position(|e| e.name() == w));
-        self.row = at.unwrap_or_else(|| self.first());
+        self.row = at.unwrap_or_else(|| self.first(&shown));
     }
 
-    /// The entry picked when no other is: the first folder narrowed to
-    /// when picking a folder, else saving here; the first after `..`.
-    fn first(&self) -> usize {
-        let shown = self.shown();
-        let narrowed = !self.filter.is_empty() && !self.completed();
+    /// The entry picked when no other is, of those `shown`: the first
+    /// folder narrowed to when picking a folder, else saving here; the
+    /// first after `..`.
+    fn first(&self, shown: &[&Entry]) -> usize {
+        let narrowed = !self.narrowing().is_empty();
         match shown.iter().position(|e| matches!(e, Entry::Dir(_))) {
             Some(at) if self.folders && narrowed => at,
             _ => usize::from(shown.len() > 1),
+        }
+    }
+
+    /// What the entries are narrowed by: what is typed, or a typed path's
+    /// name begun after its last `/`; none once that name is a folder
+    /// gone into.
+    fn narrowing(&self) -> &str {
+        match self.typed_path() {
+            Some(_) if self.completed() => "",
+            Some((_, name)) => name,
+            None => &self.filter,
+        }
+    }
+
+    /// The folder `.` saves in: the one shown; or, when what is typed
+    /// names none of its folders, a new one so named, in the folder a
+    /// typed path names.
+    pub fn here(&self) -> PathBuf {
+        let name = self.narrowing();
+        let named = self.shown().iter().any(|e| matches!(e, Entry::Dir(_)));
+        if named || matches!(name, "" | "." | "..") {
+            return self.dir.clone();
+        }
+        match self.typed_path() {
+            Some((folder, _)) => Path::new(folder)
+                .components()
+                .collect::<PathBuf>()
+                .join(name),
+            None => self.dir.join(name),
         }
     }
 
@@ -216,11 +248,7 @@ impl Picker {
     /// when picking a folder; those
     /// whose names begin with `.` only when what is typed does.
     pub fn shown(&self) -> Vec<&Entry> {
-        let f = match self.typed_path() {
-            Some(_) if self.completed() => String::new(),
-            Some((_, name)) => name.to_lowercase(),
-            None => self.filter.to_lowercase(),
-        };
+        let f = self.narrowing().to_lowercase();
         let hidden = f.starts_with('.');
         self.entries
             .iter()
@@ -291,7 +319,7 @@ impl Picker {
     pub fn click(&mut self, i: usize) -> Picked {
         self.row = i.min(self.shown().len().saturating_sub(1));
         match self.current() {
-            Some(Entry::Here) => return Picked::Take(vec![self.dir.clone()]),
+            Some(Entry::Here) => return Picked::Folder(self.here()),
             Some(Entry::File { .. }) => self.mark_here(),
             _ => self.open_here(),
         }
@@ -319,12 +347,12 @@ impl Picker {
                     self.up();
                 } else {
                     self.follow();
-                    self.row = self.first();
+                    self.row = self.first(&self.shown());
                 }
             }
             KeyCode::Enter => match self.current() {
                 Some(Entry::File { .. }) => return self.take(),
-                Some(Entry::Here) => return Picked::Take(vec![self.dir.clone()]),
+                Some(Entry::Here) => return Picked::Folder(self.here()),
                 _ => self.open_here(),
             },
             KeyCode::Char(' ') => {
@@ -364,7 +392,7 @@ impl Picker {
                     .as_deref()
                     .and_then(at)
                     .or_else(|| self.newest.as_deref().and_then(at));
-                self.row = kept.unwrap_or_else(|| self.first());
+                self.row = kept.unwrap_or_else(|| self.first(&shown));
             }
             _ => {}
         }

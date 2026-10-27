@@ -167,7 +167,7 @@ pub const KEYS: &[Binding] = &[
             (Picking, "this folder"),
             (Map, "read"),
             (Attaching, "attach"),
-            (Saving, "save"),
+            (Saving, "into · on . save"),
             (Reviewing, "read"),
         ],
         help: "open the folder, or read the message",

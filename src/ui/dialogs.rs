@@ -378,12 +378,20 @@ pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -
                 String::new(),
                 Style::new().fg(t.dim),
             ),
-            Entry::Here => (
-                "  ",
-                "./".to_string(),
-                "save here".to_string(),
-                Style::new().fg(t.accent).bold(),
-            ),
+            Entry::Here => {
+                let here = p.here();
+                let about = if here == p.dir {
+                    "save here".to_string()
+                } else {
+                    format!("make {}/ and save", crate::compose::named(&here))
+                };
+                (
+                    "  ",
+                    "./".to_string(),
+                    about,
+                    Style::new().fg(t.accent).bold(),
+                )
+            }
             Entry::Dir(n) => (
                 "  ",
                 format!("{n}/"),
