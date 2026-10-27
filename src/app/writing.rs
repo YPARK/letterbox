@@ -206,12 +206,7 @@ impl App {
             Done::Send => self.send_or_check(),
             Done::Check => self.check_grammar(false),
             Done::Attach => {
-                let dir = self
-                    .attach_dir
-                    .clone()
-                    .filter(|d| d.is_dir())
-                    .or_else(|| Some(downloads()).filter(|d| d.is_dir()))
-                    .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()));
+                let dir = start_dir(self.attach_dir.clone());
                 self.dialog = Dialog::Attach(Box::new(crate::pick::Picker::open(dir)));
             }
         }
@@ -223,7 +218,7 @@ impl App {
             return;
         };
         match picker.key(key) {
-            crate::pick::Picked::Stay => {}
+            crate::pick::Picked::Stay | crate::pick::Picked::Folder(_) => {}
             crate::pick::Picked::Cancel => self.dialog = Dialog::Closed,
             crate::pick::Picked::Take(paths) => {
                 self.attach_dir = Some(picker.dir.clone());

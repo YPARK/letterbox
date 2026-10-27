@@ -334,6 +334,7 @@ pub(super) fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (R
 
 /// Files to attach, picked a folder at a time: the folder, what is typed,
 /// and its entries, the one picked lit, those marked `●`, the newest `★`.
+/// Or the folder to save in, picked so: its folders, and `.` to save there.
 pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -> (Rect, Targets) {
     use crate::pick::Entry;
     let width = f.area().width.min(84);
@@ -354,7 +355,11 @@ pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -
         ]),
         Line::styled(
             clip(
-                "type to narrow, or a path from /; ␣ marks several to attach",
+                if p.folders {
+                    "type to narrow, or a path from /; ⏎ on . saves here"
+                } else {
+                    "type to narrow, or a path from /; ␣ marks several to attach"
+                },
                 room,
             ),
             Style::new().fg(t.faint),
@@ -373,6 +378,20 @@ pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -
                 String::new(),
                 Style::new().fg(t.dim),
             ),
+            Entry::Here => {
+                let here = p.here();
+                let about = if here == p.dir {
+                    "save here".to_string()
+                } else {
+                    format!("make {}/ and save", crate::compose::named(&here))
+                };
+                (
+                    "  ",
+                    "./".to_string(),
+                    about,
+                    Style::new().fg(t.accent).bold(),
+                )
+            }
             Entry::Dir(n) => (
                 "  ",
                 format!("{n}/"),
@@ -426,11 +445,15 @@ pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(
-            t,
-            "Attach files",
-            "⏎ attach · ␣ mark · C-a all · ← up · ~ home · esc",
-        )),
+        Paragraph::new(lines).block(if p.folders {
+            dialog(t, "Save to", "⏎ into · ⏎ on . save · ← up · ~ home · esc")
+        } else {
+            dialog(
+                t,
+                "Attach files",
+                "⏎ attach · ␣ mark · C-a all · ← up · ~ home · esc",
+            )
+        }),
         area,
     );
     let targets = (offset..shown.len().min(offset + rows))

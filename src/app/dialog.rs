@@ -81,6 +81,8 @@ pub enum Dialog {
     RenameLabel(String, String),
     /// Files to attach to the message being written, as they are picked.
     Attach(Box<crate::pick::Picker>),
+    /// The folder to save the message's files in, as it is picked.
+    SaveTo(Box<SaveTo>),
     /// What the map shows, and how, to be changed: `keymap::VIEW`.
     View,
     /// Whether to begin the map, asked the first time it is wanted.
@@ -132,9 +134,21 @@ impl Dialog {
         }
     }
 
+    /// The files listed: shown, or put by while the folder to save in is
+    /// picked.
     pub(super) fn files_mut(&mut self) -> Option<&mut Files> {
         match self {
             Dialog::Files(files) => Some(files),
+            Dialog::SaveTo(s) => Some(&mut s.files),
+            _ => None,
+        }
+    }
+
+    /// The folder being picked to save in, if one is.
+    #[cfg(test)]
+    pub fn saving(&self) -> Option<&crate::pick::Picker> {
+        match self {
+            Dialog::SaveTo(s) => Some(&s.picker),
             _ => None,
         }
     }
@@ -158,6 +172,7 @@ impl Dialog {
             Dialog::Files(files) => (&mut files.at, files.items.len()),
             Dialog::Trash(pick) => (&mut pick.at, pick.folders.len()),
             Dialog::Attach(picker) => return picker.step(by),
+            Dialog::SaveTo(s) => return s.picker.step(by),
             _ => return,
         };
         *at = at.saturating_add_signed(by).min(len.saturating_sub(1));
@@ -185,6 +200,7 @@ impl App {
             Dialog::Form(_) => self.form_key(key),
             Dialog::Files(_) => self.files_key(key),
             Dialog::Attach(_) => self.attach_key(key),
+            Dialog::SaveTo(_) => self.save_to_key(key),
             Dialog::View => self.view_key(key),
             Dialog::Debrief(_) => self.debrief_key(key),
             Dialog::Papers(_) => self.papers_key(key),
@@ -303,8 +319,15 @@ impl App {
                 self.open_item();
             }
             (Dialog::Files(_), _) => self.dialog = Dialog::Closed,
-            (Dialog::Attach(picker), Some(Target::Item(i))) => picker.click(i),
+            (Dialog::Attach(picker), Some(Target::Item(i))) => {
+                picker.click(i);
+            }
             (Dialog::Attach(_), _) => self.dialog = Dialog::Closed,
+            (Dialog::SaveTo(s), Some(Target::Item(i))) => {
+                let picked = s.picker.click(i);
+                self.saved_to(picked);
+            }
+            (Dialog::SaveTo(_), _) => self.saved_to(crate::pick::Picked::Cancel),
             (Dialog::View, Some(Target::Item(i))) => {
                 if let Some(&(_, act, _)) = keymap::VIEW.get(i) {
                     self.view(act);

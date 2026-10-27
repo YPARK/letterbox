@@ -345,6 +345,9 @@ impl App {
             if let Some(w) = line.strip_prefix("reader ") {
                 self.reader_width = w.trim().parse().ok();
             }
+            if let Some(dir) = line.strip_prefix("save ") {
+                self.save_dir = Some(PathBuf::from(dir));
+            }
         }
         if look.split_whitespace().next() != Some("map") || self.map_off.is_some() || self.map_later
         {
@@ -354,7 +357,8 @@ impl App {
     }
 
     /// Write down how the mail is looked at, to open so again: the list or
-    /// the map, and how wide the message read was made, if it was.
+    /// the map, how wide the message read was made, if it was, and where
+    /// its files were last saved.
     pub fn remember_look(&self) {
         let Some(path) = &self.look_file else {
             return;
@@ -366,8 +370,16 @@ impl App {
         let wide = self
             .reader_width
             .map_or(String::new(), |w| format!("reader {w}\n"));
+        // A folder named across lines is not kept: the line after it would
+        // be read as more.
+        let save = self
+            .save_dir
+            .as_ref()
+            .and_then(|d| d.to_str())
+            .filter(|d| !d.contains('\n'))
+            .map_or(String::new(), |d| format!("save {d}\n"));
         // Only how it was left; nothing lost if it cannot be kept.
-        let _ = std::fs::write(path, format!("{look}\n{wide}"));
+        let _ = std::fs::write(path, format!("{look}\n{wide}{save}"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked
