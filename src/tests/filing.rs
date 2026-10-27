@@ -470,10 +470,18 @@ fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
         .unwrap();
     app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
     assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
-    let _ = app::screen(&mut app, 150, 45);
+    // Down over the map as it is drawn now, wherever the block was.
+    let on_map = |app: &mut App| {
+        let _ = app::screen(app, 150, 45);
+        app.targets
+            .iter()
+            .find_map(|&(r, t)| matches!(t, app::Target::Map).then_some(r))
+            .unwrap()
+    };
+    let r = on_map(&mut app);
     app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
     assert!(app.map.tree.is_none());
-    let _ = app::screen(&mut app, 150, 45);
+    let r = on_map(&mut app);
     app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
     assert!(app.map.tree.is_none());
     let screen = app::screen(&mut app, 150, 45);
