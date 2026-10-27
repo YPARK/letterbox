@@ -96,6 +96,10 @@ pub trait Store: Send {
     }
     /// Add `raw` to the end of `folder`, seen if `seen` is.
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()>;
+    /// Whether `folder` holds a message of the Message-ID `message_id`.
+    fn holds(&mut self, _folder: &str, _message_id: &str) -> anyhow::Result<bool> {
+        anyhow::bail!("this account cannot be asked what a folder holds")
+    }
     /// Make a folder named `path`.
     fn create(&mut self, path: &str) -> anyhow::Result<()>;
     /// The address mail from this account is sent as.
@@ -164,6 +168,19 @@ pub trait Store: Send {
         _message_id: &str,
     ) -> anyhow::Result<Filed> {
         Err(unsupported("file a message"))
+    }
+    /// File it as `file` does, from the list of the folder `listed`: where
+    /// that folder is a label, as on Gmail, the label taken off too, as a
+    /// move from it.
+    fn file_from(
+        &mut self,
+        folder: &str,
+        uid: u32,
+        label: &str,
+        message_id: &str,
+        _listed: &str,
+    ) -> anyhow::Result<Filed> {
+        self.file(folder, uid, label, message_id)
     }
     /// Call the label `old` `new` on the server, wherever it is.
     fn rename_label(&mut self, _old: &str, _new: &str) -> anyhow::Result<()> {

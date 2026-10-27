@@ -681,6 +681,7 @@ impl App {
             folder,
             uid,
             body,
+            on_map: false,
         });
     }
 

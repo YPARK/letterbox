@@ -2,6 +2,7 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+mod bringing;
 mod checking;
 mod dialog;
 mod files;
@@ -19,6 +20,7 @@ mod review;
 mod screen;
 mod trashing;
 mod writing;
+use self::bringing::*;
 pub use self::checking::*;
 pub use self::dialog::*;
 pub use self::files::*;
@@ -142,6 +144,9 @@ pub struct Reading {
     pub folder: String,
     pub uid: u32,
     pub body: Body,
+    /// Read on the map, not from the list: shown beside the one it was
+    /// read from alone.
+    pub on_map: bool,
 }
 
 /// What the terminal is given over to, or the system asked to do, once
@@ -289,6 +294,8 @@ pub struct App {
     send_as_is: bool,
     send_note: Option<String>,
     checking_for_send: bool,
+    /// The messages on their way to another account, by where each was.
+    bringing: std::collections::BTreeMap<(usize, String, u32), Bringing>,
     /// What was asked of the servers, moving mail, followed till each is
     /// confirmed or failed; what was chosen in the Inbox looked through for
     /// what is being asked now; and whether what is asked now is done on its
@@ -565,6 +572,7 @@ impl App {
             send_as_is: false,
             send_note: None,
             checking_for_send: false,
+            bringing: std::collections::BTreeMap::new(),
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,

@@ -91,6 +91,7 @@ pub fn map_panes(width: u16, focus: Focus) -> [u16; 3] {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    app.keep_reading_in_view();
     let t = app.theme;
     app.targets.clear();
     f.render_widget(

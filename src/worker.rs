@@ -55,11 +55,29 @@ pub enum Ask {
         label: String,
         message_id: String,
         key: crate::index::Key,
+        /// The folder it was listed in, filed from it.
+        from: Option<String>,
     },
     /// Call a label something else, on the server.
     RenameLabel {
         old: String,
         new: String,
+    },
+    /// A message whole, as its server keeps it: to be copied to another
+    /// account.
+    Raw {
+        folder: String,
+        uid: u32,
+    },
+    /// `raw`, a message of another account, the message `uid` of `folder`
+    /// on the account `from`, put in `to`, and looked for there by its
+    /// Message-ID: copied, before its original goes.
+    Bring {
+        to: String,
+        raw: Vec<u8>,
+        seen: bool,
+        message_id: String,
+        from: (usize, String, u32),
     },
     /// Take a message out of the Inbox, given no label.
     Archive {
@@ -163,6 +181,18 @@ pub enum Answer {
     Mapping(String),
     /// A pass of the map's sync over the account, done.
     Mapped(Result<crate::index::sync::Passed, String>),
+    /// The message `uid` of `folder` whole, or why not.
+    Raw {
+        folder: String,
+        uid: u32,
+        raw: Result<Vec<u8>, String>,
+    },
+    /// A message of another account, the message `uid` of `folder` on the
+    /// account `from`, copied here and found, or why not.
+    Brought {
+        from: (usize, String, u32),
+        result: Result<(), String>,
+    },
     /// What a model would change of `text`, the message being written as it
     /// was sent to be checked, or why it could not say.
     Checked {
@@ -283,8 +313,13 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             label,
             message_id,
             key,
+            from,
         } => Answer::Filed {
-            filed: store.file(&folder, uid, &label, &message_id).map_err(text),
+            filed: match &from {
+                Some(listed) => store.file_from(&folder, uid, &label, &message_id, listed),
+                None => store.file(&folder, uid, &label, &message_id),
+            }
+            .map_err(text),
             key,
             label,
             folder,
@@ -294,6 +329,32 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             result: store.rename_label(&old, &new).map_err(text),
             old,
         },
+        Ask::Raw { folder, uid } => Answer::Raw {
+            raw: store.raw(&folder, uid).map_err(text),
+            folder,
+            uid,
+        },
+        Ask::Bring {
+            to,
+            raw,
+            seen,
+            message_id,
+            from,
+        } => {
+            // Copied, and found there by its Message-ID; one without one,
+            // copied, taken as there.
+            let result = store.append(&to, &raw, seen).and_then(|()| {
+                if message_id.trim().is_empty() || store.holds(&to, &message_id)? {
+                    Ok(())
+                } else {
+                    anyhow::bail!("copied to {to}, but not found there")
+                }
+            });
+            Answer::Brought {
+                from,
+                result: result.map_err(text),
+            }
+        }
         Ask::Archive {
             folder,
             uid,

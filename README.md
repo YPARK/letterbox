@@ -190,7 +190,7 @@ letterbox search grant report --account Work
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `r` shows or hides read mail; `s` the mail you sent; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
-| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once |
+| `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once; another account's folder, as `Grant · ubc.ca`, moves it there |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first, on the map or in the list; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v` | in the map, mark the cluster of the message picked, its block boxed and said all marked; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
@@ -349,7 +349,9 @@ else kept. Nothing is chosen until you choose it. `m`, or a click on `→`, drop
 may go to: where it would go first, then the four nearest it by what it
 is about; typing narrows them to those that hold what is typed, from all
 of them, and offers a new label by that name; the last picks where on the
-map. `↑` `↓` pick one and `⏎` takes it. `N` names a new label
+map. Another account's folders are offered too, as `Grant · ubc.ca`: those
+named as a label shown, or holding what is typed. `↑` `↓` pick one and `⏎`
+takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
 `←` and `→` go round them, and back to none chosen; and `C-f` and `C-b`, as Emacs's keys move everywhere; `C-v` and `M-v` a page; a click picks one, and
@@ -436,7 +438,15 @@ that fit nowhere; `M-l` lists the cluster the map is narrowed to.
 `m` moves the message picked onto a cluster: `enter` on its block, or
 a click on it. It is given the cluster's label and taken out of the
 Inbox; `N` gives it a new label instead. `v` marks a cluster; then `m`,
-`d`, `e`, `u` and `s` act on all of it. Once a message is filed, the message read says what would go to
+`d`, `e`, `u` and `s` act on all of it.
+
+A message moves to another account's folder, picked in the labels dropped
+down as `Grant · ubc.ca`, from the list or the Inbox looked through: read
+whole from its server, copied to the other, found there by its
+Message-ID, and only then its original put in its own account's Trash,
+as `d` puts one, to be put back from there. A copy refused, or not found
+where it went, leaves the original where it was; each is followed till
+confirmed, and what fails is said, as for the rest. Once a message is filed, the message read says what would go to
 the label too: `y` files the first, `Y` all of them, and `-` says the
 first is not one, which the map learns from. `R` renames a label.
 

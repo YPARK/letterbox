@@ -809,3 +809,25 @@ fn what_was_chosen_is_not_done_again_while_the_last_is_waited_for() {
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("applying: 0 of 1 confirmed"), "{screen}");
 }
+
+#[test]
+fn a_failure_is_said_at_once_with_why_while_the_rest_is_waited_for() {
+    let refused = "R01 resubmission: internal deadline 3 November";
+    let mut app = demo_refusing(refused);
+    // Another, still waited for.
+    app.batch.ask(job(9999, crate::confirm::Goal::Trashed));
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject == refused)
+        .unwrap();
+    app.list.select(Some(at));
+    press(&mut app, &["d"]);
+    app.settle(Duration::from_secs(5));
+    let screen = app::screen(&mut app, 170, 40);
+    assert!(screen.contains("1 failed"), "{screen}");
+    assert!(
+        screen.contains("✗ R01 resubmission") && screen.contains("the server said no"),
+        "{screen}"
+    );
+}

@@ -753,3 +753,27 @@ fn what_a_message_answers_is_read_from_its_headers() {
     let items = crate::imap::indexed_items(false);
     assert!(items.contains("IN-REPLY-TO") && items.contains("REFERENCES"));
 }
+
+#[test]
+fn the_message_read_is_let_go_when_the_list_gives_way_to_the_map_and_back() {
+    // Read in the list: it stays while the list is gone along.
+    let mut app = demo();
+    app.list.select(Some(0));
+    press(&mut app, &["<enter>"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(app.reading.is_some(), "read");
+    press(&mut app, &["<down>", "<up>"]);
+    let _ = app::screen(&mut app, 150, 45);
+    assert!(app.reading.is_some(), "still read, in the list it is in");
+    // To the map: the list's message is not beside it.
+    press(&mut app, &["<m-g>"]);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(app.reading.is_none(), "{screen}");
+    // Read on the map, and back to the list: not beside the list either.
+    read_on_map(&mut app);
+    assert!(app.reading.is_some(), "read on the map");
+    press(&mut app, &["<m-l>"]);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(app.reading.is_none(), "{screen}");
+    assert!(screen.contains("reads the message picked"), "{screen}");
+}
