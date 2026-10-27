@@ -144,6 +144,33 @@ impl Buffer {
     }
 
     /// `new` as lines above the row `at`, point staying on its text.
+    /// To the field `by` after the one the cursor is in, or before, round:
+    /// each line of the head, To, Cc, Subject and the rest, then what is
+    /// written after it; at the end of what a field says, and of the first
+    /// line of what is written.
+    pub fn field(&mut self, by: isize) {
+        let head = self
+            .lines
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .unwrap_or(self.lines.len());
+        let mut stops: Vec<usize> = (0..head).collect();
+        if head + 1 < self.lines.len() {
+            stops.push(head + 1);
+        }
+        if stops.is_empty() {
+            return;
+        }
+        // Anywhere in what is written is there; the line between, the last
+        // field's.
+        let here = stops.iter().rposition(|&r| r <= self.row).unwrap_or(0);
+        let next = (here as isize + by).rem_euclid(stops.len() as isize) as usize;
+        self.row = stops[next];
+        self.col = self.lines[self.row].chars().count();
+        self.preferred = self.col;
+        self.killing = false;
+    }
+
     /// The characters `start` to `end` of the row `row` made `with`, and
     /// the cursor past it.
     pub fn replace(&mut self, row: usize, start: usize, end: usize, with: &str) {
@@ -684,6 +711,9 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
         KeyCode::Char('s') if ctrl => buf.begin_search(false),
         KeyCode::Char('r') if ctrl => buf.begin_search(true),
         KeyCode::Char('$') if alt => return Done::Check,
+        // Tab and Shift-Tab from field to field: To, Cc, Subject, the rest.
+        KeyCode::Tab => buf.field(1),
+        KeyCode::BackTab => buf.field(-1),
         KeyCode::Char('f') if alt => buf.word(1),
         KeyCode::Char('b') if alt => buf.word(-1),
         KeyCode::Char('d') if alt => {
