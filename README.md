@@ -166,15 +166,15 @@ letterbox search grant report --account Work
 | `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
 | `esc` / `C-g` | back to the list; clear the search; close a dialog; out of a cluster gone into, a level. `C-g` as Emacs has it, wherever `esc` goes back |
 | `u` | mark read, or unread |
-| `s` | flag, or unflag |
+| `!` | flag, or unflag |
 | `d` | move to Trash; in Trash, put it back. Kept there for 7 days, then removed. If the server marks no Trash folder, letterbox asks which existing one |
 | `c` | write a message |
 | `r`, `C-r` | reply to the sender |
 | `a` | reply to all: the sender, the others it went to copied |
 | `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; in the map, it or what is marked |
-| `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as `S` does |
-| `S` | save the message read's attachments: `⏎` the one picked, `a` all of them, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
+| `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message |
+| `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text. In a letterbox built `--features pages` |
 | `B` | what was thrown away on its own in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
@@ -194,7 +194,7 @@ letterbox search grant report --account Work
 | `m` | in the map, move the message picked, or what is marked, onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once; another account's folder, as `Grant · ubc.ca`, moves it there |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, marked first, on the map or in the list; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
-| `v` | in the map, mark the cluster of the message picked, its block boxed and said all marked; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `s` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
+| `v` | in the map, mark the cluster of the message picked, its block boxed and said all marked; in the list, mark the message picked, or let it go, marked rows shown `▪`; `m`, `d`, `e`, `u` and `!` then act on all of it, `e` taking it out of the Inbox, and `esc` lets it go |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more |
@@ -378,7 +378,7 @@ stay. As it is looked through, and each choice changed, so does the map,
 its clusters alike.
 
 Read with `⏎`, a message is chosen for by `d`, `m` and `y` as it is in the
-list, and `u` and `s` mark the one picked.
+list, and `u` and `!` mark the one picked.
 
 letterbox learns what you throw away. Each message you trash, however it
 is trashed, teaches it that mail like it is thrown away; each you file,
@@ -439,7 +439,7 @@ that fit nowhere; `M-l` lists the cluster the map is narrowed to.
 `m` moves the message picked onto a cluster: `enter` on its block, or
 a click on it. It is given the cluster's label and taken out of the
 Inbox; `N` gives it a new label instead. `v` marks a cluster; then `m`,
-`d`, `e`, `u` and `s` act on all of it.
+`d`, `e`, `u` and `!` act on all of it.
 
 A message moves to another account's folder, picked in the labels dropped
 down as `Grant · ubc.ca`, from the list or the Inbox looked through: read

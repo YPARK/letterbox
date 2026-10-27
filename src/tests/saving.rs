@@ -58,7 +58,7 @@ fn s_saves_from_a_dialog_of_its_own_each_named_first() {
     read_turing(&mut app);
 
     // Its attachments alone, the first picked.
-    press(&mut app, &["S"]);
+    press(&mut app, &["s"]);
     let files = app.dialog.files().expect("listed to save");
     let names: Vec<String> = files
         .items
@@ -117,7 +117,33 @@ fn s_on_a_message_without_attachments_says_so() {
     app.list.select(Some(ada));
     press(&mut app, &["<enter>"]);
     assert!(app.message().unwrap().attachments.is_empty());
+    for key in ["s", "S"] {
+        press(&mut app, &[key]);
+        assert!(!app.dialog.is_open());
+        assert_eq!(app.status, "no attachments to save");
+    }
+}
+
+#[test]
+fn bang_flags_and_capital_s_saves_all_into_a_folder_picked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = demo();
+    app.save_dir = Some(dir.path().to_path_buf());
+    read_turing(&mut app);
+
+    // ! flags, and again unflags.
+    let flagged = |app: &App| app.shown[app.list.selected().unwrap()].flags.flagged;
+    let was = flagged(&app);
+    press(&mut app, &["!"]);
+    assert_eq!(flagged(&app), !was);
+    press(&mut app, &["!"]);
+    assert_eq!(flagged(&app), was);
+
+    // S: straight to the folder, all of them saved there.
     press(&mut app, &["S"]);
-    assert!(!app.dialog.is_open());
-    assert_eq!(app.status, "no attachments to save");
+    assert!(app.dialog.saving().is_some(), "no folder asked");
+    press(&mut app, &["<enter>"]);
+    assert!(dir.path().join("states.txt").is_file());
+    assert!(dir.path().join("computable-numbers.pdf").is_file());
+    assert!(!app.dialog.is_open(), "{}", app.status);
 }

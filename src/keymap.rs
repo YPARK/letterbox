@@ -39,6 +39,8 @@ pub enum Act {
     Files,
     /// The message read's attachments, to save.
     Save,
+    /// All the message read's attachments, saved in a folder picked.
+    SaveAll,
     /// The message read, presented by ohp.
     Present,
     /// What was thrown away on its own, and why.
@@ -307,9 +309,9 @@ pub const KEYS: &[Binding] = &[
         help: "mark read, or unread",
     },
     Binding {
-        keys: &[("s", Flag)],
-        name: "s",
-        hint: "s",
+        keys: &[("!", Flag)],
+        name: "!",
+        hint: "!",
         foot: &[(List, "flag"), (Reader, "flag"), (Map, "flag")],
         help: "flag, or unflag",
     },
@@ -318,14 +320,14 @@ pub const KEYS: &[Binding] = &[
         name: "o",
         hint: "o",
         foot: &[(Reader, "open")],
-        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as S does",
+        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as they do from the message",
     },
     Binding {
-        keys: &[("S", Save)],
-        name: "S",
-        hint: "S",
+        keys: &[("s", Save), ("S", SaveAll)],
+        name: "s S",
+        hint: "s",
         foot: &[(Reader, "save")],
-        help: "save the message read's attachments: ⏎ the one picked, a all of them. Then the folder, begun where you last saved, else in Downloads: ⏎ goes into a folder, and on . saves there; a name typed that no folder has is made. Then, for one, its name, all but the extension picked to type over: ← → edit it, ⏎ keeps it, esc goes back",
+        help: "save the message read's attachments: s lists them, ⏎ saving the one picked, a all of them; S saves them all at once. Then the folder, begun where you last saved, else in Downloads: ⏎ goes into a folder, and on . saves there; a name typed that no folder has is made. Then, for one, its name, all but the extension picked to type over: ← → edit it, ⏎ keeps it, esc goes back",
     },
     Binding {
         keys: &[("V", Pages)],
@@ -501,7 +503,7 @@ pub const KEYS: &[Binding] = &[
         name: "v",
         hint: "v",
         foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go, as space does; m, d, e, u and s then act on all of it, and esc lets it go",
+        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go, as space does; m, d, e, u and ! then act on all of it, and esc lets it go",
     },
     Binding {
         keys: &[("S-down", MarkDown), ("S-up", MarkUp)],
