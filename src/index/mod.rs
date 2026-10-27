@@ -278,6 +278,16 @@ enum Hold {
     Busy,
 }
 
+/// Hold the lock of the index in `dir` for as long as what is returned is
+/// kept, as a command that writes what letterbox open also writes does;
+/// an error if a letterbox open holds it.
+pub fn lock(dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
+    match hold(dir) {
+        Hold::Held(file) => Ok(file),
+        Hold::Busy => anyhow::bail!("letterbox is open: close it, then run this again"),
+    }
+}
+
 /// Hold the lock of the index in `dir`, if no other letterbox does.
 fn hold(dir: &Path) -> Hold {
     let file = std::fs::OpenOptions::new()
@@ -629,17 +639,52 @@ impl Index {
         Ok(n)
     }
 
-    /// Forget what was read from the Trash and your labels: what is learnt
-    /// is learnt again from your own decisions alone, and written so. How
-    /// many were forgotten.
+    /// Forget what was read from the Trash and your labels: only your own
+    /// decisions are kept. How many were forgotten.
     pub fn unseed(&mut self) -> anyhow::Result<usize> {
+        self.forget_where(|t| t.seeded)
+    }
+
+    /// Forget each message taught as thrown away by your own decision from
+    /// `since` to `until`, both included, as by a trashing done by mistake;
+    /// what was read from the Trash then, and what was thrown away as junk,
+    /// left as it is. How many were forgotten.
+    pub fn unteach(&mut self, since: i64, until: i64) -> anyhow::Result<usize> {
+        self.forget_where(|t| Self::taught_then(t, since, until))
+    }
+
+    /// How many `unteach` would forget, forgetting nothing.
+    pub fn unteach_count(&self, since: i64, until: i64) -> usize {
+        self.filter
+            .taught
+            .iter()
+            .filter(|t| Self::taught_then(t, since, until))
+            .count()
+    }
+
+    /// Whether `t` was taught as thrown away by your own decision from
+    /// `since` to `until`.
+    fn taught_then(t: &crate::filter::Taught, since: i64, until: i64) -> bool {
+        t.thrown && !t.auto && !t.seeded && (since..=until).contains(&t.at)
+    }
+
+    /// Forget each decision `gone` takes, what is left learnt again, in
+    /// turn, and written so. How many were forgotten.
+    pub fn forget_where(
+        &mut self,
+        gone: impl Fn(&crate::filter::Taught) -> bool,
+    ) -> anyhow::Result<usize> {
         if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
             anyhow::bail!("what was learnt cannot be read, so it is left as it is");
         }
         let all = std::mem::take(&mut self.filter.taught);
-        let n = all.iter().filter(|t| t.seeded).count();
+        let n = all.iter().filter(|t| gone(t)).count();
+        if n == 0 {
+            self.filter.taught = all;
+            return Ok(0);
+        }
         self.filter = crate::filter::Filter::default();
-        for t in all.into_iter().filter(|t| !t.seeded) {
+        for t in all.into_iter().filter(|t| !gone(t)) {
             self.filter.learn(t);
         }
         self.version += 1;

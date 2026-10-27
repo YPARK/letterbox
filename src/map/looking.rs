@@ -226,6 +226,15 @@ impl Map {
         }
     }
 
+    /// Whether a cluster's tree is gone down to a message: the one place on
+    /// the map, besides reading it, where mail is acted on.
+    pub fn at_message(&mut self, now: i64) -> bool {
+        self.tree.is_some()
+            && self
+                .tree_picked(now)
+                .is_some_and(|(root, path)| root.at(&path).is_some_and(|b| b.is_leaf()))
+    }
+
     /// Go into the branch picked, to the one under it the message picked
     /// is under; whether there was one to go into.
     pub fn tree_in(&mut self, now: i64) -> bool {

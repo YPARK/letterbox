@@ -4,7 +4,7 @@
 //! through the list is not fetched, and folders are counted last.
 
 use crate::mail::{self, Folder, Message, Summary};
-use crate::store::{Flag, Page, Removal, Store};
+use crate::store::{Flag, Page, Store};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -42,10 +42,6 @@ pub enum Ask {
         to: String,
         message_id: String,
         trashed: bool,
-    },
-    Expunge {
-        folder: String,
-        uid: u32,
     },
     /// File a message under a label: given it, and out of the Inbox. `key` is
     /// what the index knows it by.
@@ -134,11 +130,6 @@ pub enum Answer {
         trashed: bool,
         new_uid: Result<u32, String>,
         email: String,
-    },
-    Expunged {
-        folder: String,
-        uid: u32,
-        result: Result<Removal, String>,
     },
     Sent {
         said: Result<String, String>,
@@ -361,11 +352,6 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             message_id,
         } => Answer::Archived {
             result: store.archive(&folder, uid, &message_id).map_err(text),
-            folder,
-            uid,
-        },
-        Ask::Expunge { folder, uid } => Answer::Expunged {
-            result: store.expunge(&folder, uid).map_err(text),
             folder,
             uid,
         },

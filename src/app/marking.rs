@@ -3,27 +3,6 @@
 use super::*;
 
 impl App {
-    /// Mark the cluster of the message picked on the map; or, marked, let
-    /// what is marked go.
-    pub(super) fn mark_cluster(&mut self) {
-        if self.map.mode != Mode::Map {
-            return;
-        }
-        if self.map.region.take().is_some() {
-            self.status = "let go".to_string();
-            return;
-        }
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        let Some(g) = self.map.picked().and_then(|i| s.group_of(i)) else {
-            self.status = "no message picked: the arrows or hjkl pick one".to_string();
-            return;
-        };
-        let keys = g.members.iter().map(|&i| s.dots[i].key.clone()).collect();
-        self.mark(keys);
-    }
-
     /// Mark the messages `keys`, and say what is done with them.
     pub(super) fn mark(&mut self, keys: Vec<crate::index::Key>) {
         if keys.is_empty() {
@@ -32,7 +11,7 @@ impl App {
             return;
         }
         self.status = format!(
-            "{} marked: d trashes them, a archives them, u and s mark them, v lets them go",
+            "{} marked: d trashes them, e archives them, u and ! mark them, esc lets them go",
             keys.len()
         );
         self.map.region = Some(map::Region { keys });
@@ -88,10 +67,13 @@ impl App {
         true
     }
 
-    /// Move every message marked on the map to its account's Trash.
-    pub(super) fn region_trash(&mut self) -> bool {
+    /// Move every message marked on the map to its account's Trash; each
+    /// `teach` takes learnt as thrown away, as it was chosen alone.
+    pub(super) fn region_trash(&mut self, teach: &dyn Fn(&crate::index::Key) -> bool) -> bool {
         let dots = self.region_dots();
         let mut moved = 0;
+        let mut asked = Vec::new();
+        let mut taught = Vec::new();
         for d in &dots {
             let Some(listed) = self.listed_dot(d) else {
                 continue;
@@ -100,9 +82,19 @@ impl App {
                 continue;
             };
             let s = listed.summary;
-            self.move_to_trash(listed.account, listed.folder, s.uid, s.message_id, trash);
+            asked.push((listed.account, listed.folder.clone(), s.uid));
+            let teach = teach(&d.key);
+            if teach {
+                taught.push(d.key.clone());
+            }
+            if teach {
+                self.move_to_trash(listed.account, listed.folder, s.uid, s.message_id, trash);
+            } else {
+                self.trash_quietly(listed.account, listed.folder, s.uid, s.message_id, trash);
+            }
             moved += 1;
         }
+        self.remember_trashing(asked, taught);
         self.map.region = None;
         self.status = if moved < dots.len() {
             format!(
@@ -110,14 +102,14 @@ impl App {
                 dots.len()
             )
         } else {
-            format!("{moved} moved to Trash · d there puts one back, for 7 days")
+            format!("{moved} moved to Trash · C-x u puts them back")
         };
         true
     }
 
     /// Take every message marked on the map that is in the Inbox out of it,
-    /// given no label.
-    pub(super) fn region_archive(&mut self) -> bool {
+    /// given no label; learnt as kept if `teach`, as each was chosen alone.
+    pub(super) fn region_archive(&mut self, teach: bool) -> bool {
         let dots = self.region_dots();
         let mut archived = 0;
         // Archived, they are kept: learnt as not thrown away.
@@ -126,7 +118,9 @@ impl App {
             .filter(|d| d.system.inbox)
             .map(|d| d.key.clone())
             .collect();
-        self.teach(&keys, false);
+        if teach {
+            self.teach(&keys, false);
+        }
         for d in dots.iter().filter(|d| d.system.inbox) {
             let Some((a, folder, uid)) = self.place_of(d) else {
                 continue;

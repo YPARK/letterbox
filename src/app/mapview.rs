@@ -34,6 +34,26 @@ impl App {
             self.relayout();
             return true;
         }
+        // The map is looked at: what moves mail, or marks it to, is done
+        // down at a message in a cluster's tree, reading it, or in the
+        // Inbox looked through; never on the clusters, where a key is so
+        // easily pressed on the wrong one.
+        let moves = matches!(
+            act,
+            Act::Trash
+                | Act::Archive
+                | Act::Move
+                | Act::NewLabel
+                | Act::FileFirst
+                | Act::FileAll
+                | Act::NotIt
+                | Act::Mark
+        );
+        let now = jiff::Timestamp::now().as_second();
+        if moves && self.map.moving.is_none() && (act == Act::Mark || !self.map.at_message(now)) {
+            self.status = "the map is looked at: ⏎ goes down to a message, or i looks through the Inbox, to act on mail".to_string();
+            return true;
+        }
         if self.map.moving.is_some() {
             match act {
                 Act::Open => {
@@ -151,8 +171,8 @@ impl App {
             match act {
                 Act::Seen => return self.region_flag(Flag::Seen),
                 Act::Flag => return self.region_flag(Flag::Flagged),
-                Act::Trash => return self.region_trash(),
-                Act::Archive => return self.region_archive(),
+                Act::Trash => return self.ask_bulk(BulkAct::Trash),
+                Act::Archive => return self.ask_bulk(BulkAct::Archive),
                 Act::Back => {
                     self.map.region = None;
                     self.status = "let go".to_string();
@@ -173,7 +193,7 @@ impl App {
             Act::Archive => {
                 if let Some(dot) = self.dot() {
                     self.mark(vec![dot.key]);
-                    self.region_archive();
+                    self.region_archive(true);
                 }
             }
             Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,

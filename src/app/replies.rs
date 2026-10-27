@@ -548,14 +548,16 @@ impl App {
                         }
                         if trashed {
                             let at = jiff::Timestamp::now().as_second();
-                            if let Err(e) = self.ledger.record(Entry {
+                            let entry = Entry {
                                 account: email,
                                 message_id,
                                 folder: to.clone(),
                                 uid: new_uid,
                                 origin: from.clone(),
                                 at,
-                            }) {
+                            };
+                            self.trashing_answered(a, &from, uid, Some(entry.clone()));
+                            if let Err(e) = self.ledger.record(entry) {
                                 self.status = format!("moved to Trash, and not recorded: {e:#}");
                             }
                         } else {
@@ -568,6 +570,9 @@ impl App {
                         self.map_pass(a);
                     }
                     Err(e) => {
+                        if trashed {
+                            self.trashing_answered(a, &from, uid, None);
+                        }
                         self.status = format!("cannot move it: {}", first_line(&e));
                         self.reload(a);
                     }
@@ -578,23 +583,6 @@ impl App {
                     uid,
                     result.as_ref().map(|_| ()).map_err(String::as_str),
                 );
-            }
-            Answer::Expunged {
-                folder,
-                uid,
-                result,
-            } => {
-                let email = self.accounts[a].email.clone();
-                self.purging.remove(&(email.clone(), folder.clone(), uid));
-                match result {
-                    Ok(Removal::Gone) => {
-                        self.forget_trashed(&email, &folder, uid);
-                        self.drop_listed(a, &folder, uid);
-                        self.ask(a, Ask::Count(folder));
-                    }
-                    Ok(Removal::Missing) => self.forget_trashed(&email, &folder, uid),
-                    Err(e) => self.status = format!("cannot remove it: {}", first_line(&e)),
-                }
             }
             Answer::Sent { said, answer } => {
                 if let Some(compose) = &mut self.compose {

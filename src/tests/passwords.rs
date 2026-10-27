@@ -286,11 +286,13 @@ fn mail_not_yet_filed_is_said_where_it_would_go_and_filed_there() {
     // Y: the rest that would go there marked, and, again, filed.
     let rest = would(&app, &s);
     assert!(rest.len() >= 2, "{}", rest.len());
-    app.map.cursor = Some(s.dots[rest[0]].key.clone());
+    super::mapsafety::down_to(&mut app, &s.dots[rest[0]].key.clone());
     press(&mut app, &["Y"]);
-    assert_eq!(app.map.region.as_ref().unwrap().keys.len(), rest.len());
-    assert!(app.status.contains("marked"), "{}", app.status);
-    press(&mut app, &["Y"]);
+    let app::Dialog::Bulk(bulk) = &app.dialog else {
+        panic!("asked: {}", app.status);
+    };
+    assert_eq!(bulk.keys.len(), rest.len());
+    press(&mut app, &["y"]);
     for &i in &rest {
         let (labels, _) = dot_labels(&app, &s.dots[i].subject);
         assert!(labels.contains(&label), "{}: {labels:?}", s.dots[i].subject);

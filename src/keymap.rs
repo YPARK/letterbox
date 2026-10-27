@@ -45,6 +45,7 @@ pub enum Act {
     Present,
     /// What was thrown away on its own, and why.
     Debrief,
+    Junk,
     /// The papers the message read tells of, to put in paperstack.
     Papers,
     /// The message read as its pages, or as its text again.
@@ -227,7 +228,7 @@ pub const KEYS: &[Binding] = &[
         name: "space b C-v M-v",
         hint: "␣",
         foot: &[(Reader, "page"), (List, "select"), (Reviewing, "keep")],
-        help: "a page down, or up, in the message; in the list, space marks the message picked and goes on, as v; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
+        help: "a page down, or up, in the message; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
         keys: &[("n", NextMessage), ("p", PreviousMessage)],
@@ -260,7 +261,7 @@ pub const KEYS: &[Binding] = &[
             (Map, "trash"),
             (Reviewing, "discard"),
         ],
-        help: "move to Trash; in Trash, put it back. If the server marks no Trash folder, you say which one. Kept for 7 days",
+        help: "move to Trash; in Trash, put it back. Several: asked first, the Inbox's and yours sent left out unless i or s takes them. Never removed for good",
     },
     Binding {
         keys: &[("c", Compose)],
@@ -348,7 +349,14 @@ pub const KEYS: &[Binding] = &[
         name: "B",
         hint: "B",
         foot: &[],
-        help: "what was thrown away on its own in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. Told of as letterbox opens too",
+        help: "what was thrown away as junk in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. Told of as letterbox opens too",
+    },
+    Binding {
+        keys: &[("J", Junk)],
+        name: "J",
+        hint: "J",
+        foot: &[],
+        help: "the new mail that looks like junk, with the auto filter on, each, how sure, and why: space chooses one, d throws those chosen away, n says it is not junk, i looks through the Inbox",
     },
     Binding {
         keys: &[("O", Present)],
@@ -362,7 +370,7 @@ pub const KEYS: &[Binding] = &[
         name: "e",
         hint: "e",
         foot: &[(List, "archive"), (Reader, "archive"), (Map, "archive")],
-        help: "archive it: out of the Inbox, to Archive; in the map, it or what is marked",
+        help: "archive it: out of the Inbox, to Archive; several, asked first",
     },
     Binding {
         keys: &[("esc", Back), ("C-g", Back)],
@@ -447,7 +455,7 @@ pub const KEYS: &[Binding] = &[
         name: "m",
         hint: "m",
         foot: &[(Map, "move to"), (Reviewing, "move to")],
-        help: "in the map, move the message picked, or what is marked, onto a cluster or a label: then ⏎ on one, or a click on its anchor. It is given the label and taken out of the Inbox",
+        help: "move it onto a cluster or a label: ⏎ on one, or a click on its anchor; given the label, out of the Inbox. Several, asked first",
     },
     Binding {
         keys: &[("N", NewLabel)],
@@ -461,7 +469,7 @@ pub const KEYS: &[Binding] = &[
         name: "y Y -",
         hint: "y/Y",
         foot: &[(Reviewing, "as suggested")],
-        help: "a message not yet filed, filed where it would go, or, Y, all like it, marked first; once filed, the label's first suggestion filed too, or all of them; - says it is not one, and the map learns it",
+        help: "a message not yet filed, filed where it would go, or, Y, all like it, asked first; once filed, the label's first suggestion too, or all; - says it is not one, and the map learns it",
     },
     Binding {
         keys: &[("M-r", Relayout)],
@@ -502,8 +510,8 @@ pub const KEYS: &[Binding] = &[
         keys: &[("v", Mark)],
         name: "v",
         hint: "v",
-        foot: &[(Map, "mark")],
-        help: "in the map, mark the cluster of the message picked, its block boxed; in the list, mark the message picked, or let it go, as space does; m, d, e, u and ! then act on all of it, and esc lets it go",
+        foot: &[],
+        help: "selects nothing: select with the mouse, dragged over rows, Ctrl and a click for one, Shift and a click as far as one; S-↑ S-↓ too. On the map, nothing",
     },
     Binding {
         keys: &[("S-down", MarkDown), ("S-up", MarkUp)],
@@ -630,6 +638,14 @@ pub const KEYS: &[Binding] = &[
             (Map, "help"),
         ],
         help: "all the keys",
+    },
+    Binding {
+        // A chord the app reads itself, as C-x C-c is.
+        keys: &[],
+        name: "C-x u",
+        hint: "C-x u",
+        foot: &[],
+        help: "put back what was last trashed together, each where it was, and what it taught taken back",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too

@@ -164,6 +164,10 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
         .collect()
 }
 
+/// What `v` says: several are selected with the mouse.
+pub(super) const SELECT_BY_MOUSE: &str =
+    "select with the mouse: drag over rows, or Ctrl and a click on one; S-↑↓ too";
+
 impl App {
     pub fn key(&mut self, key: KeyEvent) {
         let key = capital(key);
@@ -185,6 +189,8 @@ impl App {
         if std::mem::take(&mut self.c_x) {
             if ctrl && key.code == KeyCode::Char('c') {
                 self.quit = true;
+            } else if !ctrl && key.code == KeyCode::Char('u') {
+                self.undo_last();
             } else {
                 self.status = format!("{} quits", keymap::QUIT);
             }
@@ -357,10 +363,6 @@ impl App {
             },
             Act::Down => self.step(1),
             Act::Up => self.step(-1),
-            // In the list, space marks the one picked and goes on, as v.
-            Act::ScreenDown if self.map.mode == Mode::List && self.focus == Focus::List => {
-                self.list_mark()
-            }
             Act::MarkDown | Act::MarkUp
                 if self.map.mode == Mode::List && self.focus == Focus::List =>
             {
@@ -391,8 +393,9 @@ impl App {
             | Act::ShowSent
             | Act::Unfiled => self.view(act),
             Act::View if self.map.mode == Mode::Map => self.dialog = Dialog::View,
-            Act::Mark if self.map.mode == Mode::List => self.list_mark(),
-            Act::Mark => self.mark_cluster(),
+            // Several are selected with the mouse, never by a key pressed
+            // alone: one is too easily pressed on the wrong one.
+            Act::Mark => self.status = SELECT_BY_MOUSE.to_string(),
             // Elsewhere, Shift and the arrows move, as the arrows do.
             Act::MarkDown => self.step(1),
             Act::MarkUp => self.step(-1),
@@ -434,6 +437,7 @@ impl App {
                 self.pick_save_dir(true);
             }
             Act::Debrief => self.debrief(),
+            Act::Junk => self.show_junk(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),
             Act::Present => self.present(),
@@ -475,6 +479,20 @@ impl App {
                     self.menu = None;
                     return;
                 }
+                // A row of the list or of the Inbox looked through: Ctrl
+                // and a click add it or take it away, Shift and a click
+                // select as far as it; pressed on, it may be dragged over.
+                if let Some(row @ (Target::Message(_) | Target::ReviewRow(_))) = at
+                    && !self.dialog.is_open()
+                {
+                    if m.modifiers.contains(KeyModifiers::CONTROL) {
+                        return self.select_one(row);
+                    }
+                    if m.modifiers.contains(KeyModifiers::SHIFT) {
+                        return self.select_as_far_as(row);
+                    }
+                    self.dragged_from = Some(row);
+                }
                 return self.click(at);
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
@@ -484,6 +502,25 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {
                 self.resizing = false;
                 self.remember_look();
+                return;
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let (Some(from), Some(to)) = (self.dragged_from, at) {
+                    self.select_between(from, to);
+                }
+                return;
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragged_from = None;
+                return;
+            }
+            // A right-click on a cluster's anchor: what may be done with it.
+            MouseEventKind::Down(MouseButton::Right) => {
+                if let Some(Target::Anchor(id)) = at
+                    && !self.dialog.is_open()
+                {
+                    self.cluster_menu(id);
+                }
                 return;
             }
             MouseEventKind::ScrollDown => 1,

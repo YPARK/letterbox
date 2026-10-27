@@ -103,7 +103,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
-                // Thrown away on its own, unless turned off: told of first.
+                // What looks like junk asked about, unless turned off: told of first.
                 let path = args.config.with_file_name("filter");
                 let now = jiff::Timestamp::now().as_second();
                 app.auto =
@@ -256,6 +256,25 @@ fn command(args: &Args) -> anyhow::Result<()> {
             println!("\n{}", m.text);
             Ok(())
         }
+        Some(Command::Trash {
+            action:
+                TrashAction::Restore {
+                    since,
+                    until,
+                    account,
+                    origin,
+                    dry_run,
+                    yes,
+                },
+        }) => restore_trash(
+            args,
+            when(since)?,
+            until.as_deref().map(when).transpose()?,
+            account.as_deref(),
+            origin,
+            *dry_run,
+            *yes,
+        ),
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
         Some(Command::Filter {
             action: FilterAction::Auto { state },
@@ -269,9 +288,9 @@ fn command(args: &Args) -> anyhow::Result<()> {
             println!(
                 "{}",
                 if on {
-                    "new mail it is 95% sure of is thrown away on its own: told of as letterbox opens, and by B"
+                    "new mail it is 95% sure is junk is asked about as it comes: nothing is thrown away unless you choose it"
                 } else {
-                    "nothing is thrown away on its own"
+                    "new mail is not asked about"
                 }
             );
             Ok(())
@@ -288,18 +307,45 @@ fn command(args: &Args) -> anyhow::Result<()> {
             let mut index = open_index(args)?;
             // Learnt or forgotten while letterbox is open, what either
             // writes would be lost.
-            if matches!(action, FilterAction::Learn { .. } | FilterAction::Forget)
-                && !args.demo
+            if matches!(
+                action,
+                FilterAction::Learn { .. } | FilterAction::Forget { .. }
+            ) && !args.demo
                 && !index.writes()
             {
                 bail!(
                     "letterbox is open, and writes what is learnt: close it, then run this again"
                 );
             }
-            if let FilterAction::Forget = action {
-                let n = index.unseed()?;
-                index.flush()?;
-                println!("{n} read from the Trash and your labels, forgotten\n");
+            if let FilterAction::Forget { since, until, yes } = action {
+                match since {
+                    Some(since) => {
+                        let since = when(since)?;
+                        let until = match until {
+                            Some(u) => when(u)?,
+                            None => jiff::Timestamp::now().as_second(),
+                        };
+                        // Said first, how many, and asked: what is
+                        // forgotten is not had again.
+                        let n = index.unteach_count(since, until);
+                        println!("{n} learnt as thrown away by your own decisions then");
+                        if n == 0 {
+                            println!("nothing to forget\n");
+                        } else if *yes || ask("forget them? y or n", "n")?.eq_ignore_ascii_case("y")
+                        {
+                            let n = index.unteach(since, until)?;
+                            index.flush()?;
+                            println!("{n} forgotten\n");
+                        } else {
+                            println!("nothing forgotten\n");
+                        }
+                    }
+                    None => {
+                        let n = index.unseed()?;
+                        index.flush()?;
+                        println!("{n} read from the Trash and your labels, forgotten\n");
+                    }
+                }
             }
             if let FilterAction::Learn { limit } = action {
                 let now = jiff::Timestamp::now().as_second();

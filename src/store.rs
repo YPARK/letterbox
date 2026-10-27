@@ -20,15 +20,6 @@ impl Flag {
     }
 }
 
-/// What became of a message asked to be removed for good.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Removal {
-    /// It was removed.
-    Gone,
-    /// It was not in the folder.
-    Missing,
-}
-
 /// Some of a folder's messages, newest first, and how many it holds.
 #[derive(Clone, Debug, Default)]
 pub struct Page {
@@ -88,8 +79,6 @@ pub trait Store: Send {
     /// UID could not be told, so nothing should be recorded of it.
     fn relocate(&mut self, from: &str, uid: u32, to: &str, message_id: &str)
     -> anyhow::Result<u32>;
-    /// Remove the message `uid` from `folder`, for good.
-    fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal>;
     /// The folder this account keeps as Trash, when one was chosen.
     fn trash(&self) -> Option<&str> {
         None

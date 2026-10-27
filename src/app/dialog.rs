@@ -97,6 +97,22 @@ pub enum Dialog {
     Apply(Box<Plan>),
     /// How what was asked of the servers went, once it all settled.
     Applied(Box<Applied>),
+    /// Whether to trash or archive what is marked, all of it together.
+    Bulk(Box<Bulk>),
+    /// New mail letterbox is sure is junk, listed to choose from.
+    Junk(JunkPick),
+    /// What may be done with a cluster, by a right-click on its anchor.
+    ClusterMenu {
+        id: u32,
+    },
+    /// Whether to rename a label: from, to, how many carry it, and on
+    /// which accounts.
+    ConfirmRename {
+        old: String,
+        new: String,
+        count: usize,
+        accounts: Vec<String>,
+    },
 }
 
 /// How what was asked of the servers went: how many were confirmed, and
@@ -269,7 +285,7 @@ impl App {
                 KeyCode::Enter => {
                     let (old, typed) = (std::mem::take(old), std::mem::take(typed));
                     self.dialog = Dialog::Closed;
-                    self.rename_label(&old, typed.trim());
+                    self.confirm_rename(&old, typed.trim());
                 }
                 _ => {
                     edit_line(typed, key);
@@ -280,6 +296,10 @@ impl App {
                 self.dialog = Dialog::Closed;
                 self.say_settled();
             }
+            Dialog::Bulk(_) => self.bulk_key(key),
+            Dialog::Junk(_) => self.junk_key(key),
+            Dialog::ClusterMenu { .. } => self.cluster_menu_key(key),
+            Dialog::ConfirmRename { .. } => self.confirm_rename_key(key),
             Dialog::Apply(_) => {
                 let Dialog::Apply(plan) = std::mem::take(&mut self.dialog) else {
                     unreachable!()
@@ -395,6 +415,11 @@ impl App {
                 self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             }
             (Dialog::Apply(_), _) => {}
+            // Asked by its keys alone: a click on it does nothing, away
+            // from it, nothing is done.
+            (Dialog::Bulk(_), _) => {}
+            (Dialog::Junk(_), _) => {}
+            (Dialog::ClusterMenu { .. } | Dialog::ConfirmRename { .. }, _) => {}
             (Dialog::Applied(_), _) => {
                 self.dialog = Dialog::Closed;
                 self.say_settled();
