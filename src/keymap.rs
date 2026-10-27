@@ -283,7 +283,7 @@ pub const KEYS: &[Binding] = &[
     },
     Binding {
         keys: &[("f", Forward)],
-        name: "f C-f",
+        name: "f",
         hint: "f",
         foot: &[(List, "forward"), (Reader, "forward")],
         help: "forward it, its files with it",
@@ -325,7 +325,7 @@ pub const KEYS: &[Binding] = &[
         name: "S",
         hint: "S",
         foot: &[(Reader, "save")],
-        help: "save the message read's attachments: ⏎ the one picked, a all of them, into a folder picked as files to attach are, begun where the last was saved, else in Downloads: ⏎ goes into a folder, and on . saves there, a name typed that no folder has made. The one picked is named first: its name but the extension picked, typed over, ← → to edit it, ⏎ to keep it",
+        help: "save the message read's attachments: ⏎ the one picked, a all of them. Then the folder, begun where you last saved, else in Downloads: ⏎ goes into a folder, and on . saves there; a name typed that no folder has is made. Then, for one, its name, all but the extension picked to type over: ← → edit it, ⏎ keeps it, esc goes back",
     },
     Binding {
         keys: &[("V", Pages)],
