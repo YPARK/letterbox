@@ -1,4 +1,4 @@
-//! A message's files and links: opened, presented, or saved.
+//! A message's files and links: opened or presented; saved, in `saving`.
 use super::*;
 
 /// The message's attachments and links, listed to open, the one picked,
@@ -7,14 +7,8 @@ pub struct Files {
     pub items: Vec<Item>,
     pub at: usize,
     pub note: Option<String>,
-}
-
-/// The folder to save the message's files in, being picked: all of them,
-/// or the one picked in the files listed, which are shown again after.
-pub struct SaveTo {
-    pub picker: crate::pick::Picker,
-    pub files: Files,
-    pub all: bool,
+    /// Its attachments alone, listed to save, not to open.
+    pub saving: bool,
 }
 
 /// Whether ohp presents a file of this name: PDFs, and markdown and R
@@ -185,14 +179,6 @@ pub(super) fn safe_name(name: &str) -> String {
     }
 }
 
-/// Save `bytes`, an attachment named `name`, in `dir`, made if it is not
-/// there, under a name not yet taken there; and where it was saved.
-fn save_one(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    let path = unused(dir, &safe_name(name));
-    std::fs::create_dir_all(dir).and_then(|_| write_new(&path, bytes))?;
-    Ok(path)
-}
-
 /// `dir/name`, or `dir/name (2)`, and so on, the first not there yet.
 pub(super) fn unused(dir: &std::path::Path, name: &str) -> PathBuf {
     let path = dir.join(name);
@@ -256,6 +242,7 @@ impl App {
             items,
             at,
             note: None,
+            saving: false,
         });
     }
 
@@ -263,6 +250,9 @@ impl App {
         let Some(files) = self.dialog.files_mut() else {
             return;
         };
+        if files.saving {
+            return self.save_list_key(key);
+        }
         match (keymap::act(key), key.code) {
             (Some(Act::Down), _) => self.dialog.step(1),
             (Some(Act::Up), _) => self.dialog.step(-1),
@@ -335,101 +325,5 @@ impl App {
             },
             None => {}
         }
-    }
-
-    /// Pick the folder to save in, the files listed put by till it is:
-    /// begun where the last was saved, else in the downloads folder.
-    fn pick_save_dir(&mut self, all: bool) {
-        let Dialog::Files(files) = std::mem::take(&mut self.dialog) else {
-            return;
-        };
-        let dir = start_dir(self.save_dir.clone());
-        self.dialog = Dialog::SaveTo(Box::new(SaveTo {
-            picker: crate::pick::Picker::folder(dir),
-            files,
-            all,
-        }));
-    }
-
-    /// A key while the folder to save in is picked.
-    pub(super) fn save_to_key(&mut self, key: KeyEvent) {
-        let Dialog::SaveTo(s) = &mut self.dialog else {
-            return;
-        };
-        let picked = s.picker.key(key);
-        self.saved_to(picked);
-    }
-
-    /// What came of picking the folder to save in: the files listed again,
-    /// and the one picked saved there; or all of them, and closed.
-    pub(super) fn saved_to(&mut self, picked: crate::pick::Picked) {
-        use crate::pick::Picked;
-        let dir = match picked {
-            Picked::Stay => return,
-            Picked::Cancel => None,
-            Picked::Folder(dir) => Some(dir),
-            Picked::Take(_) => return,
-        };
-        let Dialog::SaveTo(s) = std::mem::take(&mut self.dialog) else {
-            return;
-        };
-        let SaveTo { files, all, .. } = *s;
-        let Some(dir) = dir else {
-            self.dialog = Dialog::Files(files);
-            return;
-        };
-        let saved = if all {
-            self.save_attachments(&dir)
-        } else {
-            self.dialog = Dialog::Files(files);
-            self.save_item(&dir)
-        };
-        // Begun in next only once something was saved there.
-        if saved {
-            self.save_dir = Some(dir);
-        }
-    }
-
-    /// Save the attachment picked in `dir`; whether it was.
-    fn save_item(&mut self, dir: &std::path::Path) -> bool {
-        let m = self.message().cloned();
-        let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
-            return false;
-        };
-        let Some(Item::File { at, name, .. }) = files.items.get(files.at).cloned() else {
-            return false;
-        };
-        let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
-            return false;
-        };
-        let saved = save_one(dir, &name, &bytes);
-        files.note = Some(match &saved {
-            Ok(path) => format!("saved {}", tilde(path)),
-            Err(e) => format!("cannot save {name}: {e}"),
-        });
-        saved.is_ok()
-    }
-
-    /// Save the message's attachments in `dir`; whether any were.
-    fn save_attachments(&mut self, dir: &std::path::Path) -> bool {
-        let Some(m) = self.message().cloned() else {
-            return false;
-        };
-        let mut saved = Vec::new();
-        for (Attachment { name, .. }, bytes) in mail::attachments(&m.raw) {
-            match save_one(dir, &name, &bytes) {
-                Ok(path) => saved.push(
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                ),
-                Err(e) => {
-                    self.status = format!("cannot save {name}: {e}");
-                    return !saved.is_empty();
-                }
-            }
-        }
-        self.status = format!("saved to {}: {}", tilde(dir), saved.join(", "));
-        true
     }
 }

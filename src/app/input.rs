@@ -428,6 +428,7 @@ impl App {
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
+            Act::Save => self.list_to_save(),
             Act::Debrief => self.debrief(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),

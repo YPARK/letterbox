@@ -37,6 +37,8 @@ pub enum Act {
     ReplyAll,
     Forward,
     Files,
+    /// The message read's attachments, to save.
+    Save,
     /// The message read, presented by ohp.
     Present,
     /// What was thrown away on its own, and why.
@@ -116,6 +118,8 @@ pub enum Pane {
     Attaching,
     /// Picking the folder to save the message's files in.
     Saving,
+    /// Naming the file to save.
+    Naming,
     /// The map's view, being changed.
     Viewing,
     /// The map, in the middle pane.
@@ -142,7 +146,8 @@ pub struct Binding {
 
 use Act::*;
 use Pane::{
-    Attaching, List, Map, Picking, Reader, Review as Reviewing, Saving, Side, Viewing, Writing,
+    Attaching, List, Map, Naming, Picking, Reader, Review as Reviewing, Saving, Side, Viewing,
+    Writing,
 };
 
 /// What the map's view menu changes, by the key that changes it there.
@@ -168,6 +173,7 @@ pub const KEYS: &[Binding] = &[
             (Map, "read"),
             (Attaching, "attach"),
             (Saving, "into · on . save"),
+            (Naming, "save"),
             (Reviewing, "read"),
         ],
         help: "open the folder, or read the message",
@@ -312,7 +318,14 @@ pub const KEYS: &[Binding] = &[
         name: "o",
         hint: "o",
         foot: &[(Reader, "open")],
-        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s saves the one picked in a folder picked as files to attach are, begun where the last was saved, else in Downloads: ⏎ goes into a folder, and on . saves there; S saves all its files",
+        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as S does",
+    },
+    Binding {
+        keys: &[("S", Save)],
+        name: "S",
+        hint: "S",
+        foot: &[(Reader, "save")],
+        help: "save the message read's attachments: ⏎ the one picked, a all of them, into a folder picked as files to attach are, begun where the last was saved, else in Downloads: ⏎ goes into a folder, and on . saves there, a name typed that no folder has made. The one picked is named first: its name but the extension picked, typed over, ← → to edit it, ⏎ to keep it",
     },
     Binding {
         keys: &[("V", Pages)],
@@ -358,6 +371,7 @@ pub const KEYS: &[Binding] = &[
             (Picking, "cancel"),
             (Attaching, "cancel"),
             (Saving, "cancel"),
+            (Naming, "back"),
             (Viewing, "close"),
         ],
         help: "back to the list; clear the search; out of a cluster gone into, a level. C-g too, as Emacs has it",
