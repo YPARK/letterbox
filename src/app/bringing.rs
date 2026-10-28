@@ -80,6 +80,11 @@ impl App {
             },
         );
         self.status = format!("moving it to {name} · {}…", self.accounts[to].name);
+        // Brought, as the key asks; its copy and its trashing follow the
+        // servers' answers. C-x u does not bring it back, and says so.
+        if !self.quiet_moves && !self.replying {
+            self.remember(super::undoing::Noted::Elsewhere);
+        }
         self.ask(a, Ask::Raw { folder: from, uid });
     }
 

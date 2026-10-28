@@ -106,3 +106,55 @@ fn c_x_u_before_the_server_has_answered_says_so_and_puts_it_back_after() {
     undo(&mut app);
     assert!(in_inbox(&app, AIMS), "back: {}", app.status);
 }
+
+#[test]
+fn what_was_put_back_from_trash_is_not_trashed_again_by_c_x_u() {
+    let mut app = demo();
+    let subject = app.shown[0].summary.subject.clone();
+    press(&mut app, &["d"]);
+    // Trash listed, and d there puts it back.
+    press(&mut app, &["h", "j", "j", "j", "j", "j"]);
+    assert_eq!(app.folder_name(), "Trash");
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject == subject)
+        .expect("in Trash");
+    app.list.select(Some(at));
+    press(&mut app, &["l", "d"]);
+    assert!(app.status.contains("put back"), "{}", app.status);
+    // C-x u: nothing of the putting back is undone into Trash again.
+    press(&mut app, &["<c-x>", "u"]);
+    app.settle(Duration::from_secs(5));
+    assert!(
+        app.shown.iter().all(|l| l.summary.subject != subject),
+        "not in Trash again: {}",
+        app.status
+    );
+    assert!(app.status.contains("nothing"), "{}", app.status);
+}
+
+#[test]
+fn what_was_brought_to_another_account_is_not_left_in_both_by_c_x_u() {
+    use super::moving::{choose_elsewhere, pick_notes, two_demos};
+    let (mut app, home, work) = two_demos();
+    let (id, from) = pick_notes(&mut app);
+    let to = 1 - from;
+    let mut stores = [home, work];
+    press(&mut app, &["m", "grant"]);
+    choose_elsewhere(&mut app, to, "Projects/Grant");
+    assert!(stores[from].holds("Trash", &id).unwrap());
+    press(&mut app, &["<c-x>", "u"]);
+    app.settle(Duration::from_secs(5));
+    // The original stays in its Trash: never in both accounts at once.
+    assert!(
+        !stores[from].holds("INBOX", &id).unwrap(),
+        "not back in its Inbox: {}",
+        app.status
+    );
+    assert!(
+        app.status.contains("another account"),
+        "said: {}",
+        app.status
+    );
+}

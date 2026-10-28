@@ -167,7 +167,15 @@ impl App {
         self.dialog = Dialog::Applied(Box::new(Applied { said, failed }));
     }
 
+    /// Take a server's answer: what it asks in turn is not remembered for
+    /// C-x u, as it follows the answer, not a key.
     pub(super) fn take_reply(&mut self, reply: Reply) {
+        let was = std::mem::replace(&mut self.replying, true);
+        self.answer_reply(reply);
+        self.replying = was;
+    }
+
+    fn answer_reply(&mut self, reply: Reply) {
         let a = reply.account;
         // How to sign in comes while signing in, not in answer to an ask.
         if let Answer::Waiting(waiting) = reply.answer {

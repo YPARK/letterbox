@@ -27,6 +27,8 @@ pub(super) struct Before {
     answered: bool,
     /// Where it landed, as its server said: a move's, or a filing's.
     landed: Option<(String, u32)>,
+    /// The label it was filed under, if it was.
+    filed: Option<String>,
     /// The map's looks at its account since it was answered.
     passes: u8,
 }
@@ -42,9 +44,27 @@ pub struct Moves {
     elsewhere: usize,
 }
 
-/// The message an ask moves, if it moves one: the folder and UID it is
-/// moved from, its `Message-ID`, and its key, if the ask says.
-fn moved_from(ask: &Ask) -> Option<(&str, u32, &str, Option<&Key>)> {
+/// What was noted of a move asked, before it went.
+pub(super) enum Noted {
+    Before(Box<Before>),
+    /// Not known to the map: not to be put back.
+    Unknown,
+    /// Brought to another account: not put back by C-x u.
+    Elsewhere,
+}
+
+/// The message an ask moves: the folder and UID it is moved from, its
+/// `Message-ID`, its key if the ask says, and the label it is filed under.
+struct Asked<'a> {
+    folder: &'a str,
+    uid: u32,
+    message_id: &'a str,
+    key: Option<&'a Key>,
+    label: Option<&'a str>,
+}
+
+/// What `ask` moves, if it moves a message.
+fn moved_from(ask: &Ask) -> Option<Asked<'_>> {
     match ask {
         Ask::Move {
             from,
@@ -56,14 +76,27 @@ fn moved_from(ask: &Ask) -> Option<(&str, u32, &str, Option<&Key>)> {
             folder: from,
             uid,
             message_id,
-        } => Some((from, *uid, message_id, None)),
+        } => Some(Asked {
+            folder: from,
+            uid: *uid,
+            message_id,
+            key: None,
+            label: None,
+        }),
         Ask::File {
             folder,
             uid,
             message_id,
             key,
+            label,
             ..
-        } => Some((folder, *uid, message_id, Some(key))),
+        } => Some(Asked {
+            folder,
+            uid: *uid,
+            message_id,
+            key: Some(key),
+            label: Some(label),
+        }),
         _ => None,
     }
 }
@@ -88,52 +121,40 @@ fn less(a: &[String], b: &[String]) -> Vec<String> {
 }
 
 impl App {
-    /// Before `ask` goes, remember the message it moves as it is, for C-x
-    /// u: the first such of a key pressed begins what is remembered anew.
-    pub(super) fn remember_move(&mut self, account: usize, ask: &Ask) {
-        if self.quiet_moves {
-            return;
+    /// What `ask` moves, as it is before it goes, for C-x u: none if it
+    /// moves nothing, puts back, or follows a server's answer, not a key.
+    /// `key` is the message's, if already known.
+    pub(super) fn note_move(&self, account: usize, ask: &Ask, key: Option<Key>) -> Option<Noted> {
+        if self.quiet_moves || self.replying {
+            return None;
         }
-        let bring = matches!(ask, Ask::Bring { .. });
-        let moved = moved_from(ask);
-        if moved.is_none() && !bring {
-            return;
-        }
-        if !std::mem::replace(&mut self.moves_begun, true) {
-            self.undoable = Moves {
-                at: self.input_at,
-                ..Moves::default()
-            };
-            self.last = Some(Last::Moves);
-        }
-        let Some((folder, uid, message_id, key)) = moved else {
-            self.undoable.elsewhere += 1;
-            return;
-        };
-        let ident = self.accounts[account].ident.clone();
+        let Asked {
+            folder,
+            uid,
+            message_id,
+            key: asked,
+            label: filed,
+        } = moved_from(ask)?;
+        let ident = &self.accounts.get(account)?.ident;
         let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
         // By its key, else where it is, else its Message-ID: Gmail's are
         // known by where they are in All Mail, not the Inbox.
-        let record = key
-            .and_then(|k| index.records.get(k))
-            .or_else(|| {
-                index
-                    .key_at(&ident, folder, uid)
-                    .and_then(|k| index.records.get(&k))
-            })
+        let record = asked
+            .cloned()
+            .or(key)
+            .or_else(|| index.key_at(ident, folder, uid))
+            .and_then(|k| index.records.get(&k))
             .or_else(|| {
                 (!message_id.is_empty()).then_some(())?;
                 index
                     .records
                     .values()
-                    .find(|r| r.key.account == ident && r.message_id == message_id)
+                    .find(|r| &r.key.account == ident && r.message_id == message_id)
             });
         let Some(record) = record else {
-            drop(index);
-            self.undoable.unknown += 1;
-            return;
+            return Some(Noted::Unknown);
         };
-        let before = Before {
+        Some(Noted::Before(Box::new(Before {
             a: account,
             key: record.key.clone(),
             message_id: record.message_id.clone(),
@@ -153,10 +174,34 @@ impl App {
                 .unwrap_or_default(),
             answered: false,
             landed: None,
+            filed: filed.map(str::to_string),
             passes: 0,
-        };
-        drop(index);
-        self.undoable.before.push(before);
+        })))
+    }
+
+    /// Remember what was noted of a move asked: the first of a key pressed
+    /// begins what is remembered anew.
+    pub(super) fn remember(&mut self, noted: Noted) {
+        if !std::mem::replace(&mut self.moves_begun, true) {
+            self.undoable = Moves {
+                at: self.input_at,
+                ..Moves::default()
+            };
+            self.last = Some(Last::Moves);
+        }
+        match noted {
+            Noted::Before(b) => self.undoable.before.push(*b),
+            Noted::Unknown => self.undoable.unknown += 1,
+            Noted::Elsewhere => self.undoable.elsewhere += 1,
+        }
+    }
+
+    /// Mail put back from Trash: what was remembered is undone already.
+    pub(super) fn forget_moves(&mut self) {
+        self.undoable = Moves::default();
+        if self.last == Some(Last::Moves) {
+            self.last = None;
+        }
     }
 
     /// A move of what is remembered answered: where it landed, if its
@@ -219,7 +264,7 @@ impl App {
         }
         let mut asks: Vec<(usize, Ask)> = Vec::new();
         let mut kept: Vec<Kept> = Vec::new();
-        let mut done: Vec<Key> = Vec::new();
+        let mut done: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
         let mut waiting = Vec::new();
         let mut gone = 0;
         {
@@ -232,7 +277,10 @@ impl App {
                         r.places.iter().map(|p| (p.folder.clone(), p.uid)).collect();
                     places != b.places || r.server != b.server
                 }) || now_kept != b.kept;
-                let ready = b.answered && (b.landed.is_some() || changed || b.passes >= 2);
+                // Where its server said it landed is enough, but for what was
+                // filed: its labels are known only once the map looks again.
+                let told = b.landed.is_some() && b.filed.is_none();
+                let ready = b.answered && (told || changed || b.passes >= 2);
                 if !ready {
                     waiting.push(b);
                     continue;
@@ -251,16 +299,23 @@ impl App {
                         on: false,
                     });
                 }
+                if let Some(label) = &b.filed {
+                    kept.push(Kept::Settled {
+                        key: b.key.clone(),
+                        label: label.clone(),
+                    });
+                }
                 let back = self.put_back(&b, record);
                 if back.is_empty() && b.landed.is_none() && record.is_none() {
                     gone += 1;
                     continue;
                 }
                 asks.extend(back.into_iter().map(|ask| (b.a, ask)));
-                done.push(b.key.clone());
+                done.insert(b.key.clone());
             }
             drop(index);
         }
+        let mut faults = Vec::new();
         if !done.is_empty() {
             let at = moves.at;
             let forgotten = self
@@ -269,21 +324,24 @@ impl App {
                 .unwrap_or_else(|e| e.into_inner())
                 .forget_where(|t| !t.auto && t.at >= at && done.contains(&t.key));
             if let Err(e) = forgotten {
-                self.status = format!("cannot take back what was learnt: {e:#}");
+                faults.push(format!("what moving them taught is not taken back: {e:#}"));
             }
         }
         if !kept.is_empty() {
-            let _ = self
+            let kept = self
                 .index
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .keep(kept);
+            if let Err(e) = kept {
+                faults.push(format!(
+                    "the labels letterbox keeps are not put back: {e:#}"
+                ));
+            }
         }
-        self.quiet_moves = true;
         for (a, ask) in asks {
-            self.ask(a, ask);
+            self.ask_quietly(a, ask);
         }
-        self.quiet_moves = false;
         let mut said = match done.len() {
             1 => "1 put back as it was".to_string(),
             n => format!("{n} put back as they were"),
@@ -305,6 +363,9 @@ impl App {
                 " · {} brought to another account are left there",
                 moves.elsewhere
             ));
+        }
+        for fault in faults {
+            said.push_str(&format!(" · {fault}"));
         }
         self.status = said;
         if !waiting.is_empty() {
@@ -349,6 +410,16 @@ impl App {
             on,
         };
         let mut asks = Vec::new();
+        if gmail && b.landed.is_some() {
+            // Out of Gmail's Trash, its labels are given back where it is
+            // first, as Trash took them off; then it is moved back.
+            let was = gmail_labels(&[], &b.server, &inbox);
+            asks.extend(
+                was.into_iter()
+                    .filter(|l| l != "\\Inbox")
+                    .map(|l| relabel(Some(l), None)),
+            );
+        }
         if gmail && b.landed.is_none() {
             // On Gmail, where a message is is its labels: given back first,
             // then taken off, so that it is never without them all.

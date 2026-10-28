@@ -280,7 +280,8 @@ impl App {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .put_back(&t.key.account, &t.message_id);
-            self.ask(
+            self.forget_moves();
+            self.ask_quietly(
                 a,
                 Ask::Move {
                     from: e.folder,

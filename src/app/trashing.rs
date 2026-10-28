@@ -95,7 +95,8 @@ impl App {
             } else {
                 format!("put back in {name}; letterbox had not moved it")
             };
-            self.ask(
+            self.forget_moves();
+            self.ask_quietly(
                 account,
                 Ask::Move {
                     from: folder,

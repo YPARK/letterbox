@@ -130,8 +130,8 @@ impl App {
         }
     }
 
-    /// C-x u: undo what was done last, a label renamed or mail trashed
-    /// together.
+    /// C-x u: undo what was done last: mail moved, however, or a label
+    /// renamed, split or removed.
     pub(super) fn undo_last(&mut self) {
         match self.last.take() {
             Some(Last::Rename(old, new)) => {

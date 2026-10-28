@@ -317,6 +317,9 @@ pub struct App {
     moves_begun: bool,
     /// Moves not to remember: those that put back.
     quiet_moves: bool,
+    /// A server's answer is taken: what it asks follows it, not a key, and
+    /// is not remembered for C-x u.
+    replying: bool,
     /// When the key pressed last was, in seconds since 1970.
     input_at: i64,
     /// How long a message sent is held, to be taken back.
@@ -625,6 +628,7 @@ impl App {
             undoable: undoing::Moves::default(),
             moves_begun: false,
             quiet_moves: false,
+            replying: false,
             input_at: 0,
             changing: 0,
             quitting: false,
@@ -726,11 +730,13 @@ impl App {
     }
 
     fn ask(&mut self, account: usize, ask: Ask) {
-        if let Some(job) = self.job_of(account, &ask) {
+        let job = self.job_of(account, &ask);
+        // As it is before it goes, for C-x u: remembered once it is sent.
+        let noted = self.note_move(account, &ask, job.as_ref().and_then(|j| j.key.clone()));
+        if let Some(job) = job {
             self.batch.ask(job);
         }
         let changes = ask.changes_mail();
-        self.remember_move(account, &ask);
         let sent = self.accounts[account]
             .asks
             .as_ref()
@@ -738,6 +744,9 @@ impl App {
         if sent {
             self.pending += 1;
             self.changing += usize::from(changes);
+            if let Some(noted) = noted {
+                self.remember(noted);
+            }
         }
     }
 
