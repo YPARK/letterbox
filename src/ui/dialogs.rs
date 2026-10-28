@@ -714,3 +714,114 @@ pub(super) fn applied_dialog(
     );
     (area, Vec::new())
 }
+
+/// Whether to trash or archive what is marked, all of it: how many, by
+/// account and folder, and what is left out, with the key that takes it.
+pub(super) fn bulk_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    said: &crate::app::BulkSaid,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(72);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![Line::raw("")];
+    for l in &said.lines {
+        lines.push(Line::raw(clip(l, room)));
+    }
+    if !said.warnings.is_empty() {
+        lines.push(Line::raw(""));
+        for w in &said.warnings {
+            lines.push(Line::from(vec![
+                Span::styled("⚠ ", Style::new().fg(t.flag)),
+                Span::styled(clip(w, room.saturating_sub(2)), Style::new().fg(t.flag)),
+            ]));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "y does it · any other key does nothing, what is marked kept",
+        Style::new().fg(t.dim),
+    ));
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, &said.title, "y does it · esc not")),
+        area,
+    );
+    (area, Vec::new())
+}
+
+/// New mail letterbox is sure is junk: each, by whom and what, and how
+/// sure, the one picked lit, those chosen `[x]`; nothing thrown away unless
+/// chosen.
+pub(super) fn junk_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    pick: &crate::app::JunkPick,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(84);
+    let room = (width as usize).saturating_sub(4);
+    // Two lines each: it, and why it is thought junk.
+    let shown = ((f.area().height as usize).saturating_sub(10) / 2).clamp(2, 8);
+    let top = pick.at.saturating_sub(shown.saturating_sub(1));
+    let mut lines = vec![Line::raw("")];
+    for (k, j) in pick.items.iter().enumerate().skip(top).take(shown) {
+        let mark = if j.chosen { "[x] " } else { "[ ] " };
+        let odds = format!("{:>3.0}%  ", j.odds * 100.0);
+        let from = clip(&j.from, 20);
+        let rest = room.saturating_sub(mark.width() + odds.width() + from.width() + 2);
+        let lit = if k == pick.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        lines.push(
+            Line::from(vec![
+                Span::styled(mark, Style::new().fg(t.flag)),
+                Span::styled(odds, Style::new().fg(t.dim)),
+                Span::styled(from, Style::new().fg(t.title).bold()),
+                Span::raw("  "),
+                Span::raw(clip(&j.subject, rest)),
+            ])
+            .style(lit),
+        );
+        let why = format!("         {}", j.why.join(" · "));
+        lines.push(Line::styled(clip(&why, room), Style::new().fg(t.dim)).style(lit));
+    }
+    let chosen = pick.items.iter().filter(|j| j.chosen).count();
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!(
+            "{chosen} chosen of {}. Nothing is thrown away unless you choose it: space chooses the one \
+             picked, d throws those chosen away; n says the one picked is not junk, and it is learnt so; \
+             i looks through the Inbox; any other key leaves them.",
+            pick.items.len()
+        ),
+        Style::new().fg(t.dim),
+    ));
+    let lines: Vec<Line> = lines
+        .into_iter()
+        .flat_map(|l| {
+            if l.width() > room && l.spans.len() == 1 {
+                let style = l.spans[0].style;
+                wrap(&l.spans[0].content, room)
+                    .into_iter()
+                    .map(|w| Line::styled(w, style))
+                    .collect()
+            } else {
+                vec![l]
+            }
+        })
+        .collect();
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            &format!("{} new look like junk", pick.items.len()),
+            "␣ choose · d throw away chosen · n not junk · i look through · esc leave",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}

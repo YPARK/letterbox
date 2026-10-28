@@ -4,6 +4,14 @@ use super::*;
 
 // ---- filing, from the map ----
 
+/// Down the cluster's tree to the message of the map with `subject`: the
+/// map acts on a message only there.
+pub(super) fn down_subject(app: &mut App, subject: &str) {
+    pick_subject(app, subject);
+    let key = app.map.cursor.clone().unwrap();
+    super::mapsafety::down_to(app, &key);
+}
+
 /// Pick the message of the map with `subject`.
 pub(super) fn pick_subject(app: &mut App, subject: &str) {
     let s = app.map.snapshot.clone().unwrap();
@@ -19,7 +27,7 @@ pub(super) fn pick_subject(app: &mut App, subject: &str) {
 fn keys_mean_the_same_on_the_map_as_in_the_list() {
     let mut app = demo_map();
     // r answers the message picked on the map, not the list's.
-    pick_subject(&mut app, "Aims page, third pass");
+    down_subject(&mut app, "Aims page, third pass");
     press(&mut app, &["r"]);
     let text = app.compose.as_ref().expect("written").buffer.text();
     assert!(
@@ -41,7 +49,8 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
         "{}",
         app.status
     );
-    assert!(app.shown.iter().all(|m| m.summary.subject != first));
+    // Out of the Inbox; listed still where the list is of its cluster.
+    assert!(!dot_labels(&app, &first).1, "{first} out of the Inbox");
 }
 
 #[test]
@@ -841,7 +850,7 @@ pub(super) fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {
 #[test]
 fn m_moves_a_message_onto_a_cluster_and_files_it_under_its_label() {
     let mut app = demo_map();
-    pick_subject(&mut app, "Aims page, third pass");
+    down_subject(&mut app, "Aims page, third pass");
     press(&mut app, &["m"]);
     assert!(app.map.moving.is_some());
     assert!(app.status.contains("moving it"), "{}", app.status);
@@ -872,6 +881,8 @@ fn m_moves_a_message_onto_a_cluster_and_files_it_under_its_label() {
 #[test]
 fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
     let mut app = demo_map();
+    // Several, as they are filed: selected in the list, asked first.
+    press(&mut app, &["M"]);
     let s = app.map.snapshot.clone().unwrap();
     let builds: Vec<crate::index::Key> = s
         .dots
@@ -880,12 +891,18 @@ fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
         .map(|d| d.key.clone())
         .collect();
     app.map.region = Some(crate::map::Region { keys: builds });
-    press(&mut app, &["m", "N"]);
+    press(&mut app, &["N"]);
     let app::Dialog::Label(typed) = &app.dialog else {
         panic!("not asked: {}", app.status);
     };
     assert_eq!(typed, "Build");
     press(&mut app, &["s", "<enter>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::Bulk(_)),
+        "asked: {}",
+        app.status
+    );
+    press(&mut app, &["y"]);
     assert!(
         app.status.contains("3 filed under Builds"),
         "{}",
@@ -910,9 +927,12 @@ fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
 #[test]
 fn filing_suggests_its_like_and_y_and_minus_take_them_or_not() {
     let mut app = demo_map();
-    pick_subject(&mut app, "R01 resubmission: internal deadline 3 November");
+    down_subject(&mut app, "R01 resubmission: internal deadline 3 November");
     press(&mut app, &["m"]);
-    // Onto the Grant's anchor, by a click.
+    // Onto the Grant's anchor, by a click: out to all the clusters, where
+    // it goes picked there.
+    press(&mut app, &["0"]);
+    assert!(app.map.moving.is_some(), "still moving");
     let _ = app::screen(&mut app, 150, 45);
     let s = app.map.snapshot.clone().unwrap();
     let grant = s
@@ -935,6 +955,8 @@ fn filing_suggests_its_like_and_y_and_minus_take_them_or_not() {
         "{suggested:?}"
     );
     let first = suggested[0].clone();
+    // Taken down at a message, where the map acts: the one filed.
+    down_subject(&mut app, "R01 resubmission: internal deadline 3 November");
     press(&mut app, &["y"]);
     assert!(dot_labels(&app, &first).0.contains(&"Grant".to_string()));
     let next = {
@@ -963,7 +985,7 @@ fn r_renames_the_label_picked_on_its_server() {
         panic!("not asked: {}", app.status);
     };
     assert_eq!((old.as_str(), typed.as_str()), ("Grant", "Grant"));
-    press(&mut app, &["<c-u>", "Funding", "<enter>"]);
+    press(&mut app, &["<c-u>", "Funding", "<enter>", "y"]);
     assert!(
         app.status.contains("renamed Grant to Funding"),
         "{}",

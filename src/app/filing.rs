@@ -3,9 +3,20 @@
 use super::*;
 
 impl App {
+    /// File the messages `keys` under `label`: one at once, more asked
+    /// first, all of them together.
+    pub(super) fn file_keys(&mut self, keys: Vec<crate::index::Key>, label: &str) {
+        let label = label.trim();
+        if keys.len() > 1 && !label.is_empty() {
+            self.map.moving = None;
+            self.open_bulk(BulkAct::File(label.to_string()), keys);
+            return;
+        }
+        self.file_now(keys, label, true);
+    }
     /// File the messages `keys` under `label`: shown at once as given, and
     /// each asked of its server; the label's suggestions shown after.
-    pub(super) fn file_keys(&mut self, keys: Vec<crate::index::Key>, label: &str) {
+    pub(super) fn file_now(&mut self, keys: Vec<crate::index::Key>, label: &str, teach: bool) {
         let label = label.trim().to_string();
         self.map.moving = None;
         // Picked for a message looked through: chosen, to be done with the
@@ -27,8 +38,11 @@ impl App {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
-        // Filed, it is kept: learnt as not thrown away.
-        self.teach(&keys, false);
+        // Filed alone, it is kept: learnt as not thrown away. Filed with
+        // others, nothing is said of each.
+        if teach {
+            self.teach(&keys, false);
+        }
         let at = jiff::Timestamp::now().as_second();
         let mut filed = 0;
         let mut pending = Vec::new();
@@ -107,8 +121,29 @@ impl App {
         );
     }
 
-    /// Mark the message picked in the list, or let it go, and go on to the
-    /// next: what is marked is acted on together.
+    /// Select the rows of the list from `a` to `b`, both: what is marked
+    /// then, the row `b` picked.
+    pub(super) fn list_select(&mut self, a: usize, b: usize) {
+        let last = self.shown.len().saturating_sub(1);
+        let (lo, hi) = (a.min(b).min(last), a.max(b).min(last));
+        let keys: Vec<crate::index::Key> = self
+            .shown
+            .get(lo..=hi)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|l| self.listed_key(l))
+            .collect();
+        let n = keys.len();
+        self.focus = Focus::List;
+        self.list.select(Some(b.min(last)));
+        self.map.region = (n > 0).then_some(map::Region { keys });
+        self.status = format!(
+            "{n} marked: d trashes them, e archives them, m moves them, u and ! mark them, esc lets them go"
+        );
+    }
+
+    /// Mark the message picked in the list, or let it go: what is marked
+    /// is acted on together.
     pub(super) fn list_mark(&mut self) {
         let Some(key) = self
             .listed_on_map()
@@ -183,8 +218,8 @@ impl App {
         match act {
             Act::Seen => self.region_flag(Flag::Seen),
             Act::Flag => self.region_flag(Flag::Flagged),
-            Act::Trash => self.region_trash(),
-            Act::Archive => self.region_archive(),
+            Act::Trash => self.ask_bulk(BulkAct::Trash),
+            Act::Archive => self.ask_bulk(BulkAct::Archive),
             Act::Back => {
                 self.map.region = None;
                 self.status = "let go".to_string();
@@ -212,8 +247,8 @@ impl App {
         }
     }
 
-    /// Mark every message listed that would go where the one picked would;
-    /// marked so already, file them all there.
+    /// File every message listed that would go where the one picked would,
+    /// asked first.
     pub(super) fn list_file_all(&mut self) {
         let Some(i) = self.listed_on_map() else {
             self.status = "not on the map yet: it is filed once the map has read it".to_string();
@@ -240,16 +275,9 @@ impl App {
                 (s.suggestion(j) == Some(label.as_str())).then_some(key)
             })
             .collect();
-        if self.map.region.as_ref().is_some_and(|r| r.keys == keys) {
-            self.file_keys(keys, &label);
-            self.map.region = None;
-        } else {
-            self.status = format!(
-                "{} would go to {label}, marked: Y files them, esc lets go",
-                keys.len()
-            );
-            self.map.region = Some(map::Region { keys });
-        }
+        // Asked first, each counted: nothing marked to be acted on by
+        // another key.
+        self.file_keys(keys, &label);
     }
 
     /// The message picked in the list, by its place in the map.
@@ -319,8 +347,7 @@ impl App {
     }
 
     /// File the message picked, not yet filed, where it would go; or, all,
-    /// mark every message shown that would go there too, and, marked, file
-    /// them.
+    /// every message shown that would go there too, asked first.
     pub(super) fn file_where_suggested(&mut self, all: bool) -> bool {
         let (Some(s), Some((i, label))) = (self.map.snapshot.clone(), self.picked_suggestion())
         else {
@@ -338,15 +365,7 @@ impl App {
             .filter(|&j| s.suggestion(j) == Some(label.as_str()))
             .map(|j| s.dots[j].key.clone())
             .collect();
-        if self.map.region.as_ref().is_some_and(|r| r.keys == keys) {
-            self.file_keys(keys, &label);
-        } else {
-            self.status = format!(
-                "{} would go to {label}, marked: Y files them, esc lets go",
-                keys.len()
-            );
-            self.map.region = Some(map::Region { keys });
-        }
+        self.file_keys(keys, &label);
         true
     }
 

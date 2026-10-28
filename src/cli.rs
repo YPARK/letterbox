@@ -113,6 +113,11 @@ pub(super) enum Command {
         #[command(subcommand)]
         action: FilterAction,
     },
+    /// What letterbox moved to Trash: put back where it was
+    Trash {
+        #[command(subcommand)]
+        action: TrashAction,
+    },
     /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
     /// program, as Cursor or Claude Code, runs `letterbox mcp`
     Mcp,
@@ -177,6 +182,34 @@ pub(super) enum AccountAction {
 }
 
 #[derive(Subcommand)]
+pub(super) enum TrashAction {
+    /// Put back what letterbox moved to Trash from one time to another,
+    /// each where it was moved from, as `d` in Trash does for one; it is
+    /// then forgotten, and not removed after 7 days
+    Restore {
+        /// From when: `2026-10-27 13:50`, in local time, or seconds since 1970
+        #[arg(long)]
+        since: String,
+        /// Until when, as --since; now, else
+        #[arg(long)]
+        until: Option<String>,
+        /// Only this account's, by its name
+        #[arg(long, short)]
+        account: Option<String>,
+        /// Only those moved from this folder, by its name on the server, as
+        /// `STAT_LAB`; again for another
+        #[arg(long)]
+        origin: Vec<String>,
+        /// Say what would be put back, and where, and move nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Put them back without asking first
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub(super) enum VaultAction {
     /// A new passphrase for it, asked for as letterbox starts; or none, its
     /// key a file beside it only you may read, never asked for
@@ -202,10 +235,21 @@ pub(super) enum FilterAction {
         limit: usize,
     },
     /// Forget what was learnt from the Trash and your labels: only your
-    /// own decisions are kept; then check
-    Forget,
-    /// Throw new mail away on its own, when 95% sure, or not: told of as
-    /// letterbox opens, and by B, never learnt from
+    /// own decisions are kept; or, given --since, each message learnt as
+    /// thrown away then, as by a trashing done by mistake; then check
+    Forget {
+        /// From when: `2026-10-27 13:50`, in local time, or seconds since 1970
+        #[arg(long)]
+        since: Option<String>,
+        /// Until when, as --since; now, else
+        #[arg(long, requires = "since")]
+        until: Option<String>,
+        /// Forget them without asking first
+        #[arg(long, requires = "since")]
+        yes: bool,
+    },
+    /// Ask about new mail it is 95% sure is junk as it comes, or not:
+    /// nothing is thrown away unless you choose it
     Auto {
         #[arg(value_enum)]
         state: OnOff,

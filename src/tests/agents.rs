@@ -482,6 +482,22 @@ fn a_folder_is_chosen_as_trash_when_the_server_names_none() {
         screen.contains("Which of these folders") && screen.contains("Archive"),
         "{screen}"
     );
+    // Never the Inbox, Sent or Drafts: ⏎ on the first must not throw mail
+    // into one of them.
+    let offered: Vec<String> = app
+        .dialog
+        .trash_mut()
+        .unwrap()
+        .folders
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect();
+    for kept in ["INBOX", "Sent", "Drafts"] {
+        assert!(
+            !offered.iter().any(|p| p == kept),
+            "{kept} offered: {offered:?}"
+        );
+    }
     let at = app
         .dialog
         .trash_mut()
@@ -528,7 +544,7 @@ fn a_trash_record_that_cannot_be_read_is_left_as_it_is() {
     std::fs::write(&path, text).unwrap();
     let mut ledger = crate::trash::Ledger::open(path.clone());
     assert!(ledger.fault().is_some());
-    assert!(ledger.due("a@b.c", i64::MAX).is_empty());
+    assert!(ledger.stale("a@b.c", i64::MAX).is_empty());
     let err = ledger
         .record(crate::trash::Entry {
             account: "a@b.c".into(),
@@ -545,7 +561,7 @@ fn a_trash_record_that_cannot_be_read_is_left_as_it_is() {
 }
 
 #[test]
-fn a_message_trashed_for_eight_days_is_removed() {
+fn letterbox_never_removes_mail_from_trash_for_good() {
     let mut ledger = scratch_ledger();
     let now = jiff::Timestamp::now().as_second();
     let entry = |uid, days| crate::trash::Entry {
@@ -557,28 +573,32 @@ fn a_message_trashed_for_eight_days_is_removed() {
         at: now - i64::from(days) * 24 * 60 * 60,
     };
     ledger.record(entry(3, 6)).unwrap();
-    ledger.record(entry(4, 8)).unwrap();
-    let due: Vec<u32> = ledger
-        .due("a@b.c", now)
+    ledger.record(entry(4, 31)).unwrap();
+    // Past a month, a record is let go: only the record.
+    let stale: Vec<u32> = ledger
+        .stale("a@b.c", now)
         .into_iter()
         .map(|e| e.uid)
         .collect();
-    assert_eq!(due, [4]);
+    assert_eq!(stale, [4]);
 
     let mut app = demo();
     press(&mut app, &["d"]);
     app.ledger
-        .backdate(jiff::Timestamp::now().as_second() - 8 * 24 * 60 * 60);
+        .backdate(jiff::Timestamp::now().as_second() - 40 * 24 * 60 * 60);
     press(&mut app, &["h", "j", "j", "j", "j", "j"]);
     assert_eq!(app.folder_name(), "Trash");
-    assert!(
-        app.shown.iter().all(|s| s.from != "Ada Lovelace"),
-        "{:?}",
-        app.shown
-            .iter()
-            .map(|s| s.from.as_str())
-            .collect::<Vec<_>>()
-    );
+    // Still in Trash, as long as its server keeps it.
+    let ada = app
+        .shown
+        .iter()
+        .find(|s| s.from == "Ada Lovelace")
+        .expect("never removed for good")
+        .summary
+        .message_id
+        .clone();
+    // Its record let go: d there puts it in the Inbox.
+    assert!(app.ledger.find("you@example.com", &ada).is_none());
 }
 
 #[test]
@@ -682,7 +702,7 @@ fn replying_opens_the_message_and_the_demo_keeps_what_is_sent() {
 }
 
 #[test]
-fn imap_moves_appends_and_expunges() {
+fn imap_moves_and_appends() {
     let (account, _) = server();
     let mut imap = Imap::new(account);
     let page = imap.page("INBOX", 0, 10).unwrap();
@@ -704,20 +724,6 @@ fn imap_moves_appends_and_expunges() {
     );
     let trash = imap.page("Deleted Items", 0, 10).unwrap();
     assert!(trash.summaries.iter().any(|s| s.uid == new_uid));
-    assert_eq!(
-        imap.expunge("Deleted Items", new_uid).unwrap(),
-        Removal::Gone
-    );
-    assert_eq!(
-        imap.expunge("Deleted Items", new_uid).unwrap(),
-        Removal::Missing
-    );
-    assert!(
-        imap.page("Deleted Items", 0, 10)
-            .unwrap()
-            .summaries
-            .is_empty()
-    );
     imap.append(
         "INBOX",
         b"From: me@example.com\r\nSubject: no id\r\n\r\nhi\r\n",

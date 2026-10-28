@@ -278,13 +278,15 @@ pub(super) fn learn(
         .map(|(_, t)| t.key)
         .collect();
     let shared = std::sync::Mutex::new(std::mem::replace(index, index::Index::memory()));
+    let ledger = trash::Ledger::load();
     let mut thrown = Vec::new();
     for (name, store) in stores.iter_mut() {
+        let ours = ledger.message_ids(store.address());
         if let Err(e) = index::sync::refresh(store.as_mut(), &shared, &keys, now) {
             eprintln!("{name}: what you filed cannot be read again: {e:#}");
         }
         let known = shared.lock().unwrap_or_else(|e| e.into_inner()).known();
-        match trash_seeds(store.as_mut(), &known, limit, now) {
+        match trash_seeds(store.as_mut(), &known, limit, now, &ours) {
             Ok(found) => thrown.extend(found),
             Err(e) => eprintln!("{name}: its Trash cannot be read: {e:#}"),
         }
@@ -301,12 +303,15 @@ pub(super) fn learn(
 
 /// The newest `limit` messages of the account's Trash never read, as thrown
 /// away, each with when it was sent. Mail read and then thrown away was
-/// dealt with, not unwanted: it is left out.
+/// dealt with, not unwanted: it is left out; and so is what letterbox
+/// itself moved there, by its Message-ID in `ours`, taught as it was
+/// trashed alone, or not at all, trashed with others.
 pub(super) fn trash_seeds(
     store: &mut dyn Store,
     known: &filter::Known,
     limit: usize,
     now: i64,
+    ours: &std::collections::HashSet<String>,
 ) -> anyhow::Result<Vec<(i64, filter::Taught)>> {
     let trash = store
         .folders()?
@@ -330,6 +335,9 @@ pub(super) fn trash_seeds(
                 continue;
             }
             let r = index::Record::of(&ident, &trash, 0, &got, now);
+            if !r.message_id.is_empty() && ours.contains(&r.message_id) {
+                continue;
+            }
             seeds.push((
                 r.date.unwrap_or(now),
                 filter::Taught {
@@ -589,4 +597,136 @@ pub(super) fn truncate(s: &str, n: usize) -> String {
         t.push('…');
         t
     }
+}
+
+/// A time as `--since` and `--until` take it: seconds since 1970, of ten
+/// digits or more, as any time since 2001 is; an instant with its offset;
+/// or a date and time in local time. Digits fewer are refused, as a date
+/// typed without dashes would be read as a time in 1970.
+pub(super) fn when(text: &str) -> anyhow::Result<i64> {
+    let text = text.trim();
+    if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+        if text.len() < 10 {
+            bail!("not a time: {text}; as 2026-10-27 13:50, or seconds since 1970");
+        }
+        return Ok(text.parse::<i64>()?);
+    }
+    if let Ok(t) = text.parse::<jiff::Timestamp>() {
+        return Ok(t.as_second());
+    }
+    let civil: jiff::civil::DateTime = text
+        .replacen(' ', "T", 1)
+        .parse()
+        .with_context(|| format!("not a time: {text}, as 2026-10-27 13:50"))?;
+    Ok(civil
+        .to_zoned(jiff::tz::TimeZone::system())?
+        .timestamp()
+        .as_second())
+}
+
+/// Put back what letterbox moved to Trash from `since` to `until`, as the
+/// ledger says, each to where it was; said first, and asked, unless `yes`.
+pub(super) fn restore_trash(
+    args: &Args,
+    since: i64,
+    until: Option<i64>,
+    account: Option<&str>,
+    origin: &[String],
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let until = until.unwrap_or_else(|| jiff::Timestamp::now().as_second());
+    // Held while it runs: letterbox open writes the ledger too.
+    let _held = if args.demo {
+        None
+    } else {
+        index::lock(&index::key::dir())?
+    };
+    let mut ledger = trash::Ledger::load();
+    if let Some(fault) = ledger.fault() {
+        bail!("{fault}");
+    }
+    let accounts = if args.demo {
+        Vec::new()
+    } else {
+        config::load(&args.config)?
+    };
+    let email = match account {
+        None => None,
+        Some(n) => Some(
+            accounts
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(n))
+                .map(|a| a.email.clone())
+                .ok_or_else(|| anyhow::anyhow!("no account named {n}"))?,
+        ),
+    };
+    let entries: Vec<trash::Entry> = ledger
+        .between(since, until, email.as_deref())
+        .into_iter()
+        .filter(|e| origin.is_empty() || origin.contains(&e.origin))
+        .collect();
+    if entries.is_empty() {
+        println!("nothing letterbox moved to Trash then");
+        return Ok(());
+    }
+    let mut counts: std::collections::BTreeMap<(&str, &str, &str), usize> = Default::default();
+    for e in &entries {
+        *counts
+            .entry((&e.account, &e.origin, &e.folder))
+            .or_default() += 1;
+    }
+    for ((account, origin, folder), n) in &counts {
+        println!("{n:>6}  {account}  {folder} → {origin}");
+    }
+    println!("{:>6}  in all", entries.len());
+    if dry_run {
+        return Ok(());
+    }
+    if !yes && !ask("put them back? y or n", "n")?.eq_ignore_ascii_case("y") {
+        println!("nothing moved");
+        return Ok(());
+    }
+    let emails: Vec<String> = accounts.iter().map(|a| a.email.clone()).collect();
+    let mut failed = 0;
+    for (name, mut store) in stores(args)? {
+        let email = store.address().to_string();
+        let mine: Vec<trash::Entry> = entries
+            .iter()
+            .filter(|e| e.account == email)
+            .cloned()
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let done = trash::restore(&mut ledger, &mine, store.as_mut());
+        let bad: Vec<&trash::Restored> = done.iter().filter(|r| r.result.is_err()).collect();
+        println!(
+            "{name}: {} put back, {} not",
+            done.len() - bad.len(),
+            bad.len()
+        );
+        for r in &bad {
+            let e = &r.entry;
+            println!(
+                "  {} {} → {}: {}",
+                e.folder,
+                e.uid,
+                e.origin,
+                r.result.as_ref().err().map(String::as_str).unwrap_or("")
+            );
+        }
+        failed += bad.len();
+    }
+    let missing = entries
+        .iter()
+        .filter(|e| !args.demo && !emails.contains(&e.account))
+        .count();
+    if missing > 0 {
+        println!("{missing} of no account set up here, left as they are");
+    }
+    if failed > 0 {
+        bail!("{failed} not put back, each said above: still in the ledger, to try again");
+    }
+    Ok(())
 }

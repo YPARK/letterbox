@@ -8,7 +8,7 @@
 use crate::index::labels;
 use crate::index::record::Indexed;
 use crate::mail::{self, Flags, Folder, Role, Summary};
-use crate::store::{Change, Filed, Flag, Kind, Page, Removal, Status, Store};
+use crate::store::{Change, Filed, Flag, Kind, Page, Status, Store};
 use jiff::{ToSpan, Zoned};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -720,18 +720,6 @@ impl Store for Demo {
             ..letter
         });
         Ok(uid)
-    }
-
-    fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal> {
-        let mut mail = self.mail();
-        let letters = mail.letters(folder)?;
-        let n = letters.len();
-        letters.retain(|l| l.uid != uid);
-        Ok(if letters.len() == n {
-            Removal::Missing
-        } else {
-            Removal::Gone
-        })
     }
 
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {

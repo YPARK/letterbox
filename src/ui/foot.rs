@@ -33,7 +33,27 @@ pub(super) fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
         };
         (said, Style::new().fg(t.flag).bold())
     } else {
-        (app.status.clone(), Style::new().fg(t.text).bold())
+        // What is marked said while it is, as d and e act on all of it,
+        // in the flag's colour when it is a lot; and what looks like junk,
+        // while any does, for J to show.
+        let marked = app.map.region.as_ref().map_or(0, |r| r.keys.len());
+        let junk = app.junk_held();
+        let mut parts = Vec::new();
+        if junk > 0 {
+            parts.push(format!("◆ {junk} look like junk · J"));
+        }
+        if marked > 0 {
+            parts.push(format!("▪ {marked} marked"));
+        }
+        if !app.status.is_empty() {
+            parts.push(app.status.clone());
+        }
+        let colour = if marked > app.mark_big || junk > 0 {
+            t.flag
+        } else {
+            t.text
+        };
+        (parts.join(" · "), Style::new().fg(colour).bold())
     };
     if said.is_empty() {
         return (lines, spots);

@@ -197,6 +197,53 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
+        Dialog::Bulk(bulk) => Some(bulk_dialog(f, &t, &bulk.said)),
+        Dialog::Junk(pick) => Some(junk_dialog(f, &t, pick)),
+        &Dialog::ClusterMenu { id, .. } => {
+            let label = app
+                .map
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.group(id))
+                .and_then(|g| g.label.clone())
+                .unwrap_or_default();
+            Some((
+                question(
+                    f,
+                    &t,
+                    &format!("◆ {label}"),
+                    "⏎ does it · esc not",
+                    "What is to be done with this label?",
+                    |_| Line::styled("▸ Rename…", Style::new().fg(t.title).bold()),
+                )
+                .0,
+                Vec::new(),
+            ))
+        }
+        Dialog::ConfirmRename {
+            old,
+            new,
+            count,
+            accounts,
+        } => Some((
+            question(
+                f,
+                &t,
+                &format!("Rename {old} to {new}?"),
+                "y renames · any other key keeps it",
+                &format!(
+                    "{count} carry {old}, on {}. It is renamed on their servers too; C-x u renames it back.",
+                    if accounts.is_empty() {
+                        "no account".to_string()
+                    } else {
+                        accounts.join(", ")
+                    }
+                ),
+                |_| Line::raw(""),
+            )
+            .0,
+            Vec::new(),
+        )),
         Dialog::Applied(applied) => Some(applied_dialog(f, &t, applied)),
         Dialog::Rename(a, typed) => Some(renaming(f, &t, &app.accounts[*a].name, typed)),
         Dialog::Label(typed) => Some(asking(

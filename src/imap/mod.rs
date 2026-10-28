@@ -12,7 +12,7 @@ use crate::index::labels;
 use crate::index::record::Indexed;
 use crate::mail::{self, Folder, Role, Summary};
 use crate::oauth;
-use crate::store::{Change, Filed, Flag, Kind, Page, Removal, Status, Store, unsupported};
+use crate::store::{Change, Filed, Flag, Kind, Page, Status, Store, unsupported};
 use anyhow::{Context, bail};
 use imap_proto::NameAttribute;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -292,26 +292,6 @@ impl Store for Imap {
                 bail!("it was moved, but its new place could not be told, so it was not recorded")
             }
         }
-    }
-
-    fn expunge(&mut self, folder: &str, uid: u32) -> anyhow::Result<Removal> {
-        self.run(|s, selected| {
-            select(s, selected, folder, false)?;
-            s.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")?;
-            let gone = s.uid_expunge(uid.to_string())?;
-            if gone.is_empty() {
-                return Ok(Removal::Missing);
-            }
-            // The folder stays selected. Its count drops by what this
-            // expunge removed, so the next one does not select again.
-            if let Some(sel) = selected.as_mut()
-                && sel.folder == folder
-            {
-                let removed = (&gone).into_iter().count() as u32;
-                sel.exists = sel.exists.saturating_sub(removed);
-            }
-            Ok(Removal::Gone)
-        })
     }
 
     fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {

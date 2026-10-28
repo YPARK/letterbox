@@ -502,7 +502,7 @@ fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
     assert!(app.map.moving.is_none());
     assert!(app.map.region.is_none(), "marked on the map, let go");
     // Marked in the list, kept as the list is asked for again.
-    press(&mut app, &["v"]);
+    super::selecting::ctrl_click(&mut app, 0);
     assert!(app.map.region.is_some(), "{}", app.status);
     press(&mut app, &["<m-l>"]);
     assert!(app.map.region.is_some(), "marked in the list, kept");
@@ -511,7 +511,7 @@ fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
 #[test]
 fn what_is_marked_in_the_list_is_let_go_as_another_folder_is_opened() {
     let mut app = demo();
-    press(&mut app, &["v"]);
+    super::selecting::ctrl_click(&mut app, 0);
     assert!(app.map.region.is_some(), "{}", app.status);
     app.focus = app::Focus::Side;
     app.row = app
@@ -617,7 +617,7 @@ fn paperstack_gone_is_run_again_and_paperstack_saying_no_is_kept() {
 #[test]
 fn in_the_list_all_marked_are_picked_where_to_go_on_the_map() {
     let mut app = demo();
-    press(&mut app, &["v", "v"]);
+    super::selecting::select_rows(&mut app, 0, 1);
     let marked = app.map.region.as_ref().unwrap().keys.clone();
     assert_eq!(marked.len(), 2);
     press(&mut app, &["k", "m"]);
@@ -789,7 +789,9 @@ fn what_the_inbox_looked_through_does_is_confirmed_and_what_failed_is_said() {
 #[test]
 fn what_is_done_in_the_list_is_confirmed_by_a_pop_up() {
     let mut app = demo();
-    press(&mut app, &[" ", " ", "d"]);
+    // Inbox mail, marked: asked first, and taken only with i.
+    super::selecting::select_rows(&mut app, 0, 1);
+    press(&mut app, &["d", "i", "y"]);
     app.settle(Duration::from_secs(5));
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("2 of 2 confirmed"), "{screen}");

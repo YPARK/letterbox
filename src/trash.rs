@@ -1,7 +1,8 @@
 //! Messages letterbox moved to Trash, and when, so `d` there can put one
-//! back, and so one kept past seven days can be removed for good. Only
-//! those letterbox itself moved are recorded, and only those are removed:
-//! mail already in Trash is left as the server keeps it.
+//! back where it was, and `letterbox trash restore` all of a time. Only
+//! those letterbox itself moved are recorded. Nothing is ever removed from
+//! Trash for good by letterbox: Trash keeps it as long as its server does;
+//! a record past a month is let go, the message left where it is.
 //!
 //! The file is `trash.toml` beside the vault, plain: it holds no secret,
 //! only which message came from where.
@@ -10,8 +11,11 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// How long a message letterbox trashed can be put back, in seconds.
+/// How far back what was thrown away as junk is told of, by B, in seconds.
 pub const KEPT: i64 = 7 * 24 * 60 * 60;
+/// How long a record of a message trashed is kept, in seconds: past it the
+/// record is let go, never the message.
+pub const RECORD: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
@@ -42,6 +46,8 @@ pub struct Ledger {
     /// Why the file could not be read. Nothing is written over it while this
     /// is set: a bad read must not replace the record with an empty one.
     fault: Option<String>,
+    /// How many times the file was written, as tests count it.
+    saves: usize,
 }
 
 impl Ledger {
@@ -66,6 +72,7 @@ impl Ledger {
             path,
             entries,
             fault,
+            saves: 0,
         }
     }
 
@@ -96,6 +103,15 @@ impl Ledger {
                     && ((!message_id.is_empty() && e.message_id == message_id) || e.uid == uid)
             })
             .map(|e| e.origin.clone())
+    }
+
+    /// The Message-IDs of what letterbox moved to Trash for `account`.
+    pub fn message_ids(&self, account: &str) -> std::collections::HashSet<String> {
+        self.entries
+            .iter()
+            .filter(|e| e.account == account && !e.message_id.is_empty())
+            .map(|e| e.message_id.clone())
+            .collect()
     }
 
     /// Where the message of `account` by `message_id` is in a Trash, if
@@ -132,18 +148,44 @@ impl Ledger {
         self.save()
     }
 
-    /// Those moved to Trash before `now` by at least [`KEPT`], for `account`.
-    /// None when the file could not be read: nothing is removed from a
-    /// record that was not understood.
-    pub fn due(&self, account: &str, now: i64) -> Vec<Entry> {
+    /// Those moved to Trash from `since` to `until`, both included, of
+    /// `account` if one is named, in the order they were moved.
+    pub fn between(&self, since: i64, until: i64, account: Option<&str>) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|e| (since..=until).contains(&e.at))
+            .filter(|e| account.is_none_or(|a| e.account == a))
+            .cloned()
+            .collect()
+    }
+
+    /// Those moved to Trash before `now` by at least [`RECORD`], for
+    /// `account`: their records to let go. None when the file could not be
+    /// read.
+    pub fn stale(&self, account: &str, now: i64) -> Vec<Entry> {
         if self.fault.is_some() {
             return Vec::new();
         }
         self.entries
             .iter()
-            .filter(|e| e.account == account && now.saturating_sub(e.at) >= KEPT)
+            .filter(|e| e.account == account && now.saturating_sub(e.at) >= RECORD)
             .cloned()
             .collect()
+    }
+
+    /// Forget each of `gone`, by account, folder and UID, written once.
+    pub fn forget_many(&mut self, gone: &[(String, String, u32)]) -> anyhow::Result<()> {
+        self.writable()?;
+        let n = self.entries.len();
+        self.entries.retain(|e| {
+            !gone
+                .iter()
+                .any(|(a, f, u)| e.account == *a && e.folder == *f && e.uid == *u)
+        });
+        if self.entries.len() == n {
+            return Ok(());
+        }
+        self.save()
     }
 
     /// Date every entry as moved at `at`: a test, ageing one past seven days.
@@ -162,8 +204,15 @@ impl Ledger {
         Ok(())
     }
 
+    /// How many times the file was written.
+    #[cfg(test)]
+    pub fn saves(&self) -> usize {
+        self.saves
+    }
+
     fn save(&mut self) -> anyhow::Result<()> {
         self.writable()?;
+        self.saves += 1;
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -187,4 +236,54 @@ pub fn path() -> PathBuf {
         .parent()
         .map(|d| d.join("trash.toml"))
         .unwrap_or_else(|| PathBuf::from("trash.toml"))
+}
+
+/// What putting one back did: done, or why not.
+#[derive(Debug)]
+pub struct Restored {
+    pub entry: Entry,
+    pub result: Result<(), String>,
+}
+
+/// Put each of `entries` back where it was moved from, through `store`,
+/// and forget, once, those that are there. One is put back only once its
+/// folder is known to have it: a move that failed, or whose new place was
+/// not told, is put back if the folder it came from holds it now; else it
+/// is said, and kept in the ledger as it was.
+pub fn restore(
+    ledger: &mut Ledger,
+    entries: &[Entry],
+    store: &mut dyn crate::store::Store,
+) -> Vec<Restored> {
+    let mut done: Vec<Restored> = entries
+        .iter()
+        .map(|entry| {
+            let result = store
+                .relocate(&entry.folder, entry.uid, &entry.origin, &entry.message_id)
+                .map(|_| ())
+                .or_else(|e| {
+                    let there = !entry.message_id.is_empty()
+                        && store
+                            .holds(&entry.origin, &entry.message_id)
+                            .is_ok_and(|held| held);
+                    if there { Ok(()) } else { Err(format!("{e:#}")) }
+                });
+            Restored {
+                entry: entry.clone(),
+                result,
+            }
+        })
+        .collect();
+    let gone: Vec<(String, String, u32)> = done
+        .iter()
+        .filter(|r| r.result.is_ok())
+        .map(|r| (r.entry.account.clone(), r.entry.folder.clone(), r.entry.uid))
+        .collect();
+    if let Err(e) = ledger.forget_many(&gone) {
+        let said = format!("put back, but the record not written: {e:#}");
+        for r in done.iter_mut().filter(|r| r.result.is_ok()) {
+            r.result = Err(said.clone());
+        }
+    }
+    done
 }

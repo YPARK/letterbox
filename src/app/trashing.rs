@@ -64,11 +64,13 @@ impl App {
 
     /// Move what is picked to Trash, or, in Trash, back where it was.
     pub(super) fn delete(&mut self) {
+        // The message picked: on the map, the map's, the one read; never
+        // the list's behind it.
         let Some(Listed {
             account,
             folder,
             summary,
-        }) = self.current().cloned()
+        }) = self.picked()
         else {
             return;
         };
@@ -119,9 +121,12 @@ impl App {
             .accounts
             .get(account)
             .map(|a| {
+                // Never where mail is kept or written: ⏎ on the first
+                // must not throw it into one of them.
                 a.folders
                     .iter()
                     .filter(|f| f.selectable && f.path != folder)
+                    .filter(|f| !matches!(f.role, Role::Inbox | Role::Sent | Role::Drafts))
                     .map(|f| (f.path.clone(), trash_label(f)))
                     .collect()
             })
@@ -314,7 +319,9 @@ impl App {
             .unwrap_or_else(|| path.to_string())
     }
 
-    /// Remove messages letterbox trashed more than seven days ago.
+    /// Let go of the records of messages letterbox trashed more than a
+    /// month ago: the messages stay in Trash, as its server keeps them.
+    /// Nothing is ever removed for good by letterbox.
     pub(super) fn sweep(&mut self, account: usize) {
         let email = self
             .accounts
@@ -325,18 +332,18 @@ impl App {
             return;
         }
         let now = jiff::Timestamp::now().as_second();
-        let due = self.ledger.due(&email, now);
-        for entry in due {
-            let key = (email.clone(), entry.folder.clone(), entry.uid);
-            if !self.purging.insert(key) {
-                continue;
-            }
-            self.ask(
-                account,
-                Ask::Expunge {
-                    folder: entry.folder,
-                    uid: entry.uid,
-                },
+        let gone: Vec<(String, String, u32)> = self
+            .ledger
+            .stale(&email, now)
+            .into_iter()
+            .map(|e| (e.account, e.folder, e.uid))
+            .collect();
+        if !gone.is_empty()
+            && let Err(e) = self.ledger.forget_many(&gone)
+        {
+            self.status = format!(
+                "cannot update the trash record: {}",
+                first_line(&format!("{e:#}"))
             );
         }
     }

@@ -3,6 +3,7 @@
 //! screen is never kept waiting by a server.
 
 mod bringing;
+mod bulk;
 mod checking;
 mod dialog;
 mod files;
@@ -15,6 +16,7 @@ mod mapview;
 mod marking;
 mod pages;
 mod papers;
+mod relabel;
 mod replies;
 mod review;
 mod saving;
@@ -22,14 +24,17 @@ mod screen;
 mod trashing;
 mod writing;
 use self::bringing::*;
+pub use self::bulk::*;
 pub use self::checking::*;
 pub use self::dialog::*;
 pub use self::files::*;
+pub use self::filtering::*;
 pub use self::form::*;
 pub use self::input::*;
 pub use self::listing::*;
 use self::mapview::*;
 pub use self::papers::*;
+pub use self::relabel::*;
 pub use self::review::*;
 pub use self::saving::*;
 pub use self::screen::*;
@@ -47,7 +52,7 @@ use crate::map::{self, Focused, Map, Mode};
 use crate::oauth;
 use crate::secret::Keeper;
 use crate::setup;
-use crate::store::{Flag, Removal, Store};
+use crate::store::{Flag, Store};
 use crate::theme::{self, Theme};
 use crate::trash::{self, Entry};
 use crate::ui;
@@ -65,7 +70,7 @@ use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -267,9 +272,6 @@ pub struct App {
     held: Option<Held>,
     /// A reply waiting on the message it answers, fetched first.
     reply_when: Option<Pending>,
-    /// Trash removals asked and not yet answered, by address, folder and UID,
-    /// so one is not asked twice.
-    purging: HashSet<(String, String, u32)>,
     /// What to do outside the screen, once it is drawn.
     pub launch: Option<Launch>,
     replies: Receiver<Reply>,
@@ -308,6 +310,20 @@ pub struct App {
     /// Marking in the list with Shift and the arrows: the row it was begun
     /// from, and what was marked before.
     marking: Option<(usize, Vec<crate::index::Key>)>,
+    /// Over this many marked, the foot says so in the flag's colour.
+    pub mark_big: usize,
+    /// What was last trashed together, for C-x u to put back.
+    undo: Undo,
+    /// What was done last that C-x u undoes.
+    last: Option<Last>,
+    /// What was chosen in the Inbox looked through, not to be learnt when
+    /// it is done: chosen for several together, or the filter's own guess
+    /// taken as it was.
+    untaught: std::collections::HashSet<crate::index::Key>,
+    /// What looked like junk and was asked about, not to be asked again.
+    junk_asked: std::collections::HashSet<crate::index::Key>,
+    /// What looked like junk, held for J to show.
+    junk: Vec<Junk>,
     /// When the wheel last went in or out a level on the map, and which way.
     wheeled: Option<(Instant, isize)>,
     /// Whether C-x was pressed, the key after it waited for: C-c quits.
@@ -348,6 +364,9 @@ pub struct App {
     pub reader_width: Option<u16>,
     /// The line before the message read is being dragged.
     pub resizing: bool,
+    /// The row the left button was pressed on, to select as far as it is
+    /// dragged.
+    dragged_from: Option<Target>,
     /// Where the panes end on the right, as last drawn.
     pub panes_right: u16,
     /// How wide the message read was last drawn.
@@ -557,7 +576,6 @@ impl App {
             ledger,
             held: None,
             reply_when: None,
-            purging: HashSet::new(),
             launch: None,
             replies,
             replies_to,
@@ -581,6 +599,12 @@ impl App {
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
             marking: None,
+            mark_big: MARK_BIG,
+            undo: Undo::default(),
+            last: None,
+            untaught: Default::default(),
+            junk_asked: Default::default(),
+            junk: Vec::new(),
             wheeled: None,
             c_x: false,
             index: Arc::new(Mutex::new(index)),
@@ -599,6 +623,7 @@ impl App {
             save_dir: None,
             reader_width: None,
             resizing: false,
+            dragged_from: None,
             panes_right: 0,
             read_width: 0,
             read_height: 0,

@@ -10,9 +10,9 @@ fn m_goes_between_the_map_and_the_list_and_lets_go_of_what_was_the_maps() {
     let mut app = demo();
     press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::Map);
-    // Something marked on the map is let go in the list.
+    // Nothing is marked on the map; back in the list, nothing moving.
     press(&mut app, &["v"]);
-    assert!(app.map.region.is_some());
+    assert!(app.map.region.is_none());
     press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     assert!(app.map.region.is_none() && app.map.moving.is_none());
@@ -501,14 +501,15 @@ fn mail_read_before_the_index_read_as_it_now_does_is_read_again_a_few_a_pass() {
 // ---- marking in the list ----
 
 #[test]
-fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
+fn in_the_list_what_is_selected_with_the_mouse_is_acted_on_together() {
+    use super::selecting::{ctrl_click, select_rows};
     let mut app = demo();
     let first = app.shown[0].summary.subject.clone();
     let second = app.shown[1].summary.subject.clone();
-    // v marks the one picked and goes on; on one marked, lets it go.
-    press(&mut app, &["v", "v", "v"]);
+    // Dragged over, three; Ctrl and a click on one, it let go.
+    select_rows(&mut app, 0, 2);
     assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(3));
-    press(&mut app, &["k", "v"]);
+    ctrl_click(&mut app, 2);
     assert_eq!(app.map.region.as_ref().map(|r| r.keys.len()), Some(2));
     let screen = app::screen(&mut app, 150, 30);
     assert!(screen.contains("2 marked"), "{screen}");
@@ -524,7 +525,7 @@ fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
             .unwrap();
         assert!(l.summary.flags.seen, "{subject} read");
     }
-    // m drops down the labels; ⏎ files both there at once.
+    // m drops down the labels; ⏎ asks, and y files both there together.
     press(&mut app, &["m"]);
     assert!(app.menu.is_some());
     let label = match &app.menu_items()[0] {
@@ -532,6 +533,12 @@ fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
         other => panic!("{other:?}"),
     };
     press(&mut app, &["<enter>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::Bulk(_)),
+        "asked: {}",
+        app.status
+    );
+    press(&mut app, &["y"]);
     app.settle(Duration::from_secs(5));
     for subject in [&first, &second] {
         let (labels, inbox) = dot_labels(&app, subject);
@@ -539,25 +546,25 @@ fn in_the_list_v_marks_and_what_is_marked_is_acted_on_together() {
     }
     assert!(app.map.region.is_none(), "let go once filed");
     // Marked again, esc lets go; d trashes what is marked.
-    press(&mut app, &["v", "<esc>"]);
+    ctrl_click(&mut app, 0);
+    press(&mut app, &["<esc>"]);
     assert!(app.map.region.is_none());
     let count = app.shown.len();
-    press(&mut app, &["v", "v", "d"]);
+    // Inbox mail, marked: asked first, and taken only with i.
+    select_rows(&mut app, 0, 1);
+    press(&mut app, &["d"]);
+    assert!(matches!(app.dialog, app::Dialog::Bulk(_)));
+    press(&mut app, &["i", "y"]);
     app.settle(Duration::from_secs(5));
     assert_eq!(app.shown.len(), count - 2);
 }
 
 #[test]
-fn in_the_list_space_and_shift_arrows_select_what_is_acted_on_together() {
+fn in_the_list_shift_arrows_select_what_is_acted_on_together() {
     let mut app = demo();
     let marked = |app: &App| app.map.region.as_ref().map_or(0, |r| r.keys.len());
-    // Space marks the one picked and goes on, as v does; again, lets it go.
-    press(&mut app, &[" ", " "]);
-    assert_eq!(marked(&app), 2);
-    assert_eq!(app.list.selected(), Some(2));
-    press(&mut app, &["k", " "]);
-    assert_eq!(marked(&app), 1);
-    press(&mut app, &["<esc>"]);
+    // Space selects nothing: several are selected with the mouse, or so.
+    press(&mut app, &[" "]);
     assert_eq!(marked(&app), 0);
     // Shift and an arrow: from the one picked to where it goes, marked;
     // back, fewer.
@@ -567,14 +574,17 @@ fn in_the_list_space_and_shift_arrows_select_what_is_acted_on_together() {
     assert_eq!(marked(&app), 3);
     let screen = app::screen(&mut app, 150, 30);
     assert!(screen.contains("3 marked"), "{screen}");
-    // Then a key acts on all of them: d trashes the three.
+    // Then a key acts on all of them, once asked: d, i and y trash the
+    // three, Inbox mail as they are.
     let count = app.shown.len();
-    press(&mut app, &["d"]);
+    press(&mut app, &["d", "i", "y"]);
     app.settle(Duration::from_secs(5));
     assert_eq!(app.shown.len(), count - 3);
     // A step without Shift begins anew: what was marked stays, and Shift
     // marks on from there.
-    press(&mut app, &["g", " ", "j", "<s-down>"]);
+    press(&mut app, &["g"]);
+    super::selecting::ctrl_click(&mut app, 0);
+    press(&mut app, &["j", "<s-down>"]);
     assert_eq!(marked(&app), 3);
 }
 
@@ -644,7 +654,7 @@ fn in_the_list_a_message_filed_is_out_of_it_at_once_and_the_next_picked() {
 }
 
 #[test]
-fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
+fn in_the_list_y_capital_files_all_like_the_one_picked_once_asked() {
     let mut app = demo();
     let s = app.map.snapshot.clone().unwrap();
     let going = app
@@ -671,13 +681,14 @@ fn in_the_list_y_capital_marks_all_like_the_one_picked_and_again_files_them() {
         .map(|l| l.summary.subject.clone())
         .collect();
     app.list.select(Some(going));
+    // All like it, asked first, counted; y files them.
     press(&mut app, &["Y"]);
-    assert_eq!(
-        app.map.region.as_ref().map(|r| r.keys.len()),
-        Some(like.len())
-    );
-    assert!(app.status.contains(&label), "{}", app.status);
-    press(&mut app, &["Y"]);
+    let app::Dialog::Bulk(bulk) = &app.dialog else {
+        panic!("asked: {}", app.status);
+    };
+    assert_eq!(bulk.keys.len(), like.len());
+    assert!(bulk.said.title.contains(&label), "{}", bulk.said.title);
+    press(&mut app, &["y"]);
     app.settle(Duration::from_secs(5));
     for subject in &like {
         let (labels, inbox) = dot_labels(&app, subject);
