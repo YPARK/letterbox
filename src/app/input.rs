@@ -318,6 +318,7 @@ impl App {
             {
                 if let Some(view) = self.before_found.take() {
                     self.open_view(view);
+                    self.status.clear();
                 }
             }
             Act::Back => {}

@@ -172,6 +172,13 @@ fn in_the_list_a_search_of_a_cluster_listed_is_of_that_cluster_only() {
         app.folder_name()
     );
     // esc: Grant listed again, as it was before the search.
+    let screen = app::screen(&mut app, 140, 36);
+    assert!(!screen.contains("1 messages"), "{screen}");
     press(&mut app, &["<esc>"]);
     assert_eq!(app.folder_name(), "Grant");
+    assert!(
+        !app.status.contains("found"),
+        "said no longer: {}",
+        app.status
+    );
 }

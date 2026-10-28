@@ -67,7 +67,9 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 format!("{} of ", app.shown.len())
             };
-            format!("{shown}{} messages{unseen} ", l.total())
+            let total = l.total();
+            let noun = if total == 1 { "message" } else { "messages" };
+            format!("{shown}{total} {noun}{unseen} ")
         }
         None => String::new(),
     };
