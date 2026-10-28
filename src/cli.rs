@@ -184,8 +184,8 @@ pub(super) enum AccountAction {
 #[derive(Subcommand)]
 pub(super) enum TrashAction {
     /// Put back what letterbox moved to Trash from one time to another,
-    /// each where it was moved from, as `d` in Trash does for one; it is
-    /// then forgotten, and not removed after 7 days
+    /// each where it was moved from, as `d` in Trash does for one; its
+    /// record is then let go
     Restore {
         /// From when: `2026-10-27 13:50`, in local time, or seconds since 1970
         #[arg(long)]

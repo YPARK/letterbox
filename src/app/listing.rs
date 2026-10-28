@@ -19,7 +19,19 @@ pub enum View {
     /// What holds every word searched for, of every folder of every
     /// account, as letterbox knows it; or of one cluster, or of what fits
     /// nowhere, if it was listed when searched.
-    Found(String, Focused),
+    Found(String, Within),
+}
+
+/// What a search was of: everything, or the messages a cluster held, or
+/// what fitted nowhere, when it was searched. Held by its messages, not
+/// the cluster's number: the map drawn again numbers its clusters anew.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Within {
+    Everywhere,
+    Of {
+        name: String,
+        keys: Arc<std::collections::BTreeSet<crate::index::Key>>,
+    },
 }
 
 /// A folder's messages, as many as are listed, newest first as its server
@@ -197,24 +209,34 @@ impl App {
                 .map(|g| g.name())
                 .unwrap_or_else(|| "a cluster".to_string()),
             Some(View::Loners) => "Fits nowhere".to_string(),
-            Some(View::Found(words, Focused::All)) => format!("Found: {words}"),
-            Some(View::Found(words, of)) => format!("Found in {}: {words}", self.found_in(*of)),
+            Some(View::Found(words, Within::Everywhere)) => format!("Found: {words}"),
+            Some(View::Found(words, Within::Of { name, .. })) => {
+                format!("Found in {name}: {words}")
+            }
             None => String::new(),
         }
     }
 
-    /// What a search was of, by name: a cluster, or what fits nowhere.
-    fn found_in(&self, of: Focused) -> String {
-        match of {
-            Focused::Cluster(id) => self
-                .map
-                .snapshot
-                .as_ref()
-                .and_then(|s| s.group(id))
-                .map(|g| g.name())
-                .unwrap_or_else(|| "a cluster".to_string()),
-            Focused::Loners => "what fits nowhere".to_string(),
-            Focused::All => "every folder".to_string(),
+    /// What a search of the cluster listed, or of what fits nowhere, is
+    /// of: its name, and the messages it holds now.
+    fn within(&self, view: &View) -> Within {
+        let Some(s) = &self.map.snapshot else {
+            return Within::Everywhere;
+        };
+        let (name, members): (String, Vec<usize>) = match *view {
+            View::Cluster(id) => (
+                s.group(id)
+                    .map(|g| g.name())
+                    .unwrap_or_else(|| "a cluster".to_string()),
+                (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
+            ),
+            View::Loners => ("what fits nowhere".to_string(), s.loners()),
+            _ => return Within::Everywhere,
+        };
+        let keys = members.into_iter().map(|i| s.dots[i].key.clone());
+        Within::Of {
+            name,
+            keys: Arc::new(keys.collect()),
         }
     }
 
@@ -473,16 +495,13 @@ impl App {
                 .collect(),
             View::Cluster(id) => (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
             View::Loners => s.loners(),
-            View::Found(ref words, of) => {
+            View::Found(ref words, ref within) => {
                 let found = self.map.found_all(words);
-                match of {
-                    Focused::All => found,
-                    Focused::Cluster(id) => {
-                        found.into_iter().filter(|&i| s.picked_by(id, i)).collect()
-                    }
-                    Focused::Loners => found
+                match within {
+                    Within::Everywhere => found,
+                    Within::Of { keys, .. } => found
                         .into_iter()
-                        .filter(|&i| s.clustering.loner[i])
+                        .filter(|&i| keys.contains(&s.dots[i].key))
                         .collect(),
                 }
             }
@@ -800,31 +819,32 @@ impl App {
             let words = self.query.trim().to_string();
             // A cluster listed, or what fits nowhere, is searched alone;
             // and a search again of what was found there, there again.
-            let of = match l.view {
-                View::Cluster(id) => Focused::Cluster(id),
-                View::Loners => Focused::Loners,
-                View::Found(_, of) => of,
-                _ => Focused::All,
+            let within = match &l.view {
+                View::Cluster(_) | View::Loners => self.within(&l.view),
+                View::Found(_, within) => within.clone(),
+                _ => Within::Everywhere,
             };
             // What was listed before, for esc to go back to.
             if !matches!(l.view, View::Found(..)) {
                 self.before_found = Some(l.view.clone());
             }
-            self.open_view(View::Found(words.clone(), of));
-            let n = self.shown.len();
-            let place = match of {
-                Focused::All => "every folder".to_string(),
-                of => self.found_in(of),
+            let place = match &within {
+                Within::Everywhere => None,
+                Within::Of { name, .. } => Some(name.clone()),
             };
-            self.status = if n == 0 {
-                match of {
-                    Focused::All => {
-                        format!("nothing found for {words}, in every folder letterbox knows")
-                    }
-                    _ => format!("nothing found for {words} in {place}"),
+            self.open_view(View::Found(words.clone(), within));
+            let n = self.shown.len();
+            self.status = match (n, place) {
+                (0, None) => format!("nothing found for {words}, in every folder letterbox knows"),
+                (0, Some(place)) => format!("nothing found for {words} in {place}"),
+                (n, None) => {
+                    format!(
+                        "{n} found in every folder, newest first · esc, or the sidebar, goes back"
+                    )
                 }
-            } else {
-                format!("{n} found in {place}, newest first · esc, or the sidebar, goes back")
+                (n, Some(place)) => {
+                    format!("{n} found in {place}, newest first · esc, or the sidebar, goes back")
+                }
             };
             return;
         }

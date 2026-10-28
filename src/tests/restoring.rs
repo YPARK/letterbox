@@ -68,7 +68,7 @@ fn what_was_trashed_goes_back_where_it_was_and_is_forgotten() {
     assert_eq!(uids(&mut store, "INBOX").len(), inbox - 1);
     assert_eq!(uids(&mut store, "Sent").len(), sent);
     assert_eq!(uids(&mut store, "Trash"), [kept.uid]);
-    // Restored, they are no longer the ledger's to remove after 7 days.
+    // Restored, their records are let go.
     assert_eq!(ledger.between(0, i64::MAX, None), [kept]);
     assert!(!ledger.between(0, i64::MAX, None).contains(&a));
     assert!(!ledger.between(0, i64::MAX, None).contains(&b));

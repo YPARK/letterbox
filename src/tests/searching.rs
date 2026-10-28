@@ -182,3 +182,31 @@ fn in_the_list_a_search_of_a_cluster_listed_is_of_that_cluster_only() {
         app.status
     );
 }
+
+#[test]
+fn what_was_found_in_a_cluster_stays_of_it_when_the_map_is_drawn_again() {
+    let mut app = inbox();
+    list_cluster(&mut app, "Grant");
+    press(&mut app, &["/", "review", "<enter>"]);
+    let found = listed(&app);
+    let name = app.folder_name();
+    assert!(name.contains("in Grant"), "{name}");
+    // Grant's label removed: the map drawn again, its clusters numbered anew.
+    app.ask_remove_label("Grant");
+    press(&mut app, &["y"]);
+    app.settle(Duration::from_secs(5));
+    assert!(
+        app.map
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .groups
+            .iter()
+            .all(|g| g.label.as_deref() != Some("Grant")),
+        "Grant is gone from the map"
+    );
+    // Still what Grant held when it was searched, said as Grant: never
+    // another cluster's, given its number.
+    assert_eq!(app.folder_name(), name);
+    assert_eq!(listed(&app), found);
+}
