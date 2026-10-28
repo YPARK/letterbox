@@ -296,7 +296,7 @@ pub const KEYS: &[Binding] = &[
         name: "/",
         hint: "/",
         foot: &[(List, "search"), (Map, "search")],
-        help: "search the messages listed as you type; ⏎ searches the server. In the map, what holds every word is lit as you type, the rest faded; n and p go from one found to the next",
+        help: "search as you type; ⏎ every folder of every account at once, esc back. In the map, what is found is lit; n p go along it",
     },
     Binding {
         keys: &[("u", Seen)],

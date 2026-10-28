@@ -316,6 +316,8 @@ pub struct App {
     pub mark_big: usize,
     /// What was last trashed together, for C-x u to put back.
     undo: Undo,
+    /// What was listed before what was found, for esc to go back to.
+    before_found: Option<View>,
     /// What was done last that C-x u undoes.
     last: Option<Last>,
     /// What a label split or removed asked, followed for C-x u.
@@ -606,6 +608,7 @@ impl App {
             mark_big: MARK_BIG,
             undo: Undo::default(),
             last: None,
+            before_found: None,
             refiling: Refiling::default(),
             untaught: Default::default(),
             junk_asked: Default::default(),

@@ -220,7 +220,7 @@ impl App {
         // Thrown away: what is learnt of what you throw away.
         self.teach_at(account, &from, uid, true);
         let name = self.folder_label(account, &trash);
-        self.status = format!("moved to {name} · d there puts it back, for 7 days");
+        self.status = format!("moved to {name} · d there puts it back");
         self.trash_quietly(account, from, uid, message_id, trash);
     }
 

@@ -441,7 +441,12 @@ fn deleting_moves_to_trash_and_back() {
         "{}",
         app.status
     );
-    assert!(app.status.contains("7 days"), "{}", app.status);
+    assert!(app.status.contains("puts it back"), "{}", app.status);
+    assert!(
+        !app.status.contains("7 days"),
+        "kept longer: {}",
+        app.status
+    );
     press(&mut app, &["h", "j", "j", "j", "j", "j"]);
     assert_eq!(app.folder_name(), "Trash", "{}", app.status);
     assert_eq!(app.shown[0].from, "Ada Lovelace");

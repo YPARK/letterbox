@@ -164,7 +164,7 @@ letterbox search grant report --account Work
 | `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G`, `M-<` / `M->` | go to the top, or the end |
-| `/` | search the messages listed as you type; `enter` searches the server. In the map, what holds every word is lit as you type, the rest faded |
+| `/` | search the messages listed as you type; `enter` searches every folder of every account at once, from what letterbox already knows (each message's sender, address, subject, first lines and labels, every word to be there, case let go): what is found is listed newest first, and `esc` goes back to what was listed. With a cluster of the map listed, or what fits nowhere, `enter` searches only it, and a search again of what was found there stays in it. Before the map is begun, `enter` asks the servers, of the folder listed. In the map, what holds every word is lit as you type, the rest faded |
 | `esc` / `C-g` | back to the list; clear the search; close a dialog; out of a cluster gone into, a level. `C-g` as Emacs has it, wherever `esc` goes back |
 | `u` | mark read, or unread |
 | `!` | flag, or unflag |
@@ -355,6 +355,10 @@ message read as wide as you made it. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.
+Narrowed to a cluster (by `[` `]`, its row in the sidebar, or `⏎` on its
+block), the search is of that cluster only: the line over the map says
+"found in" it, and `n` and `p` never leave it; `0` searches all of the
+map again.
 `,` opens what the map shows, and how, each
 by a key, kept open to change more: `w` lays it out by words and people,
 by words alone or by people alone; `t` shows all of it, this week's or

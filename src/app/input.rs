@@ -233,8 +233,12 @@ impl App {
                     self.searching = false;
                     let now = jiff::Timestamp::now().as_second();
                     let found = self.map.seek(&self.query, now);
+                    let of = match self.map.searched_in() {
+                        Some(name) => format!(" in {name}, ] [ the clusters beside it"),
+                        None => String::new(),
+                    };
                     self.status =
-                        format!("{found} found · n next, p the one before, esc lets it go");
+                        format!("{found} found{of} · n next, p the one before, esc lets it go");
                 }
                 KeyCode::Enter => {
                     self.searching = false;
@@ -304,6 +308,18 @@ impl App {
                 self.query.clear();
                 self.found = None;
                 self.narrow();
+            }
+            // Out of what was found, back to what was listed before.
+            Act::Back
+                if self
+                    .listing
+                    .as_ref()
+                    .is_some_and(|l| matches!(l.view, View::Found(..))) =>
+            {
+                if let Some(view) = self.before_found.take() {
+                    self.open_view(view);
+                    self.status.clear();
+                }
             }
             Act::Back => {}
             // The map has no sidebar: between it and the message read.

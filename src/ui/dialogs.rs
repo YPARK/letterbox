@@ -476,7 +476,7 @@ pub(super) fn trash_dialog(f: &mut Frame, t: &Theme, pick: &TrashPick) -> (Rect,
     let width = f.area().width.min(72);
     let room = (width as usize).saturating_sub(4);
     let intro = wrap(
-        "Which of these folders should hold mail you delete? It stays there for 7 days, and d puts it back.",
+        "Which of these folders should hold mail you delete? It stays there as long as its server keeps it, and d puts it back.",
         room,
     );
     let shows = (f.area().height as usize)

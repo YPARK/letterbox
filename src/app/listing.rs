@@ -16,6 +16,22 @@ pub enum View {
     Map,
     Cluster(u32),
     Loners,
+    /// What holds every word searched for, of every folder of every
+    /// account, as letterbox knows it; or of one cluster, or of what fits
+    /// nowhere, if it was listed when searched.
+    Found(String, Within),
+}
+
+/// What a search was of: everything, or the messages a cluster held, or
+/// what fitted nowhere, when it was searched. Held by its messages, not
+/// the cluster's number: the map drawn again numbers its clusters anew.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Within {
+    Everywhere,
+    Of {
+        name: String,
+        keys: Arc<std::collections::BTreeSet<crate::index::Key>>,
+    },
 }
 
 /// A folder's messages, as many as are listed, newest first as its server
@@ -193,7 +209,34 @@ impl App {
                 .map(|g| g.name())
                 .unwrap_or_else(|| "a cluster".to_string()),
             Some(View::Loners) => "Fits nowhere".to_string(),
+            Some(View::Found(words, Within::Everywhere)) => format!("Found: {words}"),
+            Some(View::Found(words, Within::Of { name, .. })) => {
+                format!("Found in {name}: {words}")
+            }
             None => String::new(),
+        }
+    }
+
+    /// What a search of the cluster listed, or of what fits nowhere, is
+    /// of: its name, and the messages it holds now.
+    fn within(&self, view: &View) -> Within {
+        let Some(s) = &self.map.snapshot else {
+            return Within::Everywhere;
+        };
+        let (name, members): (String, Vec<usize>) = match *view {
+            View::Cluster(id) => (
+                s.group(id)
+                    .map(|g| g.name())
+                    .unwrap_or_else(|| "a cluster".to_string()),
+                (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
+            ),
+            View::Loners => ("what fits nowhere".to_string(), s.loners()),
+            _ => return Within::Everywhere,
+        };
+        let keys = members.into_iter().map(|i| s.dots[i].key.clone());
+        Within::Of {
+            name,
+            keys: Arc::new(keys.collect()),
         }
     }
 
@@ -362,6 +405,12 @@ impl App {
             Some(&Row::Loners) => View::Loners,
             _ => return,
         };
+        self.open_view(view);
+    }
+
+    /// List `view`: a folder, a role's folders, the map's, or what was
+    /// found.
+    pub(super) fn open_view(&mut self, view: View) {
         if self.listing.as_ref().is_some_and(|l| l.view == view) {
             return;
         }
@@ -391,7 +440,7 @@ impl App {
         let folders = match view {
             View::Folder(a, path) => vec![(a, path)],
             View::All(role) => self.folders_of(role),
-            View::Map | View::Cluster(_) | View::Loners => {
+            View::Map | View::Cluster(_) | View::Loners | View::Found(..) => {
                 self.list_map();
                 Vec::new()
             }
@@ -446,6 +495,16 @@ impl App {
                 .collect(),
             View::Cluster(id) => (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
             View::Loners => s.loners(),
+            View::Found(ref words, ref within) => {
+                let found = self.map.found_all(words);
+                match within {
+                    Within::Everywhere => found,
+                    Within::Of { keys, .. } => found
+                        .into_iter()
+                        .filter(|&i| keys.contains(&s.dots[i].key))
+                        .collect(),
+                }
+            }
             _ => return,
         };
         let mut members = members;
@@ -751,6 +810,42 @@ impl App {
     pub(super) fn search(&mut self) {
         let Some(l) = &self.listing else { return };
         if self.query.trim().is_empty() {
+            return;
+        }
+        // Of every folder of every account, from what letterbox knows: at
+        // once, and never only the folder listed. The servers are asked
+        // only where the map is not begun.
+        if self.map.snapshot.is_some() {
+            let words = self.query.trim().to_string();
+            // A cluster listed, or what fits nowhere, is searched alone;
+            // and a search again of what was found there, there again.
+            let within = match &l.view {
+                View::Cluster(_) | View::Loners => self.within(&l.view),
+                View::Found(_, within) => within.clone(),
+                _ => Within::Everywhere,
+            };
+            // What was listed before, for esc to go back to.
+            if !matches!(l.view, View::Found(..)) {
+                self.before_found = Some(l.view.clone());
+            }
+            let place = match &within {
+                Within::Everywhere => None,
+                Within::Of { name, .. } => Some(name.clone()),
+            };
+            self.open_view(View::Found(words.clone(), within));
+            let n = self.shown.len();
+            self.status = match (n, place) {
+                (0, None) => format!("nothing found for {words}, in every folder letterbox knows"),
+                (0, Some(place)) => format!("nothing found for {words} in {place}"),
+                (n, None) => {
+                    format!(
+                        "{n} found in every folder, newest first · esc, or the sidebar, goes back"
+                    )
+                }
+                (n, Some(place)) => {
+                    format!("{n} found in {place}, newest first · esc, or the sidebar, goes back")
+                }
+            };
             return;
         }
         if self.map.mode == Mode::List {

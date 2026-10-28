@@ -142,7 +142,8 @@ fn a_search_on_the_map_lights_what_holds_it_and_n_goes_through_them() {
     assert_eq!(app.map.picked().unwrap(), first);
     // Of two words, both; and esc lets it go.
     press(&mut app, &["/", "<c-u>", "mira budget"]);
-    assert_eq!(app.map.hits.as_ref().unwrap().count, 1);
+    let now = jiff::Timestamp::now().as_second();
+    assert_eq!(app.map.found("mira budget", now).len(), 1);
     press(&mut app, &["<enter>", "<esc>"]);
     assert!(app.query.is_empty());
     assert!(app.map.hits.is_none());

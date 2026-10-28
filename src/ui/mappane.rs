@@ -55,11 +55,13 @@ pub(super) fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let mut head = vec![Span::styled(" Map", dim.add_modifier(Modifier::BOLD))];
     // What is searched for, first, as it is what is looked at.
     let query = app.query.clone();
-    if let Some(h) = app.map.hits(&query) {
-        head.push(Span::styled(
-            format!(" · {} found for “{}”", h.count, query.trim()),
-            Style::new().fg(t.title).bold(),
-        ));
+    if app.map.hits(&query).is_some() {
+        let n = app.map.found(&query, now).len();
+        let said = match app.map.searched_in() {
+            Some(name) => format!(" · {n} found in {name} for “{}”", query.trim()),
+            None => format!(" · {n} found for “{}”", query.trim()),
+        };
+        head.push(Span::styled(said, Style::new().fg(t.title).bold()));
     }
     let mut what = format!(
         " · {} · {} · {} {}",
