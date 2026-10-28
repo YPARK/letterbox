@@ -38,6 +38,7 @@ mod relabel;
 mod restoring;
 mod reviewing;
 mod saving;
+mod searching;
 mod selecting;
 mod teaching;
 mod writing;

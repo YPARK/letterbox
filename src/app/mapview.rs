@@ -739,11 +739,12 @@ impl App {
             self.map.pick_first(jiff::Timestamp::now().as_second());
         }
         self.rebuild();
-        if self
-            .listing
-            .as_ref()
-            .is_some_and(|l| matches!(l.view, View::Map | View::Cluster(_) | View::Loners))
-        {
+        if self.listing.as_ref().is_some_and(|l| {
+            matches!(
+                l.view,
+                View::Map | View::Cluster(_) | View::Loners | View::Found(_)
+            )
+        }) {
             self.list_map();
             self.narrow();
         }

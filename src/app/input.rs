@@ -305,6 +305,17 @@ impl App {
                 self.found = None;
                 self.narrow();
             }
+            // Out of what was found, back to what was listed before.
+            Act::Back
+                if self
+                    .listing
+                    .as_ref()
+                    .is_some_and(|l| matches!(l.view, View::Found(_))) =>
+            {
+                if let Some(view) = self.before_found.take() {
+                    self.open_view(view);
+                }
+            }
             Act::Back => {}
             // The map has no sidebar: between it and the message read.
             Act::NextPane | Act::PreviousPane if self.map.mode == Mode::Map => {

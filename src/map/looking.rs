@@ -385,6 +385,20 @@ impl Map {
         found
     }
 
+    /// Every message that holds every word of `query`, whatever the map
+    /// shows: of every folder of every account it knows, newest first.
+    pub fn found_all(&mut self, query: &str) -> Vec<usize> {
+        let (Some(hits), Some(s)) = (
+            self.hits(query).map(|h| h.matched.clone()),
+            self.snapshot.clone(),
+        ) else {
+            return Vec::new();
+        };
+        let mut found: Vec<usize> = (0..s.dots.len()).filter(|&i| hits[i]).collect();
+        found.sort_by_key(|&i| (std::cmp::Reverse(s.dots[i].date), i));
+        found
+    }
+
     /// Pick the newest message found, unless the one picked is found too;
     /// how many are.
     pub fn seek(&mut self, query: &str, now: i64) -> usize {

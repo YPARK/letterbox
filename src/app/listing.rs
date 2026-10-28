@@ -16,6 +16,9 @@ pub enum View {
     Map,
     Cluster(u32),
     Loners,
+    /// What holds every word searched for, of every folder of every
+    /// account, as letterbox knows it.
+    Found(String),
 }
 
 /// A folder's messages, as many as are listed, newest first as its server
@@ -193,6 +196,7 @@ impl App {
                 .map(|g| g.name())
                 .unwrap_or_else(|| "a cluster".to_string()),
             Some(View::Loners) => "Fits nowhere".to_string(),
+            Some(View::Found(words)) => format!("Found: {words}"),
             None => String::new(),
         }
     }
@@ -362,6 +366,12 @@ impl App {
             Some(&Row::Loners) => View::Loners,
             _ => return,
         };
+        self.open_view(view);
+    }
+
+    /// List `view`: a folder, a role's folders, the map's, or what was
+    /// found.
+    pub(super) fn open_view(&mut self, view: View) {
         if self.listing.as_ref().is_some_and(|l| l.view == view) {
             return;
         }
@@ -391,7 +401,7 @@ impl App {
         let folders = match view {
             View::Folder(a, path) => vec![(a, path)],
             View::All(role) => self.folders_of(role),
-            View::Map | View::Cluster(_) | View::Loners => {
+            View::Map | View::Cluster(_) | View::Loners | View::Found(_) => {
                 self.list_map();
                 Vec::new()
             }
@@ -446,6 +456,7 @@ impl App {
                 .collect(),
             View::Cluster(id) => (0..s.dots.len()).filter(|&i| s.picked_by(id, i)).collect(),
             View::Loners => s.loners(),
+            View::Found(ref words) => self.map.found_all(words),
             _ => return,
         };
         let mut members = members;
@@ -751,6 +762,24 @@ impl App {
     pub(super) fn search(&mut self) {
         let Some(l) = &self.listing else { return };
         if self.query.trim().is_empty() {
+            return;
+        }
+        // Of every folder of every account, from what letterbox knows: at
+        // once, and never only the folder listed. The servers are asked
+        // only where the map is not begun.
+        if self.map.snapshot.is_some() {
+            let words = self.query.trim().to_string();
+            // What was listed before, for esc to go back to.
+            if !matches!(l.view, View::Found(_)) {
+                self.before_found = Some(l.view.clone());
+            }
+            self.open_view(View::Found(words.clone()));
+            let n = self.shown.len();
+            self.status = if n == 0 {
+                format!("nothing found for {words}, in every folder letterbox knows")
+            } else {
+                format!("{n} found in every folder, newest first · esc, or the sidebar, goes back")
+            };
             return;
         }
         if self.map.mode == Mode::List {
