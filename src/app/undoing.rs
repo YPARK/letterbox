@@ -38,6 +38,8 @@ pub struct Moves {
     at: i64,
     before: Vec<Before>,
     unknown: usize,
+    /// Brought to another account: not put back by C-x u.
+    elsewhere: usize,
 }
 
 /// The message an ask moves, if it moves one: the folder and UID it is
@@ -92,9 +94,11 @@ impl App {
         if self.quiet_moves {
             return;
         }
-        let Some((folder, uid, message_id, key)) = moved_from(ask) else {
+        let bring = matches!(ask, Ask::Bring { .. });
+        let moved = moved_from(ask);
+        if moved.is_none() && !bring {
             return;
-        };
+        }
         if !std::mem::replace(&mut self.moves_begun, true) {
             self.undoable = Moves {
                 at: self.input_at,
@@ -102,6 +106,10 @@ impl App {
             };
             self.last = Some(Last::Moves);
         }
+        let Some((folder, uid, message_id, key)) = moved else {
+            self.undoable.elsewhere += 1;
+            return;
+        };
         let ident = self.accounts[account].ident.clone();
         let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
         // By its key, else where it is, else its Message-ID: Gmail's are
@@ -198,9 +206,12 @@ impl App {
     pub(super) fn undo_moves(&mut self) {
         let moves = std::mem::take(&mut self.undoable);
         if moves.before.is_empty() {
-            self.status = match moves.unknown {
-                0 => "nothing moved to put back".to_string(),
-                n => {
+            self.status = match (moves.unknown, moves.elsewhere) {
+                (0, 0) => "nothing moved to put back".to_string(),
+                (0, n) => {
+                    format!("{n} brought to another account: C-x u does not bring them back")
+                }
+                (n, _) => {
                     format!("{n} moved, but letterbox could not tell where they were, so are left")
                 }
             };
@@ -289,12 +300,19 @@ impl App {
                 " · {unknown} letterbox could not tell where they were, so are left where they went"
             ));
         }
+        if moves.elsewhere > 0 {
+            said.push_str(&format!(
+                " · {} brought to another account are left there",
+                moves.elsewhere
+            ));
+        }
         self.status = said;
         if !waiting.is_empty() {
             self.undoable = Moves {
                 at: moves.at,
                 before: waiting,
                 unknown: 0,
+                elsewhere: 0,
             };
             self.last = Some(Last::Moves);
         }
@@ -353,8 +371,13 @@ impl App {
             asks.extend(less(&was, &is).into_iter().map(|l| relabel(Some(l), None)));
             asks.extend(less(&is, &was).into_iter().map(|l| relabel(None, Some(l))));
         }
-        let gone_from_where_it_was = !b.places.iter().any(|(f, _)| *f == folder);
-        if gone_from_where_it_was {
+        // Moved back only from somewhere else, and only if where it was
+        // has it no more: its server's word for where it landed, else the
+        // map's that it is gone from there, so that a copy left behind is
+        // never doubled.
+        let elsewhere = !b.places.iter().any(|(f, _)| *f == folder);
+        let gone = b.landed.is_some() || !now.iter().any(|(f, _)| *f == b.folder);
+        if elsewhere && gone {
             asks.push(Ask::Move {
                 from: folder.clone(),
                 uid,
