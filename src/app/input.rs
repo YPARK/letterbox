@@ -314,7 +314,7 @@ impl App {
                 if self
                     .listing
                     .as_ref()
-                    .is_some_and(|l| matches!(l.view, View::Found(_))) =>
+                    .is_some_and(|l| matches!(l.view, View::Found(..))) =>
             {
                 if let Some(view) = self.before_found.take() {
                     self.open_view(view);

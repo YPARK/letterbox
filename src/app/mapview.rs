@@ -742,7 +742,7 @@ impl App {
         if self.listing.as_ref().is_some_and(|l| {
             matches!(
                 l.view,
-                View::Map | View::Cluster(_) | View::Loners | View::Found(_)
+                View::Map | View::Cluster(_) | View::Loners | View::Found(..)
             )
         }) {
             self.list_map();

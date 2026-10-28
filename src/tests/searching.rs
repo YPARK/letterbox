@@ -115,3 +115,63 @@ fn on_the_map_a_search_in_a_cluster_is_of_that_cluster_only() {
     press(&mut app, &["/", "review", "<enter>"]);
     assert_eq!(app.map.found("review", now).len(), everywhere);
 }
+
+/// The cluster labelled `label`, listed from its row in the sidebar.
+fn list_cluster(app: &mut App, label: &str) -> u32 {
+    let s = app.map.snapshot.clone().unwrap();
+    let id = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some(label))
+        .unwrap()
+        .id;
+    app.focus = app::Focus::Side;
+    app.row = app
+        .rows
+        .iter()
+        .position(|r| *r == app::Row::Cluster(id))
+        .expect("its row");
+    press(app, &["<enter>"]);
+    assert_eq!(app.folder_name(), label);
+    id
+}
+
+#[test]
+fn in_the_list_a_search_of_a_cluster_listed_is_of_that_cluster_only() {
+    let mut app = inbox();
+    press(&mut app, &["/", "review", "<enter>"]);
+    let everywhere = app.shown.len();
+    press(&mut app, &["<esc>"]);
+
+    let grant = list_cluster(&mut app, "Grant");
+    let s = app.map.snapshot.clone().unwrap();
+    press(&mut app, &["/", "review", "<enter>"]);
+    let found = app.shown.len();
+    assert!(found > 0, "{}", app.status);
+    assert!(found < everywhere, "{found} of {everywhere}");
+    assert!(
+        app.shown.iter().all(|l| s
+            .dots
+            .iter()
+            .enumerate()
+            .any(|(i, d)| d.subject == l.summary.subject && s.picked_by(grant, i))),
+        "{:?}",
+        listed(&app)
+    );
+    assert!(
+        app.folder_name().contains("in Grant"),
+        "{}",
+        app.folder_name()
+    );
+    assert!(app.status.contains("in Grant"), "{}", app.status);
+    // A search again, of what was found there, is still of Grant.
+    press(&mut app, &["/", "<c-u>", "reviewer", "<enter>"]);
+    assert!(
+        app.folder_name().contains("in Grant"),
+        "{}",
+        app.folder_name()
+    );
+    // esc: Grant listed again, as it was before the search.
+    press(&mut app, &["<esc>"]);
+    assert_eq!(app.folder_name(), "Grant");
+}
