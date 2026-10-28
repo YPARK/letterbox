@@ -72,8 +72,6 @@ impl App {
     pub(super) fn region_trash(&mut self, teach: &dyn Fn(&crate::index::Key) -> bool) -> bool {
         let dots = self.region_dots();
         let mut moved = 0;
-        let mut asked = Vec::new();
-        let mut taught = Vec::new();
         for d in &dots {
             let Some(listed) = self.listed_dot(d) else {
                 continue;
@@ -89,7 +87,6 @@ impl App {
             }
             moved += 1;
         }
-        self.remember_trashing(asked, taught);
         self.map.region = None;
         self.status = if moved < dots.len() {
             format!(

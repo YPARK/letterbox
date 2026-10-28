@@ -693,61 +693,6 @@ impl App {
         );
     }
 
-    /// Select the rows of the Inbox looked through from `a` to `b`, both,
-    /// the row `b` picked.
-    pub(super) fn review_select(&mut self, a: usize, b: usize) {
-        let rows = self.review_rows();
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        let last = rows.len().saturating_sub(1);
-        let (lo, hi) = (a.min(b).min(last), a.max(b).min(last));
-        let Some(r) = &mut self.review else {
-            return;
-        };
-        r.anchor = None;
-        r.selected = rows
-            .get(lo..=hi)
-            .unwrap_or_default()
-            .iter()
-            .map(|&i| s.dots[i].key.clone())
-            .collect();
-        let n = r.selected.len();
-        if let Some(&i) = rows.get(b.min(last)) {
-            self.pick_review(Some(i));
-        }
-        self.focus = Focus::Reader;
-        self.status = format!(
-            "{n} selected: m moves them, d discards them, space keeps them, y as suggested; esc lets them go"
-        );
-    }
-
-    /// Add the row `row` of the Inbox looked through to what is selected,
-    /// or take it away.
-    pub(super) fn review_toggle(&mut self, row: usize) {
-        let Some(&i) = self.review_rows().get(row) else {
-            return;
-        };
-        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
-            return;
-        };
-        let Some(r) = &mut self.review else {
-            return;
-        };
-        r.anchor = None;
-        match r.selected.iter().position(|k| *k == key) {
-            Some(at) => {
-                r.selected.remove(at);
-            }
-            None => r.selected.push(key),
-        }
-        let n = r.selected.len();
-        self.focus = Focus::Reader;
-        self.status = format!(
-            "{n} selected: m moves them, d discards them, space keeps them, y as suggested; esc lets them go"
-        );
-    }
-
     /// What a key chooses for all that is selected in the Inbox looked
     /// through, if any is: then the selection let go, and the one after
     /// the last of it picked. Whether it was its to do.
