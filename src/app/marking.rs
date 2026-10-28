@@ -94,7 +94,6 @@ impl App {
             }
             moved += 1;
         }
-        self.remember_trashing(asked, taught);
         self.map.region = None;
         self.status = if moved < dots.len() {
             format!(

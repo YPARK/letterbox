@@ -23,6 +23,7 @@ mod review;
 mod saving;
 mod screen;
 mod trashing;
+mod undoing;
 mod writing;
 use self::bringing::*;
 pub use self::bulk::*;
@@ -309,6 +310,15 @@ pub struct App {
     pub batch: crate::confirm::Batch,
     choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
     quiet: bool,
+    /// What was last moved, each as it was, for C-x u.
+    undoable: undoing::Moves,
+    /// A move remembered since the key pressed last: the rest of its are
+    /// remembered with it.
+    moves_begun: bool,
+    /// Moves not to remember: those that put back.
+    quiet_moves: bool,
+    /// When the key pressed last was, in seconds since 1970.
+    input_at: i64,
     /// How long a message sent is held, to be taken back.
     pub send_hold: Duration,
     /// Asks that change mail, not yet answered: quitting while there are
@@ -318,8 +328,6 @@ pub struct App {
     pub(super) quitting: bool,
     /// Over this many marked, the foot says so in the flag's colour.
     pub mark_big: usize,
-    /// What was last trashed together, for C-x u to put back.
-    undo: Undo,
     /// What was listed before what was found, for esc to go back to.
     before_found: Option<View>,
     /// What was done last that C-x u undoes.
@@ -614,10 +622,13 @@ impl App {
             } else {
                 writing::SEND_HOLD
             },
+            undoable: undoing::Moves::default(),
+            moves_begun: false,
+            quiet_moves: false,
+            input_at: 0,
             changing: 0,
             quitting: false,
             mark_big: MARK_BIG,
-            undo: Undo::default(),
             last: None,
             before_found: None,
             refiling: Refiling::default(),
@@ -719,6 +730,7 @@ impl App {
             self.batch.ask(job);
         }
         let changes = ask.changes_mail();
+        self.remember_move(account, &ask);
         let sent = self.accounts[account]
             .asks
             .as_ref()
@@ -727,6 +739,13 @@ impl App {
             self.pending += 1;
             self.changing += usize::from(changes);
         }
+    }
+
+    /// Ask, not remembering what it moves for C-x u: it puts back.
+    fn ask_quietly(&mut self, account: usize, ask: Ask) {
+        let quiet = std::mem::replace(&mut self.quiet_moves, true);
+        self.ask(account, ask);
+        self.quiet_moves = quiet;
     }
 
     /// The accounts not removed, by their place.

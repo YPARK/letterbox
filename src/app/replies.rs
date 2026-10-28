@@ -368,6 +368,8 @@ impl App {
                 filed,
             } => {
                 let result: Result<(), String> = filed.as_ref().map(|_| ()).map_err(Clone::clone);
+                let landed = filed.as_ref().map(|f| f.moved.clone()).map_err(|_| ());
+                self.move_answered(a, &folder, uid, landed);
                 self.filed(a, key, label, filed);
                 self.took(
                     a,
@@ -385,6 +387,8 @@ impl App {
                 uid,
                 result,
             } => {
+                let landed = result.as_ref().map(|()| None).map_err(|_| ());
+                self.move_answered(a, &folder, uid, landed);
                 match &result {
                     Ok(()) => {
                         self.reload(a);
@@ -406,6 +410,7 @@ impl App {
                 // A look that failed is one that cannot tell: as many such,
                 // and its server's word is taken.
                 if passed.is_ok() {
+                    self.moves_looked(a);
                     self.looked_again(a);
                 } else {
                     self.batch.looked(a, |_| None);
@@ -543,6 +548,11 @@ impl App {
                 // Its following taken last, as what it says of a failure is
                 // the more: the message, and what was asked.
                 let result: Result<(), String> = new_uid.as_ref().map(|_| ()).map_err(Clone::clone);
+                let landed = new_uid
+                    .as_ref()
+                    .map(|&n| Some((to.clone(), n)))
+                    .map_err(|_| ());
+                self.move_answered(a, &from, uid, landed);
                 let was = from.clone();
                 match new_uid {
                     Ok(new_uid) => {
@@ -559,7 +569,6 @@ impl App {
                                 origin: from.clone(),
                                 at,
                             };
-                            self.trashing_answered(a, &from, uid, Some(entry.clone()));
                             if let Err(e) = self.ledger.record(entry) {
                                 self.status = format!("moved to Trash, and not recorded: {e:#}");
                             }
@@ -574,9 +583,7 @@ impl App {
                         self.map_pass(a);
                     }
                     Err(e) => {
-                        if trashed {
-                            self.trashing_answered(a, &from, uid, None);
-                        } else {
+                        if !trashed {
                             self.refile_moved(a, &from, uid, Err(e.clone()));
                         }
                         self.status = format!("cannot move it: {}", first_line(&e));

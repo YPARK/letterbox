@@ -9,12 +9,12 @@ pub const LABEL_MENU: [&str; 3] = ["Rename…", "Split into subfolders…", "Rem
 /// What was done last that C-x u undoes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Last {
-    /// Mail trashed together.
-    Trash,
     /// A label renamed: from, to.
     Rename(String, String),
     /// A label split into subfolders, or removed.
     Refile,
+    /// Mail moved, however: archived, filed, trashed alone.
+    Moves,
 }
 
 impl App {
@@ -141,7 +141,7 @@ impl App {
                 }
             }
             Some(Last::Refile) => self.undo_refiling(),
-            Some(Last::Trash) | None => self.undo_trash(),
+            Some(Last::Moves) | None => self.undo_moves(),
         }
     }
 }

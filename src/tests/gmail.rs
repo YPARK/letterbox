@@ -177,3 +177,28 @@ fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back
         app.status
     );
 }
+
+#[test]
+fn archived_or_filed_on_gmail_c_x_u_gives_its_labels_back() {
+    let (mut app, boxes) = gmail_app(true);
+    let was = on_server(&boxes, "R01 resubmission");
+    assert!(was.1, "in the Inbox");
+    // Archived: out of the Inbox, and back by C-x u.
+    pick(&mut app, "R01 resubmission");
+    press(&mut app, &["e"]);
+    app.settle(Duration::from_secs(5));
+    assert!(!on_server(&boxes, "R01 resubmission").1, "{}", app.status);
+    press(&mut app, &["<c-x>", "u"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(on_server(&boxes, "R01 resubmission"), was, "{}", app.status);
+    // Filed under a label: the label off again, the Inbox's back.
+    app.settle(Duration::from_secs(5));
+    pick(&mut app, "R01 resubmission");
+    press(&mut app, &["m"]);
+    press(&mut app, &["Family", "<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert_ne!(on_server(&boxes, "R01 resubmission"), was);
+    press(&mut app, &["<c-x>", "u"]);
+    app.settle(Duration::from_secs(5));
+    assert_eq!(on_server(&boxes, "R01 resubmission"), was, "{}", app.status);
+}

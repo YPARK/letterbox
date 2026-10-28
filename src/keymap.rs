@@ -636,7 +636,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-x u",
         hint: "C-x u",
         foot: &[],
-        help: "put back what was last trashed together, each where it was, and what it taught taken back",
+        help: "put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too

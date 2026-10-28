@@ -169,6 +169,12 @@ pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
+    /// A key pressed, or a click: what it moves is remembered anew.
+    fn began_input(&mut self) {
+        self.moves_begun = false;
+        self.input_at = jiff::Timestamp::now().as_second();
+    }
+
     /// Quit; while mail is still being changed, ask first.
     fn ask_quit(&mut self) {
         if self.changing == 0 {
@@ -184,6 +190,7 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent) {
+        self.began_input();
         let key = capital(key);
         if self.compose.is_some() {
             if matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
@@ -476,6 +483,9 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
+        if matches!(m.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_)) {
+            self.began_input();
+        }
         let at = self
             .targets
             .iter()

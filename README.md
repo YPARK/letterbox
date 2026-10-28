@@ -198,7 +198,7 @@ letterbox search grant report --account Work
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
-| `C-x` `u` | undo what was done last: what was trashed together put back, each where it was, and what trashing it taught taken back; or a label renamed, renamed back |
+| `C-x` `u` | undo what was done last: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `$` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
@@ -302,9 +302,10 @@ its tests:
   only what you decided of a message alone.
 - The filter throws nothing away on its own: what it is sure of is said
   at the foot, and `J` lists it, each and why, for you to choose.
-- What was trashed together, or a label renamed, split or removed,
-  `C-x u` undoes; and `letterbox trash restore` puts back what was
-  trashed in a time, each where it came from, `--dry-run` first.
+- What was last moved, however (trashed, archived, filed, or done in the
+  Inbox looked through), or a label renamed, split or removed, `C-x u`
+  undoes; and `letterbox trash restore` puts back what was trashed in a
+  time, each where it came from, `--dry-run` first.
 - A folder is deleted only empty, with none under it: a folder deleted
   with mail in it would take the mail with it.
 - letterbox does not quit unasked while mail is still being moved, filed
