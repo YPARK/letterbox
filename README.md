@@ -199,7 +199,7 @@ letterbox search grant report --account Work
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `C-x` `u` | undo what was done last: what was trashed together put back, each where it was, and what trashing it taught taken back; or a label renamed, renamed back |
-| `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more |
+| `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 ⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
@@ -304,6 +304,8 @@ its tests:
   trashed in a time, each where it came from, `--dry-run` first.
 - A folder is deleted only empty, with none under it: a folder deleted
   with mail in it would take the mail with it.
+- letterbox does not quit unasked while mail is still being moved, filed
+  or sent: cut off, a folder removed would be left half done.
 
 ## The map
 

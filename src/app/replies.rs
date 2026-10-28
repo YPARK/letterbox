@@ -191,6 +191,9 @@ impl App {
             return;
         }
         self.pending = self.pending.saturating_sub(1);
+        if reply.answer.of_a_change() {
+            self.changing = self.changing.saturating_sub(1);
+        }
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
         }

@@ -33,6 +33,7 @@ mod mapsafety;
 mod mapscreen;
 mod moving;
 mod passwords;
+mod quitting;
 mod reading;
 mod relabel;
 mod restoring;

@@ -169,6 +169,20 @@ pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
+    /// Quit; while mail is still being changed, ask first.
+    fn ask_quit(&mut self) {
+        if self.changing == 0 {
+            self.quit = true;
+            return;
+        }
+        let n = self.changing;
+        let what = if n == 1 { "change" } else { "changes" };
+        self.quitting = true;
+        self.status = format!(
+            "{n} {what} to your mail still going: y quits anyway, cutting it off; any other key waits"
+        );
+    }
+
     pub fn key(&mut self, key: KeyEvent) {
         let key = capital(key);
         if self.compose.is_some() {
@@ -186,9 +200,19 @@ impl App {
         // and C-c alone, nothing: compose's C-c C-c, pressed once more than
         // it needed, quits no more.
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Asked whether to quit while mail is changed: y does; any other
+        // key waits for it.
+        if std::mem::take(&mut self.quitting) {
+            if key.code == KeyCode::Char('y') && !ctrl {
+                self.quit = true;
+            } else {
+                self.status = "not quit: what was asked goes on".to_string();
+            }
+            return;
+        }
         if std::mem::take(&mut self.c_x) {
             if ctrl && key.code == KeyCode::Char('c') {
-                self.quit = true;
+                self.ask_quit();
             } else if !ctrl && key.code == KeyCode::Char('u') {
                 self.undo_last();
             } else {

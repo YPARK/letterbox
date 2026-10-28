@@ -309,6 +309,11 @@ pub struct App {
     pub batch: crate::confirm::Batch,
     choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
     quiet: bool,
+    /// Asks that change mail, not yet answered: quitting while there are
+    /// any is asked first.
+    pub(super) changing: usize,
+    /// C-x C-c was pressed while mail was being changed: y quits anyway.
+    pub(super) quitting: bool,
     /// Over this many marked, the foot says so in the flag's colour.
     pub mark_big: usize,
     /// What was last trashed together, for C-x u to put back.
@@ -601,6 +606,8 @@ impl App {
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
+            changing: 0,
+            quitting: false,
             mark_big: MARK_BIG,
             undo: Undo::default(),
             last: None,
@@ -703,12 +710,14 @@ impl App {
         if let Some(job) = self.job_of(account, &ask) {
             self.batch.ask(job);
         }
+        let changes = ask.changes_mail();
         let sent = self.accounts[account]
             .asks
             .as_ref()
             .is_some_and(|s| s.send(ask).is_ok());
         if sent {
             self.pending += 1;
+            self.changing += usize::from(changes);
         }
     }
 
