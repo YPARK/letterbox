@@ -183,7 +183,7 @@ letterbox search grant report --account Work
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
-| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked, or by a right-click on its anchor: asked first, how many carry it and where, and never onto a label there is. `C-x u` renames it back |
+| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: asked first, how many carry it and where, and never onto a label there is. A right-click on a label's anchor on the map offers it too, with splitting it and removing it, as [the map](#the-map) says. `C-x u` undoes each |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
 | `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
@@ -300,9 +300,11 @@ its tests:
   only what you decided of a message alone.
 - The filter throws nothing away on its own: what it is sure of is said
   at the foot, and `J` lists it, each and why, for you to choose.
-- What was trashed together, or a label renamed, `C-x u` undoes; and
-  `letterbox trash restore` puts back what was trashed in a time, each
-  where it came from, `--dry-run` first.
+- What was trashed together, or a label renamed, split or removed,
+  `C-x u` undoes; and `letterbox trash restore` puts back what was
+  trashed in a time, each where it came from, `--dry-run` first.
+- A folder is deleted only empty, with none under it: a folder deleted
+  with mail in it would take the mail with it.
 
 ## The map
 
@@ -486,8 +488,25 @@ and there, or reading it, `d`, `e`, `m`, `y` and `-` act on it alone. `m`
 moves it onto a cluster: `enter` on its block, or a click on it. It is
 given the cluster's label and taken out of the Inbox; `N` gives it a new
 label instead. Several are acted on together in the list, or in the
-Inbox looked through, selected with the mouse, and asked first. On the
-clusters, a label may be renamed: `R`, or a right-click on its anchor.
+Inbox looked through, selected with the mouse, and asked first.
+
+On the clusters, a label is changed whole, by a right-click on its
+anchor, `↑` `↓` and `⏎`; each shown first, done only on `y`, and undone
+by `C-x u`:
+
+- **Rename…**, as `R`: never onto a label there is.
+- **Split into subfolders…**: its mail, twelve or more, in parts by what
+  each is about, as a cluster gone into is, each a subfolder named by
+  the two words most its own, `⏎` typing a name over. On a server of
+  folders each is moved to its subfolder; on Gmail its label nested
+  under this one; a keyword, or a label letterbox keeps, given beside it.
+- **Remove…**: each of its messages filed where the map would file it
+  were there no such label, as the filed mail nearest it votes, else
+  unfiled, to Archive; then its folder deleted, only once its server
+  finds it empty. No message is thrown away, and a label with folders
+  under it is not removed.
+
+How far each has come is said at the foot as its servers answer.
 
 A message moves to another account's folder, picked in the labels dropped
 down as `Grant · ubc.ca`, from the list or the Inbox looked through: read

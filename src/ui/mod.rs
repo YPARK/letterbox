@@ -199,7 +199,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
         Dialog::Bulk(bulk) => Some(bulk_dialog(f, &t, &bulk.said)),
         Dialog::Junk(pick) => Some(junk_dialog(f, &t, pick)),
-        &Dialog::ClusterMenu { id, .. } => {
+        Dialog::Split(plan) => Some(split_dialog(f, &t, plan)),
+        Dialog::RemoveLabel(plan) => Some(remove_label_dialog(f, &t, plan)),
+        &Dialog::ClusterMenu { id, at } => {
             let label = app
                 .map
                 .snapshot
@@ -212,9 +214,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     f,
                     &t,
                     &format!("◆ {label}"),
-                    "⏎ does it · esc not",
-                    "What is to be done with this label?",
-                    |_| Line::styled("▸ Rename…", Style::new().fg(t.title).bold()),
+                    "↑ ↓ pick · ⏎ does it · esc not",
+                    "What is to be done with this label? Each is shown first, and C-x u undoes it.",
+                    |_| {
+                        let spans: Vec<Span> = crate::app::LABEL_MENU
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(k, item)| {
+                                let style = if k == at {
+                                    Style::new().fg(t.on_accent).bg(t.accent).bold()
+                                } else {
+                                    Style::new().fg(t.title)
+                                };
+                                [Span::styled(format!(" {item} "), style), Span::raw("  ")]
+                            })
+                            .collect();
+                        Line::from(spans)
+                    },
                 )
                 .0,
                 Vec::new(),

@@ -9,6 +9,7 @@ mod dialog;
 mod files;
 mod filing;
 mod filtering;
+mod folders;
 mod form;
 mod input;
 mod listing;
@@ -29,6 +30,7 @@ pub use self::checking::*;
 pub use self::dialog::*;
 pub use self::files::*;
 pub use self::filtering::*;
+pub use self::folders::*;
 pub use self::form::*;
 pub use self::input::*;
 pub use self::listing::*;
@@ -316,6 +318,8 @@ pub struct App {
     undo: Undo,
     /// What was done last that C-x u undoes.
     last: Option<Last>,
+    /// What a label split or removed asked, followed for C-x u.
+    refiling: Refiling,
     /// What was chosen in the Inbox looked through, not to be learnt when
     /// it is done: chosen for several together, or the filter's own guess
     /// taken as it was.
@@ -602,6 +606,7 @@ impl App {
             mark_big: MARK_BIG,
             undo: Undo::default(),
             last: None,
+            refiling: Refiling::default(),
             untaught: Default::default(),
             junk_asked: Default::default(),
             junk: Vec::new(),

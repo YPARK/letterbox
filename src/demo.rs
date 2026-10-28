@@ -754,6 +754,22 @@ impl Store for Demo {
         Ok(())
     }
 
+    fn delete_folder(&mut self, path: &str) -> anyhow::Result<()> {
+        let mut mail = self.mail();
+        let Some(letters) = mail.folders.get(path) else {
+            anyhow::bail!("no folder {path}");
+        };
+        if !letters.is_empty() {
+            anyhow::bail!("{path} is not empty: {} messages", letters.len());
+        }
+        let under = format!("{path}/");
+        if mail.folders.keys().any(|f| f.starts_with(&under)) {
+            anyhow::bail!("{path} has a folder under it");
+        }
+        mail.folders.remove(path);
+        Ok(())
+    }
+
     fn address(&self) -> &str {
         "you@example.com"
     }

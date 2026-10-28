@@ -146,3 +146,34 @@ fn in_a_label_alone_filed_from_its_list_it_loses_that_label() {
     filed_from_a_label(false, false);
     filed_from_a_label(true, false);
 }
+
+#[test]
+fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back() {
+    let (mut app, boxes) = gmail_app(true);
+    press(&mut app, &["<m-g>"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, _) = on_server(&boxes, "Aims page, third pass");
+    assert!(labels.contains(&"Projects/Grant".to_string()), "{labels:?}");
+    app.ask_remove_label("Grant");
+    assert!(
+        matches!(app.dialog, app::Dialog::RemoveLabel(_)),
+        "{}",
+        app.status
+    );
+    press(&mut app, &["y"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, _) = on_server(&boxes, "Aims page, third pass");
+    assert!(
+        !labels.contains(&"Projects/Grant".to_string()),
+        "{labels:?}: {}",
+        app.status
+    );
+    press(&mut app, &["<c-x>", "u"]);
+    app.settle(Duration::from_secs(5));
+    let (labels, _) = on_server(&boxes, "Aims page, third pass");
+    assert!(
+        labels.contains(&"Projects/Grant".to_string()),
+        "{labels:?}: {}",
+        app.status
+    );
+}

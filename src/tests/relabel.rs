@@ -91,3 +91,28 @@ fn a_label_is_never_renamed_onto_one_there_is() {
     let (labels, _) = dot_labels(&app, "Letter of support, signed");
     assert!(labels.contains(&"Grant".to_string()), "{labels:?}");
 }
+
+#[test]
+fn a_labels_menu_offers_rename_split_and_remove_picked_by_the_arrows() {
+    let mut app = demo_map();
+    let grant = cluster_of(&app, "Grant");
+    right_click(&mut app, app::Target::Anchor(grant));
+    let screen = app::screen(&mut app, 150, 45);
+    for item in ["Rename", "Split into subfolders", "Remove"] {
+        assert!(screen.contains(item), "{item} in {screen}");
+    }
+    assert!(matches!(app.dialog, app::Dialog::ClusterMenu { at: 0, .. }));
+    press(&mut app, &["<down>"]);
+    assert!(matches!(app.dialog, app::Dialog::ClusterMenu { at: 1, .. }));
+    press(&mut app, &["<down>", "<down>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::ClusterMenu { at: 2, .. }),
+        "no farther"
+    );
+    press(&mut app, &["<up>", "<up>", "<up>", "<enter>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::RenameLabel(..)),
+        "{}",
+        app.status
+    );
+}

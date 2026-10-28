@@ -563,6 +563,7 @@ impl App {
                         } else {
                             let email = self.accounts[a].email.clone();
                             self.forget_trashed(&email, &from, uid);
+                            self.refile_moved(a, &from, uid, Ok((to.clone(), new_uid, message_id)));
                         }
                         self.ask(a, Ask::Count(from));
                         self.ask(a, Ask::Count(to));
@@ -572,6 +573,8 @@ impl App {
                     Err(e) => {
                         if trashed {
                             self.trashing_answered(a, &from, uid, None);
+                        } else {
+                            self.refile_moved(a, &from, uid, Err(e.clone()));
                         }
                         self.status = format!("cannot move it: {}", first_line(&e));
                         self.reload(a);
@@ -583,6 +586,23 @@ impl App {
                     uid,
                     result.as_ref().map(|_| ()).map_err(String::as_str),
                 );
+            }
+            Answer::FolderMade { path, result } => self.refile_folder(a, &path, true, result),
+            Answer::FolderDeleted { path, result } => {
+                if let Err(e) = &result {
+                    self.status = format!("{path} kept: {}", first_line(e));
+                }
+                self.refile_folder(a, &path, false, result)
+            }
+            Answer::Relabelled {
+                folder,
+                uid,
+                off,
+                on,
+                result,
+            } => {
+                self.refile_relabelled(a, folder, uid, off, on, result);
+                self.map_pass(a);
             }
             Answer::Sent { said, answer } => {
                 if let Some(compose) = &mut self.compose {

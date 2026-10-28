@@ -825,3 +825,122 @@ pub(super) fn junk_dialog(
     );
     (area, Vec::new())
 }
+
+/// A label split into subfolders, shown before it is done: each part, as
+/// `Label/name`, how many go there, and the words it was named by; the one
+/// picked lit, its name typed over if it is being.
+pub(super) fn split_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    plan: &crate::app::SplitPlan,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(84);
+    let room = (width as usize).saturating_sub(4);
+    let field = Style::new().fg(t.text).bg(t.field);
+    let mut lines = vec![Line::raw("")];
+    for (k, p) in plan.parts.iter().enumerate() {
+        let lit = if k == plan.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        let name = match (&plan.typing, k == plan.at) {
+            (Some(typed), true) => Span::styled(format!("{typed}▏"), field),
+            _ => Span::styled(p.name.clone(), Style::new().fg(t.title).bold()),
+        };
+        lines.push(
+            Line::from(vec![
+                Span::raw(format!("{:>5}  ", p.keys.len())),
+                Span::styled(format!("{}/", plan.label), Style::new().fg(t.dim)),
+                name,
+            ])
+            .style(lit),
+        );
+        let words = format!("       {}", p.words.join(" · "));
+        lines.push(Line::styled(clip(&words, room), Style::new().fg(t.dim)).style(lit));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!(
+            "Each part is moved to a subfolder of {}, made for it, by what it is about. Nothing is \
+             done until y; C-x u moves it all back.",
+            plan.label
+        ),
+        Style::new().fg(t.dim),
+    ));
+    let lines = wrapped(lines, room);
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    let total: usize = plan.parts.iter().map(|p| p.keys.len()).sum();
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            &format!("Split {} ({total}) into {}?", plan.label, plan.parts.len()),
+            "↑ ↓ pick · ⏎ rename · y split · esc not",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}
+
+/// A label removed, shown before it is done: where its mail would go, as
+/// the map would file each, else unfiled, to Archive.
+pub(super) fn remove_label_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    plan: &crate::app::RemovePlan,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(76);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![Line::raw("")];
+    for (to, keys) in &plan.to {
+        let name = match to {
+            Some(label) => format!("→ {label}"),
+            None => "→ Archive, unfiled".to_string(),
+        };
+        lines.push(Line::from(vec![
+            Span::raw(format!("{:>5}  ", keys.len())),
+            Span::styled(name, Style::new().fg(t.title).bold()),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!(
+            "No message is thrown away: each is filed where the map would file it, were there no {}, \
+             and {} is removed once it is empty. Nothing is done until y; C-x u puts it all back.",
+            plan.label, plan.label
+        ),
+        Style::new().fg(t.dim),
+    ));
+    let lines = wrapped(lines, room);
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    let total: usize = plan.to.iter().map(|(_, k)| k.len()).sum();
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            &format!("Remove {} ({total})?", plan.label),
+            "y remove · esc not",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}
+
+/// `lines`, each of one span wider than `room` wrapped to it.
+fn wrapped(lines: Vec<Line<'static>>, room: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .flat_map(|l| {
+            if l.width() > room && l.spans.len() == 1 {
+                let style = l.spans[0].style;
+                wrap(&l.spans[0].content, room)
+                    .into_iter()
+                    .map(|w| Line::styled(w, style))
+                    .collect()
+            } else {
+                vec![l]
+            }
+        })
+        .collect()
+}
