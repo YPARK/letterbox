@@ -309,9 +309,6 @@ pub struct App {
     pub batch: crate::confirm::Batch,
     choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
     quiet: bool,
-    /// Marking in the list with Shift and the arrows: the row it was begun
-    /// from, and what was marked before.
-    marking: Option<(usize, Vec<crate::index::Key>)>,
     /// Over this many marked, the foot says so in the flag's colour.
     pub mark_big: usize,
     /// What was last trashed together, for C-x u to put back.
@@ -604,7 +601,6 @@ impl App {
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
-            marking: None,
             mark_big: MARK_BIG,
             undo: Undo::default(),
             last: None,

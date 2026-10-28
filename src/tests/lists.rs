@@ -560,17 +560,14 @@ fn in_the_list_what_is_selected_with_the_mouse_is_acted_on_together() {
 }
 
 #[test]
-fn in_the_list_shift_arrows_select_what_is_acted_on_together() {
+fn in_the_list_what_the_mouse_selects_is_acted_on_together_and_no_key_selects() {
     let mut app = demo();
     let marked = |app: &App| app.map.region.as_ref().map_or(0, |r| r.keys.len());
-    // Space selects nothing: several are selected with the mouse, or so.
-    press(&mut app, &[" "]);
+    // No key selects: neither space, nor Shift and an arrow.
+    press(&mut app, &[" ", "g", "<s-down>", "<s-down>", "<s-up>"]);
     assert_eq!(marked(&app), 0);
-    // Shift and an arrow: from the one picked to where it goes, marked;
-    // back, fewer.
-    press(&mut app, &["g", "<s-down>", "<s-down>", "<s-down>"]);
-    assert_eq!(marked(&app), 4);
-    press(&mut app, &["<s-up>"]);
+    // Rows dragged over, with the mouse.
+    super::selecting::select_rows(&mut app, 0, 2);
     assert_eq!(marked(&app), 3);
     let screen = app::screen(&mut app, 150, 30);
     assert!(screen.contains("3 marked"), "{screen}");
@@ -580,21 +577,21 @@ fn in_the_list_shift_arrows_select_what_is_acted_on_together() {
     press(&mut app, &["d", "i", "y"]);
     app.settle(Duration::from_secs(5));
     assert_eq!(app.shown.len(), count - 3);
-    // A step without Shift begins anew: what was marked stays, and Shift
-    // marks on from there.
-    press(&mut app, &["g"]);
-    super::selecting::ctrl_click(&mut app, 0);
-    press(&mut app, &["j", "<s-down>"]);
-    assert_eq!(marked(&app), 3);
 }
 
 #[test]
-fn in_the_inbox_looked_through_shift_arrows_select_and_a_choice_is_for_all() {
+fn in_the_inbox_looked_through_the_mouse_selects_and_a_choice_is_for_all() {
+    use super::selecting::drag;
+    use app::Target::ReviewRow;
     let mut app = demo_map();
     press(&mut app, &["i"]);
     let rows = app.review_rows();
     let selected = |app: &App| app.review.as_ref().unwrap().selected.len();
+    // Shift and an arrow select nothing.
     press(&mut app, &["<s-down>", "<s-down>"]);
+    assert_eq!(selected(&app), 0);
+    press(&mut app, &["g"]);
+    drag(&mut app, ReviewRow(0), ReviewRow(2));
     assert_eq!(selected(&app), 3);
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("3 selected"), "{screen}");
@@ -607,11 +604,13 @@ fn in_the_inbox_looked_through_shift_arrows_select_and_a_choice_is_for_all() {
     let picked = app.review_at().map(|(i, _)| i);
     assert_eq!(picked, Some(rows[3]));
     // Space keeps the two selected.
-    press(&mut app, &["<s-down>", " "]);
+    drag(&mut app, ReviewRow(3), ReviewRow(4));
+    press(&mut app, &[" "]);
     assert_eq!(app.choice(rows[3]), app::Choice::Keep);
     assert_eq!(app.choice(rows[4]), app::Choice::Keep);
     // m: the label picked for both.
-    press(&mut app, &["<s-down>", "m"]);
+    drag(&mut app, ReviewRow(5), ReviewRow(6));
+    press(&mut app, &["m"]);
     let label = match &app.menu_items()[0] {
         app::Pick::Label(n, _) => n.clone(),
         other => panic!("{other:?}"),
@@ -621,7 +620,8 @@ fn in_the_inbox_looked_through_shift_arrows_select_and_a_choice_is_for_all() {
         assert_eq!(app.choice(i), app::Choice::Move(label.clone()));
     }
     // esc lets the selection go first, and only then goes back to the map.
-    press(&mut app, &["<s-down>", "<esc>"]);
+    drag(&mut app, ReviewRow(7), ReviewRow(8));
+    press(&mut app, &["<esc>"]);
     assert_eq!(selected(&app), 0);
     assert_eq!(app.focus, app::Focus::Reader);
 }

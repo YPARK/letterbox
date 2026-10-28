@@ -166,7 +166,7 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
 
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
-    "select with the mouse: drag over rows, or Ctrl and a click on one; S-↑↓ too";
+    "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
     pub fn key(&mut self, key: KeyEvent) {
@@ -268,14 +268,6 @@ impl App {
 
     /// Do what a key in the table does, where the focus is.
     pub(super) fn act(&mut self, act: Act) {
-        // Shift and the arrows mark on from where they began; any other key
-        // begins anew.
-        if !matches!(act, Act::MarkDown | Act::MarkUp) {
-            self.marking = None;
-            if let Some(r) = &mut self.review {
-                r.anchor = None;
-            }
-        }
         if self.review_act(act) {
             return;
         }
@@ -379,11 +371,6 @@ impl App {
             },
             Act::Down => self.step(1),
             Act::Up => self.step(-1),
-            Act::MarkDown | Act::MarkUp
-                if self.map.mode == Mode::List && self.focus == Focus::List =>
-            {
-                self.list_extend(if act == Act::MarkDown { 1 } else { -1 })
-            }
             Act::PageDown if self.focus == Focus::Side => self.step(5),
             Act::PageUp if self.focus == Focus::Side => self.step(-5),
             Act::ScreenDown | Act::ScreenUp if self.focus == Focus::Side => {}
@@ -412,9 +399,6 @@ impl App {
             // Several are selected with the mouse, never by a key pressed
             // alone: one is too easily pressed on the wrong one.
             Act::Mark => self.status = SELECT_BY_MOUSE.to_string(),
-            // Elsewhere, Shift and the arrows move, as the arrows do.
-            Act::MarkDown => self.step(1),
-            Act::MarkUp => self.step(-1),
             Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt
                 if self.map.mode == Mode::List =>
             {

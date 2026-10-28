@@ -132,3 +132,11 @@ fn in_the_inbox_looked_through_dragging_selects_rows() {
     let n = app.review.as_ref().map_or(0, |r| r.selected.len());
     assert_eq!(n, 3, "{}", app.status);
 }
+
+#[test]
+fn the_lists_keys_below_offer_no_key_that_selects() {
+    let mut app = demo();
+    let screen = app::screen(&mut app, 200, 40);
+    let foot: String = screen.lines().rev().take(3).collect::<Vec<_>>().join("\n");
+    assert!(!foot.contains("select"), "{foot}");
+}

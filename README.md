@@ -160,7 +160,6 @@ letterbox search grant report --account Work
 | `enter` | open the folder, or read the message |
 | `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys |
 | the mouse | several selected, in the list or the Inbox looked through: dragged over their rows, Ctrl and a click adding one or taking it away, Shift and a click as far as one (where the terminal passes Shift and a click on). Selected rows are shown `▪`, and the foot says how many; `m`, `d`, `e`, `u` and `!` then act on all of it, asked first, and `esc` lets it go. No key selects alone, and nothing is selected on the map |
-| `S-down` / `S-up` | Shift and an arrow: in the list, select from the message picked down, or up, to where it goes, back fewer; in the Inbox looked through, select so, and `m`, `d`, `space` or `y` choose for all of it; `esc` lets it go |
 | `<` / `>` | make the message read wider, or narrower; or drag the line before it. It opens as wide again next time |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G`, `M-<` / `M->` | go to the top, or the end |
@@ -196,7 +195,7 @@ letterbox search grant report --account Work
 | `m` | in the map, down at a message, move it onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once, several asked first; another account's folder, as `Grant · ubc.ca`, moves it there |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
-| `v` | selects nothing: several are selected with the mouse, as above |
+| `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
 | `C-x` `u` | undo what was done last: what was trashed together put back, each where it was, and what trashing it taught taken back; or a label renamed, renamed back |
