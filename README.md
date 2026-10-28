@@ -355,6 +355,10 @@ message read as wide as you made it. `/` searches it as you type: the messages
 whose subject, sender, address, first lines or labels hold every word
 are lit, the rest faded, and the line over the map says how many; `n`
 and `p` go from one to the next, newest first, and `esc` lets it go.
+Narrowed to a cluster (by `[` `]`, its row in the sidebar, or `⏎` on its
+block), the search is of that cluster only: the line over the map says
+"found in" it, and `n` and `p` never leave it; `0` searches all of the
+map again.
 `,` opens what the map shows, and how, each
 by a key, kept open to change more: `w` lays it out by words and people,
 by words alone or by people alone; `t` shows all of it, this week's or

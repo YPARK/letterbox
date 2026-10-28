@@ -62,3 +62,56 @@ fn nothing_found_is_said_and_esc_goes_back() {
     assert_eq!(app.folder_name(), "Inbox");
     assert!(!listed(&app).is_empty());
 }
+
+/// The map narrowed to the cluster labelled `label`, by ] as it is done.
+fn into_cluster(app: &mut App, label: &str) -> u32 {
+    let s = app.map.snapshot.clone().unwrap();
+    let id = s
+        .groups
+        .iter()
+        .find(|g| g.label.as_deref() == Some(label))
+        .unwrap()
+        .id;
+    for _ in 0..s.groups.len() {
+        if app.map.focused == crate::map::Focused::Cluster(id) {
+            break;
+        }
+        press(app, &["]"]);
+    }
+    assert_eq!(app.map.focused, crate::map::Focused::Cluster(id));
+    id
+}
+
+#[test]
+fn on_the_map_a_search_in_a_cluster_is_of_that_cluster_only() {
+    let mut app = demo_map();
+    // Of all of the map, more than the Grant cluster holds.
+    let now = jiff::Timestamp::now().as_second();
+    press(&mut app, &["/", "review", "<enter>"]);
+    let everywhere = app.map.found("review", now).len();
+    press(&mut app, &["<esc>"]);
+
+    let grant = into_cluster(&mut app, "Grant");
+    press(&mut app, &["/", "review", "<enter>"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let found = app.map.found("review", now);
+    assert!(!found.is_empty(), "{}", app.status);
+    assert!(found.len() < everywhere, "{} of {everywhere}", found.len());
+    assert!(found.iter().all(|&i| s.picked_by(grant, i)));
+    assert!(app.status.contains("in Grant"), "{}", app.status);
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(
+        screen.contains(&format!("{} found in Grant", found.len())),
+        "{screen}"
+    );
+    // n goes round those of the cluster, never out of it.
+    for _ in 0..=found.len() {
+        press(&mut app, &["n"]);
+        assert!(s.picked_by(grant, app.map.picked().unwrap()));
+    }
+    // 0: all of the map, and searched all again.
+    press(&mut app, &["<esc>", "0"]);
+    assert_eq!(app.map.focused, crate::map::Focused::All);
+    press(&mut app, &["/", "review", "<enter>"]);
+    assert_eq!(app.map.found("review", now).len(), everywhere);
+}

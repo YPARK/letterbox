@@ -233,8 +233,12 @@ impl App {
                     self.searching = false;
                     let now = jiff::Timestamp::now().as_second();
                     let found = self.map.seek(&self.query, now);
+                    let of = match self.map.searched_in() {
+                        Some(name) => format!(" in {name}, ] [ the clusters beside it"),
+                        None => String::new(),
+                    };
                     self.status =
-                        format!("{found} found · n next, p the one before, esc lets it go");
+                        format!("{found} found{of} · n next, p the one before, esc lets it go");
                 }
                 KeyCode::Enter => {
                     self.searching = false;

@@ -87,7 +87,6 @@ pub struct Hits {
     pub(super) of: usize,
     /// Whether each message holds them, by its place.
     pub matched: Vec<bool>,
-    pub count: usize,
 }
 
 /// What is marked on the map: the messages of a cluster.
@@ -360,19 +359,18 @@ impl Map {
                     words.iter().all(|w| text.contains(w.as_str()))
                 })
                 .collect();
-            let count = matched.iter().filter(|&&m| m).count();
             self.hits = Some(Hits {
                 query: query.to_string(),
                 of,
                 matched,
-                count,
             });
         }
         self.hits.as_ref()
     }
 
-    /// The messages drawn that hold what is searched for, newest first.
-    pub(super) fn found(&mut self, query: &str, now: i64) -> Vec<usize> {
+    /// The messages drawn that hold what is searched for, of the cluster
+    /// the map is narrowed to if it is, newest first.
+    pub fn found(&mut self, query: &str, now: i64) -> Vec<usize> {
         let shown = self.shown(now);
         let (Some(hits), Some(s)) = (
             self.hits(query).map(|h| h.matched.clone()),
@@ -380,9 +378,32 @@ impl Map {
         ) else {
             return Vec::new();
         };
-        let mut found: Vec<usize> = shown.into_iter().filter(|&i| hits[i]).collect();
+        let mut found: Vec<usize> = shown
+            .into_iter()
+            .filter(|&i| hits[i] && self.in_focus(&s, i))
+            .collect();
         found.sort_by_key(|&i| (std::cmp::Reverse(s.dots[i].date), i));
         found
+    }
+
+    /// Whether the message `i` is of what the map is narrowed to.
+    fn in_focus(&self, s: &Snapshot, i: usize) -> bool {
+        match self.focused {
+            Focused::All => true,
+            Focused::Cluster(id) => s.picked_by(id, i),
+            Focused::Loners => s.clustering.loner[i],
+        }
+    }
+
+    /// What a search on the map is of, if not all of it: the cluster it is
+    /// narrowed to, by name, or what fits nowhere.
+    pub fn searched_in(&self) -> Option<String> {
+        let s = self.snapshot.as_ref()?;
+        match self.focused {
+            Focused::All => None,
+            Focused::Cluster(id) => s.group(id).map(|g| g.name()),
+            Focused::Loners => Some("what fits nowhere".to_string()),
+        }
     }
 
     /// Every message that holds every word of `query`, whatever the map
