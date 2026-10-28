@@ -342,6 +342,9 @@ fn when(message: &Message) -> Option<String> {
     message.date.map(ui::long_date).filter(|s| !s.is_empty())
 }
 
+/// The line a forward's message is below, as it was.
+pub const FORWARD_LINE: &str = "---------- Forwarded message ----------";
+
 /// The buffer a forward opens with, the message's headers and text below
 /// a line that says it is forwarded; point is at the end of `To:`. Its
 /// files go with it, taken by the caller.
@@ -360,8 +363,7 @@ pub fn forward(message: &Message) -> (String, usize, usize) {
         let _ = writeln!(head, "Cc: {}", message.cc.join(", "));
     }
     let text = format!(
-        "To: \nCc: \nSubject: {subject}\n\n\n---------- Forwarded message ----------\n\
-         {head}\n{}\n",
+        "To: \nCc: \nSubject: {subject}\n\n\n{FORWARD_LINE}\n{head}\n{}\n",
         message.text.trim_end()
     );
     (text, 0, 4)

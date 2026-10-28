@@ -309,6 +309,8 @@ pub struct App {
     pub batch: crate::confirm::Batch,
     choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
     quiet: bool,
+    /// How long a message sent is held, to be taken back.
+    pub send_hold: Duration,
     /// Asks that change mail, not yet answered: quitting while there are
     /// any is asked first.
     pub(super) changing: usize,
@@ -606,6 +608,12 @@ impl App {
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
+            // Tests send at once, but those of the hold itself.
+            send_hold: if cfg!(test) {
+                Duration::ZERO
+            } else {
+                writing::SEND_HOLD
+            },
             changing: 0,
             quitting: false,
             mark_big: MARK_BIG,
@@ -760,7 +768,7 @@ impl App {
 
     /// Do what has waited long enough; whether anything was done.
     pub fn tick(&mut self) -> bool {
-        let mut any = false;
+        let mut any = self.tick_held();
         if let Some((at, due)) = self.due
             && at.elapsed() >= PAUSE
         {

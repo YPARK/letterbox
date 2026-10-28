@@ -517,7 +517,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-c",
         hint: "C-c C-c",
         foot: &[(Writing, "send")],
-        help: "send the message being written",
+        help: "send the message being written, held 10 s first: C-g takes it back. No subject, over 10 it goes to, or a file spoken of and none attached, said first",
     },
     Binding {
         keys: &[],

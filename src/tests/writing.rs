@@ -476,6 +476,9 @@ fn files_are_picked_a_folder_at_a_time_and_sent_with_the_message() {
     assert!(app.compose.is_some());
     assert!(app.status.contains("cannot attach"), "{}", app.status);
     std::fs::write(dir.path().join("budget.csv"), b"line,cost\n").unwrap();
+    // No subject: asked once, and sent the second time.
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.status.contains("no subject"), "{}", app.status);
     press(&mut app, &["<c-c>", "<c-c>"]);
     assert!(app.compose.is_none(), "{}", app.status);
     press(&mut app, &["h", "j", "j"]);

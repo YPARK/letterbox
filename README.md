@@ -217,7 +217,8 @@ Subject, then what is written, and round, `S-tab` back. `C-SPC` sets the mark: `
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
 again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
-it. `C-c C-k` discards it, asking first if you changed it, as Emacs's
+it, held 10 seconds first, counted down at the foot: `C-g` takes it back,
+still there to change, and `C-c C-c` again sends it at once. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
 never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
@@ -265,8 +266,10 @@ attaches the marked, or the one picked; `esc` leaves. Each file is an
 `Attach` line under the headers, with its size beside it, and is read
 only as the message is sent; kill the line and it is not. Files dropped
 onto the terminal are attached too. A forward's files are its `Attach`
-lines, marked `(forwarded)`. Over 25 MB in all, `C-c C-c` says so first,
-and sends at the second.
+lines, marked `(forwarded)`. What is easily got wrong `C-c C-c` says
+first, and sends at the second: over 25 MB attached, no subject, more
+than 10 it goes to, or a file spoken of ("attached", "enclosed") in what
+you wrote, not what it quotes or forwards, and none attached.
 
 `d` moves the message to the account's Trash folder. In Trash, `d` puts
 it back where it was, or to the inbox if something else had put it there.
@@ -306,6 +309,9 @@ its tests:
   with mail in it would take the mail with it.
 - letterbox does not quit unasked while mail is still being moved, filed
   or sent: cut off, a folder removed would be left half done.
+- A message sent is held 10 seconds first, `C-g` taking it back; and no
+  subject, many it goes to, or a file spoken of and none attached is
+  said before it goes.
 
 ## The map
 
