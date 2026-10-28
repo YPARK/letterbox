@@ -445,7 +445,7 @@ impl App {
                 self.refiling
                     .waiting
                     .push((a, folder.clone(), uid, folder.clone()));
-                self.ask(
+                self.ask_quietly(
                     a,
                     Ask::Move {
                         from: folder,
@@ -666,7 +666,7 @@ impl App {
         }
         let back = r.moved.len() + r.relabelled.len() + r.kept.len();
         for (a, at, uid, to, message_id) in r.moved {
-            self.ask(
+            self.ask_quietly(
                 a,
                 Ask::Move {
                     from: at,

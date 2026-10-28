@@ -166,10 +166,31 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
 
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
-    "select with the mouse: drag over rows, or Ctrl and a click on one; S-↑↓ too";
+    "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
+    /// A key pressed, or a click: what it moves is remembered anew.
+    fn began_input(&mut self) {
+        self.moves_begun = false;
+        self.input_at = jiff::Timestamp::now().as_second();
+    }
+
+    /// Quit; while mail is still being changed, ask first.
+    fn ask_quit(&mut self) {
+        if self.changing == 0 {
+            self.quit = true;
+            return;
+        }
+        let n = self.changing;
+        let what = if n == 1 { "change" } else { "changes" };
+        self.quitting = true;
+        self.status = format!(
+            "{n} {what} to your mail still going: y quits anyway, cutting it off; any other key waits"
+        );
+    }
+
     pub fn key(&mut self, key: KeyEvent) {
+        self.began_input();
         let key = capital(key);
         if self.compose.is_some() {
             if matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
@@ -186,9 +207,19 @@ impl App {
         // and C-c alone, nothing: compose's C-c C-c, pressed once more than
         // it needed, quits no more.
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Asked whether to quit while mail is changed: y does; any other
+        // key waits for it.
+        if std::mem::take(&mut self.quitting) {
+            if key.code == KeyCode::Char('y') && !ctrl {
+                self.quit = true;
+            } else {
+                self.status = "not quit: what was asked goes on".to_string();
+            }
+            return;
+        }
         if std::mem::take(&mut self.c_x) {
             if ctrl && key.code == KeyCode::Char('c') {
-                self.quit = true;
+                self.ask_quit();
             } else if !ctrl && key.code == KeyCode::Char('u') {
                 self.undo_last();
             } else {
@@ -268,14 +299,6 @@ impl App {
 
     /// Do what a key in the table does, where the focus is.
     pub(super) fn act(&mut self, act: Act) {
-        // Shift and the arrows mark on from where they began; any other key
-        // begins anew.
-        if !matches!(act, Act::MarkDown | Act::MarkUp) {
-            self.marking = None;
-            if let Some(r) = &mut self.review {
-                r.anchor = None;
-            }
-        }
         if self.review_act(act) {
             return;
         }
@@ -379,11 +402,6 @@ impl App {
             },
             Act::Down => self.step(1),
             Act::Up => self.step(-1),
-            Act::MarkDown | Act::MarkUp
-                if self.map.mode == Mode::List && self.focus == Focus::List =>
-            {
-                self.list_extend(if act == Act::MarkDown { 1 } else { -1 })
-            }
             Act::PageDown if self.focus == Focus::Side => self.step(5),
             Act::PageUp if self.focus == Focus::Side => self.step(-5),
             Act::ScreenDown | Act::ScreenUp if self.focus == Focus::Side => {}
@@ -412,9 +430,6 @@ impl App {
             // Several are selected with the mouse, never by a key pressed
             // alone: one is too easily pressed on the wrong one.
             Act::Mark => self.status = SELECT_BY_MOUSE.to_string(),
-            // Elsewhere, Shift and the arrows move, as the arrows do.
-            Act::MarkDown => self.step(1),
-            Act::MarkUp => self.step(-1),
             Act::Move | Act::NewLabel | Act::FileFirst | Act::NotIt
                 if self.map.mode == Mode::List =>
             {
@@ -468,6 +483,9 @@ impl App {
 
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
+        if matches!(m.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_)) {
+            self.began_input();
+        }
         let at = self
             .targets
             .iter()

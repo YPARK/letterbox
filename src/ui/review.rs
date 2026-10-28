@@ -107,7 +107,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let mut y = area.y + 3;
     let menu_for = app.menu.as_ref().and_then(|m| s.find(&m.key));
     let mut menu_at = None;
-    // What is selected with Shift and the arrows, as the one picked is when
+    // What is selected with the mouse, as the one picked is when
     // the pane is not looked at.
     let selected: std::collections::HashSet<usize> = app
         .review

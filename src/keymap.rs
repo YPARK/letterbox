@@ -88,8 +88,6 @@ pub enum Act {
     Mark,
     /// From the message picked, down or up, and all between marked, or
     /// selected in the Inbox looked through.
-    MarkDown,
-    MarkUp,
     /// The message picked, or what is marked, moved onto a cluster; and, as
     /// it is, onto a new label.
     Move,
@@ -227,7 +225,7 @@ pub const KEYS: &[Binding] = &[
         ],
         name: "space b C-v M-v",
         hint: "␣",
-        foot: &[(Reader, "page"), (List, "select"), (Reviewing, "keep")],
+        foot: &[(Reader, "page"), (Reviewing, "keep")],
         help: "a page down, or up, in the message; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
@@ -507,18 +505,11 @@ pub const KEYS: &[Binding] = &[
         help: "in the map, what it shows and how: w its lens, t how far back, r read mail, s sent mail, f only the mail not yet filed, n the areas with nothing new dimmed, l lay it out again",
     },
     Binding {
-        keys: &[("v", Mark)],
+        keys: &[("v", Mark), ("S-down", Mark), ("S-up", Mark)],
         name: "v",
         hint: "v",
         foot: &[],
-        help: "selects nothing: select with the mouse, dragged over rows, Ctrl and a click for one, Shift and a click as far as one; S-↑ S-↓ too. On the map, nothing",
-    },
-    Binding {
-        keys: &[("S-down", MarkDown), ("S-up", MarkUp)],
-        name: "S-down S-up",
-        hint: "S-↓/S-↑",
-        foot: &[(List, "select"), (Reviewing, "select")],
-        help: "in the list, mark from the message picked down, or up, to where it goes, and back fewer; in the Inbox looked through, select so: m, d, space or y then choose for all of them, and esc lets them go",
+        help: "selects nothing, nor S-↑ S-↓: select with the mouse, dragged over rows, Ctrl and a click for one, Shift and a click as far as one. On the map, nothing",
     },
     // The message being written: edit's keys.
     Binding {
@@ -526,7 +517,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-c",
         hint: "C-c C-c",
         foot: &[(Writing, "send")],
-        help: "send the message being written",
+        help: "send the message being written, held 10 s first: C-g takes it back. No subject, over 10 it goes to, or a file spoken of and none attached, said first",
     },
     Binding {
         keys: &[],
@@ -645,7 +636,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-x u",
         hint: "C-x u",
         foot: &[],
-        help: "put back what was last trashed together, each where it was, and what it taught taken back",
+        help: "put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too
@@ -751,7 +742,8 @@ pub fn chord(key: KeyEvent) -> Chord {
             };
             (KeyCode::Char(c.to_ascii_lowercase()), held | shift)
         }
-        // Shift and an arrow up or down marks as it goes: a key of its own.
+        // Shift and an arrow up or down: a key of its own, which selects
+        // nothing and says so.
         code @ (KeyCode::Up | KeyCode::Down) if key.modifiers.contains(KeyModifiers::SHIFT) => {
             (code, KeyModifiers::SHIFT)
         }

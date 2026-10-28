@@ -437,6 +437,43 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
 /// Whether `ask` is passed over for one asked after it, still to answer:
 /// a folder counted again, as when the server is slower than the refresh,
 /// is counted once.
+impl Ask {
+    /// Whether it changes mail on its server: moves, labels, folders, or
+    /// a message sent; not what is only read, nor a flag.
+    pub fn changes_mail(&self) -> bool {
+        matches!(
+            self,
+            Ask::Move { .. }
+                | Ask::File { .. }
+                | Ask::RenameLabel { .. }
+                | Ask::CreateFolder { .. }
+                | Ask::DeleteFolder { .. }
+                | Ask::Relabel { .. }
+                | Ask::Bring { .. }
+                | Ask::Archive { .. }
+                | Ask::Send { .. }
+        )
+    }
+}
+
+impl Answer {
+    /// Whether it answers an ask that changes mail, done or not.
+    pub fn of_a_change(&self) -> bool {
+        matches!(
+            self,
+            Answer::Moved { .. }
+                | Answer::Filed { .. }
+                | Answer::LabelRenamed { .. }
+                | Answer::FolderMade { .. }
+                | Answer::FolderDeleted { .. }
+                | Answer::Relabelled { .. }
+                | Answer::Brought { .. }
+                | Answer::Archived { .. }
+                | Answer::Sent { .. }
+        )
+    }
+}
+
 fn superseded(ask: &Ask, after: &VecDeque<Ask>) -> bool {
     match ask {
         Ask::Open { .. } => after.iter().any(|a| matches!(a, Ask::Open { .. })),

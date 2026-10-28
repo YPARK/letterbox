@@ -172,33 +172,6 @@ impl App {
         self.step(1);
     }
 
-    /// Mark from the row Shift and the arrows began at to the one picked,
-    /// `by` past it, with what was marked before: back, fewer.
-    pub(super) fn list_extend(&mut self, by: isize) {
-        let Some(at) = self.list.selected() else {
-            return;
-        };
-        let before = self.map.region.as_ref().map(|r| r.keys.clone());
-        let (from, mut keys) = self
-            .marking
-            .get_or_insert_with(|| (at, before.unwrap_or_default()))
-            .clone();
-        self.step(by);
-        let to = self.list.selected().unwrap_or(at);
-        for l in &self.shown[from.min(to)..=from.max(to).min(self.shown.len().saturating_sub(1))] {
-            if let Some(key) = self.listed_key(l)
-                && !keys.contains(&key)
-            {
-                keys.push(key);
-            }
-        }
-        let n = keys.len();
-        self.map.region = (n > 0).then_some(map::Region { keys });
-        self.status = format!(
-            "{n} marked: d trashes them, e archives them, m moves them, u and s mark them, esc lets them go"
-        );
-    }
-
     /// What the index knows the message listed `l` by, once the map has
     /// read it.
     pub(super) fn listed_key(&self, l: &Listed) -> Option<crate::index::Key> {

@@ -25,10 +25,8 @@ pub struct Review {
     pub reading: bool,
     /// The message whose label is being picked on the map.
     pub relabel: Option<crate::index::Key>,
-    /// What is selected with Shift and the arrows, to choose for all of
-    /// it at once; and the row it was begun from.
+    /// What is selected with the mouse, to choose for all of it at once.
     pub selected: Vec<crate::index::Key>,
-    pub(super) anchor: Option<usize>,
 }
 
 /// The labels a message may be moved to, dropped down under it, in the
@@ -566,8 +564,6 @@ impl App {
             return true;
         }
         match (act, picked) {
-            (Act::MarkDown, _) => self.review_extend(1),
-            (Act::MarkUp, _) => self.review_extend(-1),
             (Act::Down, _) => self.review_step(1),
             (Act::Up, _) => self.review_step(-1),
             (Act::Top, _) => self.review_step(isize::MIN / 2),
@@ -644,34 +640,6 @@ impl App {
         true
     }
 
-    /// Select from the row Shift and the arrows began at to the one picked,
-    /// `by` past it: back, fewer.
-    pub(super) fn review_extend(&mut self, by: isize) {
-        let Some((_, at)) = self.review_at() else {
-            return;
-        };
-        if let Some(r) = &mut self.review {
-            r.anchor.get_or_insert(at);
-        }
-        self.review_step(by);
-        let rows = self.review_rows();
-        let (Some(s), Some((_, to))) = (self.map.snapshot.clone(), self.review_at()) else {
-            return;
-        };
-        let Some(r) = &mut self.review else {
-            return;
-        };
-        let from = r.anchor.unwrap_or(at);
-        r.selected = rows[from.min(to)..=from.max(to)]
-            .iter()
-            .map(|&i| s.dots[i].key.clone())
-            .collect();
-        self.status = format!(
-            "{} selected: m moves them, d discards them, space keeps them, y as suggested; esc lets them go",
-            r.selected.len()
-        );
-    }
-
     /// Select the rows of the Inbox looked through from `a` to `b`, both,
     /// the row `b` picked.
     pub(super) fn review_select(&mut self, a: usize, b: usize) {
@@ -684,7 +652,6 @@ impl App {
         let Some(r) = &mut self.review else {
             return;
         };
-        r.anchor = None;
         r.selected = rows
             .get(lo..=hi)
             .unwrap_or_default()
@@ -713,7 +680,6 @@ impl App {
         let Some(r) = &mut self.review else {
             return;
         };
-        r.anchor = None;
         match r.selected.iter().position(|k| *k == key) {
             Some(at) => {
                 r.selected.remove(at);
@@ -798,7 +764,6 @@ impl App {
     pub(super) fn unselect(&mut self) {
         if let Some(r) = &mut self.review {
             r.selected.clear();
-            r.anchor = None;
         }
     }
 

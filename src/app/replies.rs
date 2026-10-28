@@ -167,7 +167,15 @@ impl App {
         self.dialog = Dialog::Applied(Box::new(Applied { said, failed }));
     }
 
+    /// Take a server's answer: what it asks in turn is not remembered for
+    /// C-x u, as it follows the answer, not a key.
     pub(super) fn take_reply(&mut self, reply: Reply) {
+        let was = std::mem::replace(&mut self.replying, true);
+        self.answer_reply(reply);
+        self.replying = was;
+    }
+
+    fn answer_reply(&mut self, reply: Reply) {
         let a = reply.account;
         // How to sign in comes while signing in, not in answer to an ask.
         if let Answer::Waiting(waiting) = reply.answer {
@@ -191,6 +199,9 @@ impl App {
             return;
         }
         self.pending = self.pending.saturating_sub(1);
+        if reply.answer.of_a_change() {
+            self.changing = self.changing.saturating_sub(1);
+        }
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
         }
@@ -365,6 +376,8 @@ impl App {
                 filed,
             } => {
                 let result: Result<(), String> = filed.as_ref().map(|_| ()).map_err(Clone::clone);
+                let landed = filed.as_ref().map(|f| f.moved.clone()).map_err(|_| ());
+                self.move_answered(a, &folder, uid, landed);
                 self.filed(a, key, label, filed);
                 self.took(
                     a,
@@ -382,6 +395,8 @@ impl App {
                 uid,
                 result,
             } => {
+                let landed = result.as_ref().map(|()| None).map_err(|_| ());
+                self.move_answered(a, &folder, uid, landed);
                 match &result {
                     Ok(()) => {
                         self.reload(a);
@@ -403,6 +418,7 @@ impl App {
                 // A look that failed is one that cannot tell: as many such,
                 // and its server's word is taken.
                 if passed.is_ok() {
+                    self.moves_looked(a);
                     self.looked_again(a);
                 } else {
                     self.batch.looked(a, |_| None);
@@ -540,6 +556,11 @@ impl App {
                 // Its following taken last, as what it says of a failure is
                 // the more: the message, and what was asked.
                 let result: Result<(), String> = new_uid.as_ref().map(|_| ()).map_err(Clone::clone);
+                let landed = new_uid
+                    .as_ref()
+                    .map(|&n| Some((to.clone(), n)))
+                    .map_err(|_| ());
+                self.move_answered(a, &from, uid, landed);
                 let was = from.clone();
                 match new_uid {
                     Ok(new_uid) => {
@@ -556,7 +577,6 @@ impl App {
                                 origin: from.clone(),
                                 at,
                             };
-                            self.trashing_answered(a, &from, uid, Some(entry.clone()));
                             if let Err(e) = self.ledger.record(entry) {
                                 self.status = format!("moved to Trash, and not recorded: {e:#}");
                             }
@@ -571,9 +591,7 @@ impl App {
                         self.map_pass(a);
                     }
                     Err(e) => {
-                        if trashed {
-                            self.trashing_answered(a, &from, uid, None);
-                        } else {
+                        if !trashed {
                             self.refile_moved(a, &from, uid, Err(e.clone()));
                         }
                         self.status = format!("cannot move it: {}", first_line(&e));

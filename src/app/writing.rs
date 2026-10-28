@@ -17,9 +17,12 @@ pub struct Compose {
     /// The files of the message it forwards, sent with it while an
     /// `Attach` line names them.
     pub files: Vec<compose::File>,
-    /// Said that what is attached is more than most servers take: a send
-    /// asked again sends it.
-    pub warned: bool,
+    /// What was said of it before it was sent, as a large file, no
+    /// subject, or many it goes to: a send asked again, with the same
+    /// said, sends it.
+    pub warned: Option<String>,
+    /// Sent, and held a while first: C-g takes it back.
+    pub held: Option<Holding>,
     /// The text it was opened with, to tell whether it has been changed.
     pub(super) original: String,
     /// `C-c C-k` was pressed on a message changed: whether to let it go is
@@ -38,6 +41,41 @@ pub(super) const QUIT: &str = "Quit · the message stays: C-c C-c sends it, C-c 
 
 /// How much attached most servers take, in bytes.
 pub(super) const LARGE: usize = 25 * 1024 * 1024;
+
+/// How long a message sent is held before it goes, to be taken back.
+pub const SEND_HOLD: Duration = Duration::from_secs(10);
+
+/// Over this many it goes to, a send is asked about once.
+pub(super) const MANY: usize = 10;
+
+/// A message sent, held until `until`: its bytes, and what it answers.
+pub struct Holding {
+    pub(super) until: Instant,
+    raw: Vec<u8>,
+    answer: Option<(String, u32)>,
+    /// The seconds left, as last said.
+    shown: u64,
+}
+
+/// What is said of a message held: how long until it goes, and how it is
+/// taken back.
+fn held_said(secs: u64) -> String {
+    format!("sending in {secs} s · C-g takes it back, C-c C-c sends it now")
+}
+
+/// Whether what is written, not what it quotes or forwards, speaks of a
+/// file attached.
+fn speaks_of_files(body: &str) -> bool {
+    body.lines()
+        .take_while(|l| l.trim() != compose::FORWARD_LINE)
+        .filter(|l| !l.trim_start().starts_with('>'))
+        .any(|l| {
+            let l = l.to_lowercase();
+            ["attached", "attaching", "attachment", "enclosed"]
+                .iter()
+                .any(|w| l.contains(w))
+        })
+}
 
 /// A message to answer once it is read: where it is, and how.
 pub(super) struct Pending {
@@ -141,7 +179,8 @@ impl App {
             scroll: 0,
             sending: false,
             files,
-            warned: false,
+            warned: None,
+            held: None,
             original,
             asking: false,
         });
@@ -176,6 +215,9 @@ impl App {
         };
         if compose.sending {
             return;
+        }
+        if compose.held.is_some() {
+            return self.held_key(key);
         }
         if compose.asking {
             compose.asking = false;
@@ -287,6 +329,9 @@ impl App {
         if compose.sending {
             return;
         }
+        if compose.held.is_some() {
+            return self.send_held();
+        }
         let account = compose.account;
         let draft = match compose::parse(&compose.buffer.text()) {
             Ok(draft) => draft,
@@ -325,14 +370,31 @@ impl App {
                 }
             }
         }
+        // What is easily got wrong, said once: a send asked again, with
+        // nothing more to say, sends it.
         let total: usize = files.iter().map(|f| f.bytes.len()).sum();
-        if total > LARGE && !compose.warned {
-            self.status = format!(
-                "{} attached is more than most servers take, {}: C-c C-c again sends it",
+        let mut said = Vec::new();
+        if total > LARGE {
+            said.push(format!(
+                "{} attached is more than most servers take, {}",
                 crate::ui::size(total),
                 crate::ui::size(LARGE)
-            );
-            self.compose.as_mut().expect("open").warned = true;
+            ));
+        }
+        if draft.subject.trim().is_empty() {
+            said.push("it has no subject".to_string());
+        }
+        let many = draft.to.len() + draft.cc.len();
+        if many > MANY {
+            said.push(format!("it goes to {many} people"));
+        }
+        if files.is_empty() && speaks_of_files(&draft.body) {
+            said.push("it speaks of a file attached, and none is".to_string());
+        }
+        let said = said.join(", ");
+        if !said.is_empty() && compose.warned.as_deref() != Some(said.as_str()) {
+            self.status = format!("{said}: C-c C-c again sends it");
+            self.compose.as_mut().expect("open").warned = Some(said);
             return;
         }
         let raw = compose::bytes(
@@ -343,8 +405,81 @@ impl App {
             &files,
         );
         let answer = compose.thread.answering.clone();
-        self.compose.as_mut().expect("open").sending = true;
+        let compose = self.compose.as_mut().expect("open");
+        let secs = self.send_hold.as_secs().max(1);
+        compose.held = Some(Holding {
+            until: Instant::now() + self.send_hold,
+            raw,
+            answer,
+            shown: secs,
+        });
+        if self.send_hold.is_zero() {
+            return self.send_held();
+        }
+        self.status = held_said(secs);
+    }
+
+    /// Send the message held, now.
+    pub(super) fn send_held(&mut self) {
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        let Some(held) = compose.held.take() else {
+            return;
+        };
+        let account = compose.account;
+        compose.sending = true;
+        compose.prefix = false;
         self.status = "sending…".to_string();
-        self.ask(account, Ask::Send { raw, answer });
+        self.ask(
+            account,
+            Ask::Send {
+                raw: held.raw,
+                answer: held.answer,
+            },
+        );
+    }
+
+    /// A key while the message sent is held: C-g takes it back, C-c C-c
+    /// sends it now; nothing else changes it.
+    fn held_key(&mut self, key: KeyEvent) {
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('g') if ctrl => {
+                compose.held = None;
+                compose.prefix = false;
+                self.status = "not sent: still yours to change · C-c C-c sends it".to_string();
+            }
+            KeyCode::Char('c') if ctrl && compose.prefix => self.send_held(),
+            KeyCode::Char('c') if ctrl => compose.prefix = true,
+            _ => {
+                compose.prefix = false;
+                let secs = compose.held.as_ref().map_or(0, |h| h.shown);
+                self.status = held_said(secs);
+            }
+        }
+    }
+
+    /// The message held, sent once its time is up, and how long it has
+    /// left said as it goes; whether anything changed.
+    pub(super) fn tick_held(&mut self) -> bool {
+        let Some(held) = self.compose.as_mut().and_then(|c| c.held.as_mut()) else {
+            return false;
+        };
+        let left = held.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            self.send_held();
+            return true;
+        }
+        let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+        if secs == held.shown {
+            return false;
+        }
+        held.shown = secs;
+        self.status = held_said(secs);
+        true
     }
 }

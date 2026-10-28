@@ -5,7 +5,7 @@ use super::*;
 
 /// The demo as two accounts, Demo and Work, each its own mail, and a hand
 /// on each to see where a message is.
-fn two_demos() -> (App, Demo, Demo) {
+pub(super) fn two_demos() -> (App, Demo, Demo) {
     let (home, work) = (Demo::new(), Demo::new().called("work"));
     let (seen_home, seen_work) = (home.handle(), work.handle());
     let mut app = App::new(
@@ -22,7 +22,7 @@ fn two_demos() -> (App, Demo, Demo) {
 
 /// Pick "Notes on the engine" in the list, every Inbox together listing
 /// it as one account's or the other's: its Message-ID, and that account.
-fn pick_notes(app: &mut App) -> (String, usize) {
+pub(super) fn pick_notes(app: &mut App) -> (String, usize) {
     let at = app
         .shown
         .iter()
@@ -36,7 +36,7 @@ fn pick_notes(app: &mut App) -> (String, usize) {
 }
 
 /// In the labels dropped down, the one that is `folder` on account `a`.
-fn choose_elsewhere(app: &mut App, a: usize, folder: &str) {
+pub(super) fn choose_elsewhere(app: &mut App, a: usize, folder: &str) {
     let at = app
         .menu_items()
         .iter()

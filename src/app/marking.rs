@@ -72,8 +72,6 @@ impl App {
     pub(super) fn region_trash(&mut self, teach: &dyn Fn(&crate::index::Key) -> bool) -> bool {
         let dots = self.region_dots();
         let mut moved = 0;
-        let mut asked = Vec::new();
-        let mut taught = Vec::new();
         for d in &dots {
             let Some(listed) = self.listed_dot(d) else {
                 continue;
@@ -82,19 +80,13 @@ impl App {
                 continue;
             };
             let s = listed.summary;
-            asked.push((listed.account, listed.folder.clone(), s.uid));
-            let teach = teach(&d.key);
-            if teach {
-                taught.push(d.key.clone());
-            }
-            if teach {
+            if teach(&d.key) {
                 self.move_to_trash(listed.account, listed.folder, s.uid, s.message_id, trash);
             } else {
                 self.trash_quietly(listed.account, listed.folder, s.uid, s.message_id, trash);
             }
             moved += 1;
         }
-        self.remember_trashing(asked, taught);
         self.map.region = None;
         self.status = if moved < dots.len() {
             format!(

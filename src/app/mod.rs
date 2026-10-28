@@ -23,6 +23,7 @@ mod review;
 mod saving;
 mod screen;
 mod trashing;
+mod undoing;
 mod writing;
 use self::bringing::*;
 pub use self::bulk::*;
@@ -309,13 +310,27 @@ pub struct App {
     pub batch: crate::confirm::Batch,
     choosing: std::collections::BTreeMap<crate::index::Key, Choice>,
     quiet: bool,
-    /// Marking in the list with Shift and the arrows: the row it was begun
-    /// from, and what was marked before.
-    marking: Option<(usize, Vec<crate::index::Key>)>,
+    /// What was last moved, each as it was, for C-x u.
+    undoable: undoing::Moves,
+    /// A move remembered since the key pressed last: the rest of its are
+    /// remembered with it.
+    moves_begun: bool,
+    /// Moves not to remember: those that put back.
+    quiet_moves: bool,
+    /// A server's answer is taken: what it asks follows it, not a key, and
+    /// is not remembered for C-x u.
+    replying: bool,
+    /// When the key pressed last was, in seconds since 1970.
+    input_at: i64,
+    /// How long a message sent is held, to be taken back.
+    pub send_hold: Duration,
+    /// Asks that change mail, not yet answered: quitting while there are
+    /// any is asked first.
+    pub(super) changing: usize,
+    /// C-x C-c was pressed while mail was being changed: y quits anyway.
+    pub(super) quitting: bool,
     /// Over this many marked, the foot says so in the flag's colour.
     pub mark_big: usize,
-    /// What was last trashed together, for C-x u to put back.
-    undo: Undo,
     /// What was listed before what was found, for esc to go back to.
     before_found: Option<View>,
     /// What was done last that C-x u undoes.
@@ -604,9 +619,20 @@ impl App {
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
-            marking: None,
+            // Tests send at once, but those of the hold itself.
+            send_hold: if cfg!(test) {
+                Duration::ZERO
+            } else {
+                writing::SEND_HOLD
+            },
+            undoable: undoing::Moves::default(),
+            moves_begun: false,
+            quiet_moves: false,
+            replying: false,
+            input_at: 0,
+            changing: 0,
+            quitting: false,
             mark_big: MARK_BIG,
-            undo: Undo::default(),
             last: None,
             before_found: None,
             refiling: Refiling::default(),
@@ -704,16 +730,31 @@ impl App {
     }
 
     fn ask(&mut self, account: usize, ask: Ask) {
-        if let Some(job) = self.job_of(account, &ask) {
+        let job = self.job_of(account, &ask);
+        // As it is before it goes, for C-x u: remembered once it is sent.
+        let noted = self.note_move(account, &ask, job.as_ref().and_then(|j| j.key.clone()));
+        if let Some(job) = job {
             self.batch.ask(job);
         }
+        let changes = ask.changes_mail();
         let sent = self.accounts[account]
             .asks
             .as_ref()
             .is_some_and(|s| s.send(ask).is_ok());
         if sent {
             self.pending += 1;
+            self.changing += usize::from(changes);
+            if let Some(noted) = noted {
+                self.remember(noted);
+            }
         }
+    }
+
+    /// Ask, not remembering what it moves for C-x u: it puts back.
+    fn ask_quietly(&mut self, account: usize, ask: Ask) {
+        let quiet = std::mem::replace(&mut self.quiet_moves, true);
+        self.ask(account, ask);
+        self.quiet_moves = quiet;
     }
 
     /// The accounts not removed, by their place.
@@ -755,7 +796,7 @@ impl App {
 
     /// Do what has waited long enough; whether anything was done.
     pub fn tick(&mut self) -> bool {
-        let mut any = false;
+        let mut any = self.tick_held();
         if let Some((at, due)) = self.due
             && at.elapsed() >= PAUSE
         {
