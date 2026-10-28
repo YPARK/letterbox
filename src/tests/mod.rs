@@ -21,6 +21,7 @@ mod agents;
 mod bulk;
 mod filing;
 mod filter;
+mod folders;
 mod gmail;
 mod grammar;
 mod imap_server;

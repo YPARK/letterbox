@@ -630,3 +630,28 @@ fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
         );
     }
 }
+
+#[test]
+fn where_a_labels_mail_would_go_without_it_is_voted_never_to_it() {
+    let index = demo_index();
+    let m = model_of(&index, Lens::Both);
+    let grant: Vec<usize> = (0..m.len())
+        .filter(|&i| m.labels[i].iter().any(|l| crate::index::fold(l) == "grant"))
+        .collect();
+    assert!(!grant.is_empty());
+    let voted = m.voted_without("Grant", &grant, |_, _| false);
+    assert_eq!(voted.len(), grant.len());
+    // Never to the label it is without; some still somewhere, the grant's
+    // own other labels among what may win (Projects, its parent).
+    assert!(
+        voted
+            .iter()
+            .flatten()
+            .all(|l| crate::index::fold(l) != "grant"),
+        "{voted:?}"
+    );
+    assert!(voted.iter().any(Option::is_some), "{voted:?}");
+    // And what skip turns down is passed over.
+    let none = m.voted_without("Grant", &grant, |_, _| true);
+    assert!(none.iter().all(Option::is_none));
+}

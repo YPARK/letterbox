@@ -91,6 +91,11 @@ pub trait Store: Send {
     }
     /// Make a folder named `path`.
     fn create(&mut self, path: &str) -> anyhow::Result<()>;
+    /// Delete the folder `path`, only if it holds no message and no folder
+    /// is under it: a folder deleted with mail in it takes the mail with it.
+    fn delete_folder(&mut self, _path: &str) -> anyhow::Result<()> {
+        Err(unsupported("delete a folder"))
+    }
     /// The address mail from this account is sent as.
     fn address(&self) -> &str;
     /// Send `raw`. What to say of it: that it was sent, or, for the demo,

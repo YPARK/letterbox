@@ -177,6 +177,40 @@ impl Model {
             .collect()
     }
 
+    /// Where each of `members` would go were there no `label`: the label
+    /// its `VOTERS` nearest messages filed under another vote for, as
+    /// `voted` has it, `label` taken off every message first, so that its
+    /// own mail votes only by its other labels; none that `skip` turns
+    /// down; none where none is near. For a label removed, its mail filed
+    /// where the map would file it.
+    pub fn voted_without(
+        &self,
+        label: &str,
+        members: &[usize],
+        skip: impl Fn(usize, &str) -> bool + Sync,
+    ) -> Vec<Option<String>> {
+        let gone = fold(label);
+        let labels: Vec<BTreeSet<String>> = self
+            .labels
+            .iter()
+            .map(|ls| ls.iter().map(|l| fold(l)).filter(|l| *l != gone).collect())
+            .collect();
+        let filed: Vec<usize> = (0..self.len()).filter(|&i| !labels[i].is_empty()).collect();
+        members
+            .par_iter()
+            .map(|&i| {
+                ranked_votes(&labels, &self.vectors, &filed, i, VOTERS, VOTED_WITHIN)
+                    .into_iter()
+                    .find(|l| !skip(i, l))
+                    .map(|l| {
+                        self.label_vectors
+                            .get(&l)
+                            .map_or(l.clone(), |(name, _)| name.clone())
+                    })
+            })
+            .collect()
+    }
+
     /// The `n` messages nearest `i` by angle, nearest first, and how far
     /// each is, in degrees.
     pub fn nearest(&self, i: usize, n: usize) -> Vec<(usize, f32)> {

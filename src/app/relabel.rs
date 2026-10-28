@@ -3,6 +3,9 @@
 //! as two made one cannot be told apart again; and renamed back by C-x u.
 use super::*;
 
+/// What may be done with a label, by a right-click on its anchor.
+pub const LABEL_MENU: [&str; 3] = ["Rename…", "Split into subfolders…", "Remove…"];
+
 /// What was done last that C-x u undoes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Last {
@@ -10,6 +13,8 @@ pub enum Last {
     Trash,
     /// A label renamed: from, to.
     Rename(String, String),
+    /// A label split into subfolders, or removed.
+    Refile,
 }
 
 impl App {
@@ -25,18 +30,29 @@ impl App {
             self.status = "no label to rename: m files mail under one".to_string();
             return;
         }
-        self.dialog = Dialog::ClusterMenu { id };
+        self.dialog = Dialog::ClusterMenu { id, at: 0 };
     }
 
-    /// A key in a cluster's menu: ⏎ does what is picked; any other key
-    /// closes it.
+    /// A key in a label's menu: ↑ ↓ pick, ⏎ does what is picked; any
+    /// other key closes it.
     pub(super) fn cluster_menu_key(&mut self, key: KeyEvent) {
-        let Dialog::ClusterMenu { id, .. } = self.dialog else {
+        let Dialog::ClusterMenu { id, at } = &mut self.dialog else {
             return;
         };
-        self.dialog = Dialog::Closed;
-        if key.code == KeyCode::Enter {
-            self.ask_rename_of(id);
+        let (id, last) = (*id, LABEL_MENU.len() - 1);
+        match (keymap::act(key), key.code) {
+            (Some(Act::Down), _) => *at = (*at + 1).min(last),
+            (Some(Act::Up), _) => *at = at.saturating_sub(1),
+            (_, KeyCode::Enter) => {
+                let at = *at;
+                self.dialog = Dialog::Closed;
+                match at {
+                    0 => self.ask_rename_of(id),
+                    1 => self.ask_split(id),
+                    _ => self.ask_remove(id),
+                }
+            }
+            _ => self.dialog = Dialog::Closed,
         }
     }
 
@@ -124,6 +140,7 @@ impl App {
                     self.status = format!("{new} renamed back to {old}");
                 }
             }
+            Some(Last::Refile) => self.undo_refiling(),
             Some(Last::Trash) | None => self.undo_trash(),
         }
     }

@@ -325,6 +325,32 @@ impl Store for Imap {
         })
     }
 
+    fn delete_folder(&mut self, path: &str) -> anyhow::Result<()> {
+        let folders = self.folders()?;
+        let Some(folder) = folders.iter().find(|f| f.path == path) else {
+            bail!("no folder {path}");
+        };
+        if let Some(d) = folder.delimiter.as_deref().filter(|d| !d.is_empty()) {
+            let under = format!("{path}{d}");
+            if folders.iter().any(|f| f.path.starts_with(&under)) {
+                bail!("{path} has a folder under it");
+            }
+        }
+        // Counted as it is deleted: a folder deleted with mail in it takes
+        // the mail with it, so never one that holds any.
+        let (n, _) = self.counts(path)?;
+        if n > 0 {
+            bail!("{path} is not empty: {n} messages");
+        }
+        self.run(|s, selected| {
+            if selected.as_ref().is_some_and(|x| x.folder == path) {
+                select(s, selected, "INBOX", true)?;
+            }
+            s.delete(path)?;
+            Ok(())
+        })
+    }
+
     fn address(&self) -> &str {
         &self.account.email
     }

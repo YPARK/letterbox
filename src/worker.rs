@@ -59,6 +59,23 @@ pub enum Ask {
         old: String,
         new: String,
     },
+    /// Make the folder `path`, if there is none.
+    CreateFolder {
+        path: String,
+    },
+    /// Delete the folder `path`, only if it holds nothing and nothing is
+    /// under it.
+    DeleteFolder {
+        path: String,
+    },
+    /// A message's labels changed where it is, as Gmail keeps them: `off`
+    /// taken off, `on` given.
+    Relabel {
+        folder: String,
+        uid: u32,
+        off: Option<String>,
+        on: Option<String>,
+    },
     /// A message whole, as its server keeps it: to be copied to another
     /// account.
     Raw {
@@ -207,6 +224,21 @@ pub enum Answer {
         old: String,
         result: Result<(), String>,
     },
+    FolderMade {
+        path: String,
+        result: Result<(), String>,
+    },
+    FolderDeleted {
+        path: String,
+        result: Result<(), String>,
+    },
+    Relabelled {
+        folder: String,
+        uid: u32,
+        off: Option<String>,
+        on: Option<String>,
+        result: Result<(), String>,
+    },
     /// The map laid out again, by the lens given: where each message, by
     /// its key, would be; not a store's answer.
     Relaid {
@@ -320,6 +352,41 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             result: store.rename_label(&old, &new).map_err(text),
             old,
         },
+        Ask::CreateFolder { path } => Answer::FolderMade {
+            result: match store.folders() {
+                Ok(fs) if fs.iter().any(|f| f.path == path) => Ok(()),
+                _ => store.create(&path).map_err(text),
+            },
+            path,
+        },
+        Ask::DeleteFolder { path } => Answer::FolderDeleted {
+            result: store.delete_folder(&path).map_err(text),
+            path,
+        },
+        Ask::Relabel {
+            folder,
+            uid,
+            off,
+            on,
+        } => {
+            // Given first, then taken off: stopped between, it has both,
+            // and nothing is lost.
+            let result = on
+                .as_deref()
+                .map_or(Ok(()), |l| store.label(&folder, uid, l, true))
+                .and_then(|()| {
+                    off.as_deref()
+                        .map_or(Ok(()), |l| store.label(&folder, uid, l, false))
+                })
+                .map_err(text);
+            Answer::Relabelled {
+                folder,
+                uid,
+                off,
+                on,
+                result,
+            }
+        }
         Ask::Raw { folder, uid } => Answer::Raw {
             raw: store.raw(&folder, uid).map_err(text),
             folder,
