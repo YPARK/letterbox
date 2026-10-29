@@ -1,5 +1,5 @@
 //! A message's pages, typeset by ohp and drawn in the terminal, where it
-//! draws images: letterbox built `--features pages`. The pages are drawn
+//! draws images: the `pages` feature, built by default. The pages are drawn
 //! off the screen's thread, and shown one at a time, each whole in the
 //! pane.
 

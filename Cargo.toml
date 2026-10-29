@@ -1,6 +1,6 @@
 [package]
 name = "letterbox"
-version = "0.4.14"
+version = "0.4.15"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
@@ -38,14 +38,13 @@ unicode-width = "0.2.2"
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
 webpki-roots = "1.0.10"
 # A message's pages, typeset by ohp and drawn in the terminal where it can
-# show images: `--features pages`. Typst comes with it, so it is not built
-# unless asked for.
+# show images. Typst comes with it, and one small file of C.
 ohp = { version = "0.1.9", optional = true, default-features = false, features = ["markdown"] }
 ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true, default-features = false }
 
 [features]
-default = []
+default = ["pages", "grammar"]
 pages = ["dep:ohp", "dep:ratatui-image", "dep:image"]
 # The grammar of what is written checked by a small model from Hugging Face.
 grammar = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]

@@ -245,6 +245,23 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Write `bytes` to `path`, which only you may read, as `write_private`
+/// does, but beside it first and then put in its place at once: one read
+/// as it is written again, from another thread or another letterbox, is
+/// never found half there, or gone.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITTEN: AtomicU64 = AtomicU64::new(0);
+    let n = WRITTEN.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let aside = path.with_file_name(format!(".{name}.{}.{n}", std::process::id()));
+    write_private(&aside, bytes)?;
+    std::fs::rename(&aside, path).or_else(|e| {
+        let _ = std::fs::remove_file(&aside);
+        Err(e).with_context(|| format!("cannot write {}", path.display()))
+    })
+}
+
 /// Lock the vault again: for tests.
 #[cfg(test)]
 pub fn lock() {

@@ -84,7 +84,7 @@ pub(super) fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
     let dir = cache().join("html");
     let path = dir.join(format!("{}.html", m.uid));
     private_dir(&dir)?;
-    vault::write_private(&path, html.as_bytes())?;
+    vault::replace_private(&path, html.as_bytes())?;
     Ok(path)
 }
 
@@ -94,7 +94,7 @@ pub(super) fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<Pa
     let dir = cache().join("files");
     private_dir(&dir)?;
     let path = dir.join(format!("{uid}-{}", safe_name(name)));
-    vault::write_private(&path, bytes)?;
+    vault::replace_private(&path, bytes)?;
     Ok(path)
 }
 

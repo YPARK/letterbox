@@ -25,22 +25,15 @@ or `cargo install --path .` in a clone of this repository.
 This installs `letterbox`, and `lbx`, the same program by a shorter name:
 `lbx` for the TUI, `lbx list -n 5`, and so on.
 
-To read a message as its pages, typeset by ohp and drawn in the terminal
-where it draws images, `V`, build it with them:
+It is built with two features, both on by default:
 
-```sh
-cargo install letterbox --features pages
-```
-
-That brings typst, so it builds for longer, and typst's evaluator
-assembles one small file with the system's C toolchain.
-
-To check the grammar of what you write, `C-c C-s`, build it with a small
-model's reader:
-
-```sh
-cargo install letterbox --features grammar
-```
+- `pages`, to read a message as its pages, `V`: its HTML, and the images
+  it carries, typeset by ohp and drawn in the terminal where it draws
+  images (kitty, WezTerm, Ghostty, iTerm2). That brings typst, so it
+  builds for longer, and typst's evaluator assembles one small file with
+  the system's C toolchain.
+- `grammar`, to check the grammar of what you write, `C-c C-s`, with a
+  small model.
 
 The model is a T5 from Hugging Face, made to correct English grammar, read
 with candle, in pure Rust; it is fetched the first time it is asked for,
@@ -50,8 +43,11 @@ in a few hundredths of a second. `--grammar` (or `LETTERBOX_GRAMMAR`)
 names another, as `visheratin/t5-efficient-mini-grammar-correction`, twice
 the size.
 
-Pure Rust, as paperstack and ohp: built without pages, nothing in C is
-compiled. TLS is rustls
+`cargo install letterbox --no-default-features` leaves both out, and
+`--features pages` or `--features grammar` then puts one back.
+
+Pure Rust, as paperstack and ohp, but for typst's one small file of C:
+built `--no-default-features`, none is compiled. TLS is rustls
 with RustCrypto's algorithms, which are not yet audited.
 
 ## Accounts
@@ -176,7 +172,7 @@ letterbox search grant report --account Work
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message |
 | `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
-| `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text. In a letterbox built `--features pages` |
+| `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text |
 | `B` | what was thrown away as junk in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
 | `J` | with the auto filter on, the new mail that looks like junk, each, how sure, and why, as what weighed most: `space` chooses one, `d` throws those chosen away, `n` says the one picked is not junk, learnt so, `i` looks through the Inbox, any other key leaves them. None chosen till you choose; never shown, nor thrown away, unasked |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
@@ -224,7 +220,7 @@ lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
 never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
 `C-c C-s`, or the Grammar button on its top edge, checks the grammar of
-what you wrote, built with `--features grammar`; `M-$`, as Emacs checks
+what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, nor the signature. Each change the model would make
 is asked in turn in a pop-up, the sentence it is in shown, what it would

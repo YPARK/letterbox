@@ -182,7 +182,7 @@ fn without_the_grammar_feature_m_dollar_says_how_to_have_it() {
 }
 
 /// The default model, fetched from Hugging Face and read: run by hand, as
-/// `cargo test --features grammar -- --ignored the_default_model`.
+/// `cargo test -- --ignored the_default_model`.
 #[cfg(feature = "grammar")]
 #[test]
 #[ignore = "fetches the model from Hugging Face"]

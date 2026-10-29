@@ -856,3 +856,38 @@ fn a_message_read_on_the_map_is_the_one_answered_forwarded_and_archived() {
     let reply = format!("Subject: {}", crate::compose::reply_subject(&other));
     assert!(said(&app).contains(&reply), "{}", said(&app));
 }
+
+// ---- A private file replaced ----
+
+/// Written again while it is read, from threads at once: always found, and
+/// whole, only you may read it, and nothing is left beside it.
+#[test]
+fn a_private_file_replaced_is_never_found_gone_nor_half_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("page.html");
+    let page = |n: u8| vec![b'a' + n; 1 << 16];
+    crate::vault::replace_private(&path, &page(0)).unwrap();
+    std::thread::scope(|s| {
+        for n in 1..4 {
+            let (path, page) = (&path, page(n));
+            s.spawn(move || {
+                for _ in 0..50 {
+                    crate::vault::replace_private(path, &page).unwrap();
+                }
+            });
+        }
+        for _ in 0..200 {
+            let read = std::fs::read(&path).expect("there");
+            assert_eq!(read.len(), 1 << 16);
+            assert!(read.iter().all(|&b| b == read[0]), "whole");
+        }
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+}
