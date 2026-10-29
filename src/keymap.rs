@@ -333,7 +333,7 @@ pub const KEYS: &[Binding] = &[
         name: "V",
         hint: "V",
         foot: &[],
-        help: "the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images, as kitty, WezTerm, Ghostty and iTerm2 do; j k or space b turn them; V again its text. Built --features pages",
+        help: "the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images, as kitty, WezTerm, Ghostty and iTerm2 do; j k or space b turn them; V again its text",
     },
     Binding {
         keys: &[("P", Papers)],
@@ -602,7 +602,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-s",
         hint: "C-c C-s",
         foot: &[(Writing, "grammar")],
-        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change asked in a pop-up, y takes it, n skips it, a accepts all, i ignores all; C-c C-c checks it too before it is sent, and asks if it is to go; built with --features grammar",
+        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change asked in a pop-up, y takes it, n skips it, a accepts all, i ignores all; C-c C-c checks it too before it is sent, and asks if it is to go",
     },
     Binding {
         keys: &[],

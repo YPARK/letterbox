@@ -20,7 +20,7 @@ pub(super) struct Args {
     )]
     pub(super) theme: theme::Name,
     /// The model the grammar of what is written is checked with, by its name
-    /// on Hugging Face; letterbox built with --features grammar
+    /// on Hugging Face
     #[arg(
         long,
         env = "LETTERBOX_GRAMMAR",

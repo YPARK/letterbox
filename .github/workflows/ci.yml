@@ -34,7 +34,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets
 
-  pages:
+  no-default-features:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,19 +42,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --all-targets --features pages
-      - run: cargo test --locked --all-targets --features pages
-
-  grammar:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --all-targets --features grammar
-      - run: cargo test --locked --all-targets --features grammar
+      - run: cargo clippy --locked --all-targets --no-default-features
+      - run: cargo test --locked --all-targets --no-default-features
 
   msrv:
     runs-on: ubuntu-latest
@@ -67,4 +56,3 @@ jobs:
           toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --all-targets
-      - run: cargo check --locked --all-targets --features grammar
