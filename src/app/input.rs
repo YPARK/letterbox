@@ -471,6 +471,7 @@ impl App {
             Act::Junk => self.show_junk(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),
+            Act::Images => self.pages_with_images(),
             Act::Present => self.present(),
             Act::Archive => self.archive(),
             Act::AddAccount => self.open_form(),

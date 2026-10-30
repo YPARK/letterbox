@@ -309,6 +309,31 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
 
 #[cfg(feature = "pages")]
 #[test]
+fn i_shows_the_pages_with_the_pictures_from_elsewhere() {
+    let mut app = demo();
+    let noether = app
+        .shown
+        .iter()
+        .position(|l| l.summary.subject.contains("Symmetry"))
+        .expect("Noether's letter, in HTML");
+    app.list.select(Some(noether));
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
+    press(&mut app, &["I"]);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_some(), "{}", app.status);
+    // Shown so, I again draws them again, not its text.
+    press(&mut app, &["I"]);
+    app.settle(Duration::from_secs(60));
+    assert!(app.paged.is_some(), "{}", app.status);
+    // V, its text.
+    press(&mut app, &["V"]);
+    assert!(app.paged.is_none());
+}
+
+#[cfg(feature = "pages")]
+#[test]
 fn pages_turn_as_far_as_there_are() {
     let blank = || image::RgbaImage::new(10, 14);
     let mut paged =
