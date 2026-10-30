@@ -693,3 +693,36 @@ fn a_folder_that_could_not_be_saved_in_is_not_begun_in_next() {
     );
     assert_eq!(app.save_dir.as_deref(), Some(dir.path()));
 }
+
+// ---- Pictures from elsewhere, fetched when asked ----
+
+#[cfg(feature = "pages")]
+#[test]
+fn pictures_from_elsewhere_are_put_in_the_page_as_fetched() {
+    let html = "<p>Hi<img alt=x SRC=\"https://cdn.example/a.png?w=1&amp;h=2\">\
+                <img src='http://cdn.example/b.gif'><img src=\"cid:c1\">\
+                <img src=\"https://cdn.example/gone.png\"></p>";
+    let mut asked = Vec::new();
+    let out = crate::app::with_remote_images(html, |url| {
+        asked.push(url.to_string());
+        (!url.contains("gone")).then(|| ("image/png".to_string(), b"PNG".to_vec()))
+    });
+    // Each asked for once, as its address reads, the message's own not.
+    assert_eq!(
+        asked,
+        [
+            "https://cdn.example/a.png?w=1&h=2",
+            "http://cdn.example/b.gif",
+            "https://cdn.example/gone.png"
+        ]
+    );
+    assert_eq!(
+        out.matches("data:image/png;base64,UE5H").count(),
+        2,
+        "{out}"
+    );
+    assert!(out.contains("cid:c1"), "{out}");
+    // One not fetched is left as it was.
+    assert!(out.contains("https://cdn.example/gone.png"), "{out}");
+    assert!(!out.contains("cdn.example/a.png"), "{out}");
+}

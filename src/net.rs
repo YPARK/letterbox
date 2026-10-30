@@ -21,6 +21,40 @@ pub fn agent() -> ureq::Agent {
         .into()
 }
 
+/// The largest picture fetched for a page.
+#[cfg(feature = "pages")]
+const PICTURE: u64 = 10 << 20;
+
+/// The picture at `url`, its type and bytes; anything else is none.
+#[cfg(feature = "pages")]
+pub fn image(agent: &ureq::Agent, url: &str) -> Option<(String, Vec<u8>)> {
+    let mut resp = agent
+        .get(url)
+        .header("User-Agent", BROWSER)
+        .header("Accept", "image/*")
+        .call()
+        .ok()?;
+    let mime = resp
+        .headers()
+        .get("content-type")?
+        .to_str()
+        .ok()?
+        .split(';')
+        .next()?
+        .trim()
+        .to_lowercase();
+    if !resp.status().is_success() || !mime.starts_with("image/") {
+        return None;
+    }
+    let bytes = resp
+        .body_mut()
+        .with_config()
+        .limit(PICTURE)
+        .read_to_vec()
+        .ok()?;
+    Some((mime, bytes))
+}
+
 /// The address of the PDF a link stands for, where it is plain which: an
 /// arXiv paper's page, as its PDF; an address ending `.pdf`; else none.
 pub fn pdf_of(url: &str) -> Option<String> {

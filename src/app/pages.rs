@@ -29,6 +29,21 @@ impl App {
             self.status = "its text: its pages let go".to_string();
             return;
         }
+        self.typeset(false);
+    }
+
+    /// Show the message read as its pages with its pictures from the web
+    /// fetched, off the screen's thread; shown so already, again.
+    #[cfg(feature = "pages")]
+    pub(super) fn pages_with_images(&mut self) {
+        self.typeset(true);
+    }
+
+    /// Typeset the message read as its pages, its pictures from the web
+    /// fetched first if `images`, and show them once they are.
+    #[cfg(feature = "pages")]
+    fn typeset(&mut self, images: bool) {
+        let place = self.read_place();
         let (Some(m), Some(place)) = (self.message().cloned(), place) else {
             self.status = "nothing to show: ⏎ reads the message picked".to_string();
             return;
@@ -49,19 +64,23 @@ impl App {
         let font = picker.font_size();
         let width = u32::from(cols) * u32::from(font.width.max(1));
         let height = u32::from(rows) * u32::from(font.height.max(1));
-        let path = match write_page(&m) {
-            Ok(path) => path,
-            Err(e) => {
-                self.status = format!("cannot typeset it: {e:#}");
-                return;
-            }
-        };
-        self.status = "typesetting its pages…".to_string();
+        self.status = if images {
+            "fetching its pictures, then typesetting its pages…"
+        } else {
+            "typesetting its pages…"
+        }
+        .to_string();
         self.typesetting = Some(place.clone());
         let replies = self.replies_to.clone();
         self.pending += 1;
         std::thread::spawn(move || {
-            let pages = crate::pages::typeset(&path, width)
+            let mut html = page_html(&m);
+            if images {
+                let agent = crate::net::agent();
+                html = with_remote_images(&html, |url| crate::net::image(&agent, url));
+            }
+            let pages = write_html(m.uid, &html)
+                .and_then(|path| crate::pages::typeset(&path, width))
                 .map(|pages| crate::pages::fit(pages, width, height))
                 .map_err(worker::text);
             let _ = replies.send(Reply {
@@ -74,6 +93,11 @@ impl App {
     #[cfg(not(feature = "pages"))]
     pub(super) fn toggle_pages(&mut self) {
         self.status = "letterbox was built without pages: cargo install letterbox --features pages; O hands it to ohp".to_string();
+    }
+
+    #[cfg(not(feature = "pages"))]
+    pub(super) fn pages_with_images(&mut self) {
+        self.toggle_pages();
     }
 
     /// A key while the message read is shown as its pages: they are turned;

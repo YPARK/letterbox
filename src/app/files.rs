@@ -64,10 +64,87 @@ pub(crate) fn inline_images(html: &str, images: &[(String, String, Vec<u8>)]) ->
     html
 }
 
+/// `html` with each picture it shows from the web, by `<img src>`, put in it
+/// as `fetch` brings it, by its address: a type and bytes, or none, and
+/// that one left as it was. Each address is asked for once.
+#[cfg(feature = "pages")]
+pub fn with_remote_images(
+    html: &str,
+    mut fetch: impl FnMut(&str) -> Option<(String, Vec<u8>)>,
+) -> String {
+    use base64::Engine;
+    let lower = html.to_ascii_lowercase();
+    let mut fetched: HashMap<String, Option<String>> = HashMap::new();
+    let (mut out, mut from) = (String::with_capacity(html.len()), 0);
+    let mut at = 0;
+    while let Some(i) = lower[at..].find("<img") {
+        let tag = at + i;
+        let end = lower[tag..].find('>').map_or(lower.len(), |e| tag + e);
+        at = end;
+        let Some(value) = src_value(&lower[tag..end]).map(|(s, e)| (tag + s, tag + e)) else {
+            continue;
+        };
+        let raw = &html[value.0..value.1];
+        let url = crate::papers::decode(raw.trim());
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            continue;
+        }
+        let data = fetched.entry(url).or_insert_with_key(|url| {
+            fetch(url).map(|(mime, bytes)| {
+                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                format!("data:{mime};base64,{data}")
+            })
+        });
+        if let Some(data) = data {
+            out.push_str(&html[from..value.0]);
+            out.push_str(data);
+            from = value.1;
+        }
+    }
+    out.push_str(&html[from..]);
+    out
+}
+
+/// Where the value of `tag`'s `src` is in it, lowercased, without its quotes.
+#[cfg(feature = "pages")]
+fn src_value(tag: &str) -> Option<(usize, usize)> {
+    let mut at = 0;
+    loop {
+        let i = at + tag[at..].find("src")?;
+        at = i + 3;
+        // `src` itself, not `data-src` nor `srcset`.
+        if !tag[..i].ends_with(|c: char| c.is_whitespace()) {
+            continue;
+        }
+        let rest = tag[at..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let start = tag.len() - rest.len();
+        return Some(match rest.chars().next()? {
+            q @ ('"' | '\'') => {
+                let len = rest[1..].find(q).unwrap_or(rest.len() - 1);
+                (start + 1, start + 1 + len)
+            }
+            _ => (
+                start,
+                start + rest.find(char::is_whitespace).unwrap_or(rest.len()),
+            ),
+        });
+    }
+}
+
 /// The message as a page, written where only you may read it: its HTML,
 /// the images it shows from its own parts put in it, or its text; and the
 /// file it is in.
 pub(super) fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
+    write_html(m.uid, &page_html(m))
+}
+
+/// The message as a page: its HTML, the images it shows from its own parts
+/// put in it, or its text.
+pub(super) fn page_html(m: &Message) -> String {
     let body = match &m.html {
         Some(html) => inline_images(html, &mail::inline_images(&m.raw)),
         None => format!(
@@ -77,12 +154,17 @@ pub(super) fn write_page(m: &Message) -> anyhow::Result<PathBuf> {
     };
     // Mail is from strangers: its scripts, plugins and forms are not run
     // from a file that could reach this machine's other files.
-    let html = format!(
+    format!(
         "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; \
          object-src 'none'; base-uri 'none'; form-action 'none'\">{body}"
-    );
+    )
+}
+
+/// `html`, the page of the message `uid`, written where only you may read
+/// it; and the file it is in.
+pub(super) fn write_html(uid: u32, html: &str) -> anyhow::Result<PathBuf> {
     let dir = cache().join("html");
-    let path = dir.join(format!("{}.html", m.uid));
+    let path = dir.join(format!("{uid}.html"));
     private_dir(&dir)?;
     vault::replace_private(&path, html.as_bytes())?;
     Ok(path)

@@ -50,6 +50,8 @@ pub enum Act {
     Papers,
     /// The message read as its pages, or as its text again.
     Pages,
+    /// The message read as its pages, its pictures from the web fetched.
+    Images,
     /// Out of the Inbox, to Archive.
     Archive,
     NewMail,
@@ -329,11 +331,11 @@ pub const KEYS: &[Binding] = &[
         help: "save the message read's attachments: s lists them, ⏎ saving the one picked, a all of them; S saves them all at once. Then the folder, begun where you last saved, else in Downloads: ⏎ goes into a folder, and on . saves there; a name typed that no folder has is made. Then, for one, its name, all but the extension picked to type over: ← → edit it, ⏎ keeps it, esc goes back",
     },
     Binding {
-        keys: &[("V", Pages)],
-        name: "V",
+        keys: &[("V", Pages), ("I", Images)],
+        name: "V I",
         hint: "V",
         foot: &[],
-        help: "the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images, as kitty, WezTerm, Ghostty and iTerm2 do; j k or space b turn them; V again its text",
+        help: "the message read as its pages, typeset by ohp, drawn where the terminal draws images (kitty, WezTerm, Ghostty, iTerm2); j k turn them, V its text; I with its pictures from the web, which tells the sender",
     },
     Binding {
         keys: &[("P", Papers)],
