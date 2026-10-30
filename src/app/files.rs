@@ -383,7 +383,20 @@ impl App {
                     return;
                 };
                 match keep_file(m.uid, &name, &bytes) {
-                    Ok(path) if ohp_reads(&name) => self.launch = Some(Launch::Ohp(path)),
+                    Ok(path) if ohp_reads(&name) => {
+                        // A PDF may be signed there, and answered with.
+                        self.presenting = self
+                            .reading
+                            .as_ref()
+                            .filter(|_| name.to_lowercase().ends_with(".pdf"))
+                            .map(|r| Presenting {
+                                account: r.account,
+                                folder: r.folder.clone(),
+                                uid: r.uid,
+                                name: name.clone(),
+                            });
+                        self.launch = Some(Launch::Ohp(path))
+                    }
                     Ok(path) => self.launch = Some(Launch::Open(path)),
                     Err(e) => files.note = Some(format!("cannot keep {name}: {e:#}")),
                 }

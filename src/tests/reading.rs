@@ -402,6 +402,75 @@ fn attachments_are_saved_under_a_name_of_their_own() {
 }
 
 #[test]
+fn a_pdf_signed_in_ohp_is_replied_with_under_its_own_name() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    // The paper, its second file.
+    press(&mut app, &["<enter>", "o", "j", "<enter>"]);
+    let Some(app::Launch::Ohp(pdf)) = app.launch.take() else {
+        panic!("not for ohp: {:?}", app.launch);
+    };
+    // ohp is told the file's own name, not the one letterbox keeps it by,
+    // and where to say what it signed.
+    let presenting = app.presenting.take().expect("may be signed");
+    let env: std::collections::HashMap<_, _> = presenting.env().into_iter().collect();
+    assert_eq!(env["OHP_AS"], "computable-numbers.pdf");
+    // ohp signs it, as it names it, and says so.
+    let copy = pdf.with_file_name("computable-numbers-YP.pdf");
+    std::fs::write(&copy, b"%PDF signed").unwrap();
+    std::fs::write(&env["OHP_SIGNED"], format!("{}\n", copy.display())).unwrap();
+    app.presented(presenting);
+    let app::Dialog::Signed(signed) = &app.dialog else {
+        panic!("no reply offered");
+    };
+    // Kept apart, with its message: another's of the same name is not it.
+    let kept = signed.path.clone();
+    assert!(!copy.exists() && kept.is_file());
+    assert_eq!(kept.file_name().unwrap(), "computable-numbers-YP.pdf");
+    assert!(kept.starts_with(cache.path()));
+    let shown = app::screen(&mut app, 120, 30);
+    assert!(
+        shown.contains("Reply all") && shown.contains("Not now"),
+        "{shown}"
+    );
+    press(&mut app, &["<enter>"]);
+    let compose = app.compose.as_ref().expect("a reply");
+    let text = compose.buffer.text();
+    assert!(text.starts_with("To: "), "{text}");
+    let attach = format!("Attach: {}", crate::compose::named(&kept));
+    assert!(text.lines().any(|l| l == attach), "{text}");
+    let file = crate::compose::read_file(&kept).unwrap();
+    assert_eq!(file.name, "computable-numbers-YP.pdf");
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn nothing_signed_in_ohp_offers_nothing() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    let presenting = app::Presenting {
+        account: 0,
+        folder: "INBOX".into(),
+        uid: 1,
+        name: "form.pdf".into(),
+    };
+    let _ = presenting.env();
+    app.presented(presenting);
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
 fn the_message_read_is_presented_by_ohp_with_the_images_it_carries() {
     let cache = tempfile::tempdir().unwrap();
     let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());

@@ -169,7 +169,7 @@ letterbox search grant report --account Work
 | `a` | reply to all: the sender, the others it went to copied |
 | `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; several selected, asked first |
-| `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message |
+| `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message. A PDF attached may be signed there, `S` in ohp, and replied with, as [Signing a PDF](#signing-a-pdf) says |
 | `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text |
@@ -279,6 +279,22 @@ Drafts, and remembers it on the account:
 ```toml
 trash = "Deleted Items"
 ```
+
+## Signing a PDF
+
+A form to sign, attached, is signed and sent back without leaving the
+terminal. `o` lists the message's files, and `⏎` on the PDF presents it in
+[ohp](https://github.com/YPARK/ohp), one that signs; there `S` signs it:
+each click puts your signature, your name, the date, or a ✓ ✕ ● where it
+goes, on any page, and `esc` asks what to call the signed copy,
+`form-signed.pdf`, the `signed` picked to type over. ohp is told the
+file's own name, not the one letterbox keeps it under.
+
+Quit ohp, and letterbox asks whether to reply with it: `⏎` or `r` to the
+sender, `a` to all, the copy attached, under the name you gave it; any
+other key keeps it, with the message, to attach later with `C-c C-a`.
+Signing itself, what is drawn into the copy, and how Acrobat shows it, is
+ohp's: its README's Signing says.
 
 ## What letterbox never does
 

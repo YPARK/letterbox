@@ -635,6 +635,34 @@ pub(super) fn removing(f: &mut Frame, t: &Theme, name: &str) -> (Rect, Targets) 
     (area, targets)
 }
 
+/// Whether to reply with the copy of a PDF attached signed in ohp, at `path`.
+pub(super) fn signed_dialog(f: &mut Frame, t: &Theme, path: &std::path::Path) -> (Rect, Targets) {
+    let (row, places) = buttons(
+        t,
+        &[
+            ("Reply", Button::Reply),
+            ("Reply all", Button::ReplyAll),
+            ("Not now", Button::NotNow),
+        ],
+    );
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let (area, buttons_at) = question(
+        f,
+        t,
+        "Signed",
+        "⏎ r replies with it · a to all · any other key keeps it",
+        &format!("Reply with {name} attached? It is kept with the message, to attach later too."),
+        |_| row,
+    );
+    let targets = places
+        .into_iter()
+        .map(|(x, w, b)| (spot(area, buttons_at, x, w), Target::Button(b)))
+        .collect();
+    (area, targets)
+}
+
 /// Whether to do what was chosen in the Inbox looked through, `said`.
 pub(super) fn applying(f: &mut Frame, t: &Theme, said: &str) -> (Rect, Targets) {
     let (row, places) = buttons(t, &[("Do it", Button::Apply), ("Not yet", Button::NotYet)]);

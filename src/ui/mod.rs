@@ -196,6 +196,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
+        Dialog::Signed(signed) => Some(signed_dialog(f, &t, &signed.path)),
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
         Dialog::Bulk(bulk) => Some(bulk_dialog(f, &t, &bulk.said)),
         Dialog::Junk(pick) => Some(junk_dialog(f, &t, pick)),

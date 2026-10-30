@@ -22,6 +22,7 @@ mod replies;
 mod review;
 mod saving;
 mod screen;
+mod signing;
 mod trashing;
 mod undoing;
 mod writing;
@@ -41,6 +42,7 @@ pub use self::relabel::*;
 pub use self::review::*;
 pub use self::saving::*;
 pub use self::screen::*;
+pub use self::signing::*;
 pub use self::trashing::*;
 pub use self::writing::*;
 
@@ -418,6 +420,8 @@ pub struct App {
     typesetting: Option<crate::pages::Place>,
     /// How many lists of papers paperstack has been asked of.
     papers_asked: u64,
+    /// The PDF attached that ohp is to present, which it may sign.
+    pub presenting: Option<Presenting>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -429,7 +433,15 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 terminal.draw(|f| ui::draw(f, app))?;
             }
             if let Some(launch) = app.launch.take() {
-                app.status = carry_out(launch, &mut terminal);
+                let presenting = app
+                    .presenting
+                    .take()
+                    .filter(|_| matches!(launch, Launch::Ohp(_)));
+                let env = presenting.as_ref().map(Presenting::env).unwrap_or_default();
+                app.status = carry_out(launch, &mut terminal, &env);
+                if let Some(presented) = presenting {
+                    app.presented(presented);
+                }
                 terminal.clear()?;
                 stale = true;
                 continue;
@@ -470,12 +482,20 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
     result.and(written)
 }
 
-/// Do what `launch` asks, outside the screen; what to say of it.
-fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
+/// Do what `launch` asks, outside the screen, ohp given `env`; what to
+/// say of it.
+fn carry_out(
+    launch: Launch,
+    terminal: &mut DefaultTerminal,
+    env: &[(&str, std::ffi::OsString)],
+) -> String {
     match launch {
         Launch::Ohp(path) => {
             give_back();
-            let ran = std::process::Command::new("ohp").arg(&path).status();
+            let ran = std::process::Command::new("ohp")
+                .arg(&path)
+                .envs(env.iter().map(|(k, v)| (k, v)))
+                .status();
             *terminal = take();
             match ran {
                 Ok(s) if s.success() => String::new(),
@@ -672,6 +692,7 @@ impl App {
             #[cfg(feature = "pages")]
             typesetting: None,
             papers_asked: 0,
+            presenting: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);
