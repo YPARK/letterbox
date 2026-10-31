@@ -19,6 +19,7 @@ use std::time::Duration;
 mod accounts;
 mod agents;
 mod bulk;
+mod composing;
 mod filing;
 mod filter;
 mod folders;

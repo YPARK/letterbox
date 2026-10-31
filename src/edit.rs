@@ -16,6 +16,8 @@ pub enum Done {
     /// `M-$`, Emacs's key to check spelling: the grammar of what is written
     /// checked.
     Check,
+    /// `C-c` or `C-x` and a key neither does anything with.
+    Undefined,
 }
 
 pub struct Buffer {
@@ -165,18 +167,15 @@ impl Buffer {
         self.preferred = self.col;
     }
 
-    /// `new` as lines above the row `at`, point staying on its text.
     /// To the field `by` after the one the cursor is in, or before, round:
-    /// each line of the head, To, Cc, Subject and the rest, then what is
-    /// written after it; at the end of what a field says, and of the first
-    /// line of what is written.
+    /// each line of the head, To, Cc, Subject and the rest but its files'
+    /// `Attach` lines, then what is written after it; at the end of what a
+    /// field says, and of the first line of what is written.
     pub fn field(&mut self, by: isize) {
-        let head = self
-            .lines
-            .iter()
-            .position(|l| l.trim().is_empty())
-            .unwrap_or(self.lines.len());
-        let mut stops: Vec<usize> = (0..head).collect();
+        let head = self.head();
+        let mut stops: Vec<usize> = (0..head)
+            .filter(|&r| !self.lines[r].starts_with("Attach:"))
+            .collect();
         if head + 1 < self.lines.len() {
             stops.push(head + 1);
         }
@@ -207,6 +206,7 @@ impl Buffer {
         self.preferred = self.col;
     }
 
+    /// `new` as lines above the row `at`, point staying on its text.
     pub fn insert_lines(&mut self, at: usize, new: &[String]) {
         self.begin_step();
         self.edited();
@@ -227,6 +227,14 @@ impl Buffer {
             }
             self.insert_str(part);
         }
+    }
+
+    /// How many lines the head is: those before the first blank one.
+    fn head(&self) -> usize {
+        self.lines
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .unwrap_or(self.lines.len())
     }
 
     fn line(&self) -> &str {
@@ -392,9 +400,28 @@ impl Buffer {
         self.col = self.preferred.min(self.line().chars().count());
     }
 
+    /// `C-a`: the line's start; in the head, past the field's name, as
+    /// message-mode's C-a goes, and the line's start from there.
     fn line_start(&mut self) {
-        self.col = 0;
-        self.preferred = 0;
+        self.col = match self.name_end() {
+            Some(end) if self.col != end => end,
+            _ => 0,
+        };
+        self.preferred = self.col;
+    }
+
+    /// In the head, where the field's name ends on point's line: past its
+    /// colon and the space after it.
+    fn name_end(&self) -> Option<usize> {
+        if self.row >= self.head() {
+            return None;
+        }
+        let line = self.line();
+        let (name, rest) = line.split_once(':')?;
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            return None;
+        }
+        Some(name.chars().count() + 1 + usize::from(rest.starts_with(' ')))
     }
 
     fn line_end(&mut self) {
@@ -711,6 +738,28 @@ impl Buffer {
     }
 }
 
+/// `key` named as Emacs names it: `C-z`, `M-f`, `SPC`, `RET`.
+pub fn name(key: KeyEvent) -> String {
+    let base = match key.code {
+        KeyCode::Char(' ') => "SPC".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Enter => "RET".to_string(),
+        KeyCode::Tab => "TAB".to_string(),
+        KeyCode::Esc => "ESC".to_string(),
+        KeyCode::Backspace => "DEL".to_string(),
+        KeyCode::F(n) => format!("<f{n}>"),
+        code => format!("<{code:?}>").to_lowercase(),
+    };
+    let mut named = String::new();
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        named.push_str("C-");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        named.push_str("M-");
+    }
+    named + &base
+}
+
 fn is_word(c: char) -> bool {
     c.is_alphanumeric()
 }
@@ -751,17 +800,23 @@ pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Don
                 KeyCode::Char('a' | 'A') => Done::Attach,
                 // C-c C-s: the grammar checked, as M-$, no Meta needed.
                 KeyCode::Char('s' | 'S') => Done::Check,
-                _ => Done::Stay,
+                KeyCode::Char('g' | 'G') if ctrl => Done::Stay,
+                _ => Done::Undefined,
             };
         }
-        // C-x u undoes, as Emacs's; C-x and anything else, nothing.
+        // C-x u undoes, as Emacs's; C-x C-g, nothing; C-x and anything
+        // else is undefined.
         Some(_) => {
             buf.killing = false;
             if !ctrl && key.code == KeyCode::Char('u') {
                 buf.undoing = undoing;
                 buf.undo();
+                return Done::Stay;
             }
-            return Done::Stay;
+            return match key.code {
+                KeyCode::Char('g' | 'G') if ctrl => Done::Stay,
+                _ => Done::Undefined,
+            };
         }
         None => {}
     }

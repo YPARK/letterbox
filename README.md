@@ -192,21 +192,21 @@ letterbox search grant report --account Work
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
-| `?`, `F1` | all the keys; `F1` while writing too |
+| `?`, `F1` | all the keys; `F1` while writing too, the keys of writing first |
 | `C-x` `u`, `C-/`, `C-_` | undo what was done last, as Emacs's three do: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `C-c C-c` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 
 `c` opens a message to write, `r` a reply, over the list or the map,
-which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
+which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line (in a header, `C-a` goes past its name first, as message-mode's does), `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
 back, `M-f` `M-b` `M-d` by word. `C-/`, `C-_` or `C-x u` undoes what
 was last changed, a step at a time, as Emacs does: a kill, a yank, a
 grammar fix put in (all of them, if all were taken), or up to twenty
 characters typed in a row; after any other key, undo again takes the
 undoing back. The last hundred steps are kept. `tab` goes from field to field, To, Cc,
-Subject, then what is written, and round, `S-tab` back. `C-SPC` sets the mark: `C-w` kills the
+Subject, then what is written, and round, past the Attach lines; `S-tab` back. A line too long for the box ends in `$` where it is cut, as in Emacs. `C-c` or `C-x` pressed is said at the foot until the next key, and a key neither takes is said to be undefined. `C-SPC` sets the mark: `C-w` kills the
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
 again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
@@ -220,7 +220,7 @@ asking first if you changed it or it carries files. `esc` does as `C-g`. Outside
 `C-c C-s`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
-saying who wrote it, nor the signature. Each change the model would make
+saying who wrote it, the message it forwards, nor the signature. Each change the model would make
 is asked in turn in a pop-up, the sentence it is in shown, what it would
 change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
 (`n`) leaves it, Accept all (`a`) takes all that are left, Ignore all

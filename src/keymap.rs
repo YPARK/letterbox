@@ -695,6 +695,21 @@ pub fn help() -> impl Iterator<Item = (&'static str, &'static str)> {
         .map(|b| (b.name, b.help))
 }
 
+/// The help's rows as F1 shows them while a message is written: its keys
+/// first, then the rest.
+pub fn help_writing() -> impl Iterator<Item = (&'static str, &'static str)> {
+    let writing = |b: &&Binding| {
+        b.foot.iter().any(|&(p, _)| p == Writing)
+            || b.help.starts_with("in the message being written")
+    };
+    let rest = move |b: &&Binding| !writing(b);
+    KEYS.iter()
+        .filter(writing)
+        .chain(KEYS.iter().filter(rest))
+        .filter(|b| !b.help.is_empty())
+        .map(|b| (b.name, b.help))
+}
+
 /// The keys a hint names, each part of it with where it begins in the
 /// hint and how wide it is, both in characters: `j/k` is two parts, a key
 /// each; `C-c C-c` one, two keys pressed in turn. A part that names no
