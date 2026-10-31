@@ -538,13 +538,13 @@ impl App {
                 self.remember_look();
             }
             // What was said of the view left is not said of the other.
-            Act::SwitchView if self.map.mode == Mode::Map => {
-                self.status.clear();
-                self.show_list();
-            }
             Act::SwitchView => {
                 self.status.clear();
-                self.show_map();
+                if self.map.mode == Mode::Map {
+                    self.show_list();
+                } else {
+                    self.show_map();
+                }
             }
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),

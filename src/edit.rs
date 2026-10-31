@@ -791,34 +791,24 @@ pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Don
     // Any key but undo's, and C-x before its u, ends the undoing: undone
     // again after it, what was undone comes back, as in Emacs.
     let undoing = buf.undoing.take();
-    match prefix.take() {
-        Some('c') => {
-            buf.killing = false;
-            return match key.code {
-                KeyCode::Char('c' | 'C') => Done::Send,
-                KeyCode::Char('k' | 'K') => Done::Cancel,
-                KeyCode::Char('a' | 'A') => Done::Attach,
-                // C-c C-s: the grammar checked, as M-$, no Meta needed.
-                KeyCode::Char('s' | 'S') => Done::Check,
-                KeyCode::Char('g' | 'G') if ctrl => Done::Stay,
-                _ => Done::Undefined,
-            };
-        }
-        // C-x u undoes, as Emacs's; C-x C-g, nothing; C-x and anything
-        // else is undefined.
-        Some(_) => {
-            buf.killing = false;
-            if !ctrl && key.code == KeyCode::Char('u') {
+    if let Some(p) = prefix.take() {
+        buf.killing = false;
+        return match (p, key.code) {
+            ('c', KeyCode::Char('c' | 'C')) => Done::Send,
+            ('c', KeyCode::Char('k' | 'K')) => Done::Cancel,
+            ('c', KeyCode::Char('a' | 'A')) => Done::Attach,
+            // C-c C-s: the grammar checked, as M-$, no Meta needed.
+            ('c', KeyCode::Char('s' | 'S')) => Done::Check,
+            // C-x u undoes, as Emacs's.
+            ('x', KeyCode::Char('u')) if !ctrl => {
                 buf.undoing = undoing;
                 buf.undo();
-                return Done::Stay;
+                Done::Stay
             }
-            return match key.code {
-                KeyCode::Char('g' | 'G') if ctrl => Done::Stay,
-                _ => Done::Undefined,
-            };
-        }
-        None => {}
+            // C-c or C-x C-g, nothing; and anything else is undefined.
+            (_, KeyCode::Char('g' | 'G')) if ctrl => Done::Stay,
+            _ => Done::Undefined,
+        };
     }
     if let KeyCode::Char(c @ ('c' | 'C' | 'x' | 'X')) = key.code
         && ctrl

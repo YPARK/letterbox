@@ -185,15 +185,12 @@ pub(super) fn lay(list: &[keymap::Hint], width: u16) -> Vec<Vec<(String, String)
 /// Every key, in a pop-up scrolled to `scroll`: those of the message
 /// being written first, while one is.
 pub(super) fn help(f: &mut Frame, t: &Theme, scroll: usize, writing: bool) -> (Rect, usize) {
-    let rows: Vec<(&str, &str)> = if writing {
-        keymap::help_writing().collect()
+    let keys: Box<dyn Iterator<Item = (&str, &str)>> = if writing {
+        Box::new(keymap::help_writing())
     } else {
-        keymap::help().collect()
+        Box::new(keymap::help())
     };
-    let rows: Vec<(&str, &str)> = rows
-        .into_iter()
-        .chain([("click", "pick; the wheel scrolls")])
-        .collect();
+    let rows: Vec<(&str, &str)> = keys.chain([("click", "pick; the wheel scrolls")]).collect();
     // Each key's line wrapped under itself, past the keys' column: as wide
     // as the widest keys, and a space.
     let key = rows
