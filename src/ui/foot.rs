@@ -153,7 +153,13 @@ fn in_context(app: &mut App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());
     // A hint whose keys are all refused there offers nothing.
     if pane == Pane::Map {
-        list.retain(|h| h.keys.is_empty() || h.keys.iter().any(|&(_, a)| !app.map_refuses(a)));
+        let (moving, down) = (app.map.moving.is_some(), app.map_down());
+        list.retain(|h| {
+            h.keys.is_empty()
+                || h.keys
+                    .iter()
+                    .any(|&(_, a)| !crate::app::map_refuses(a, moving, down))
+        });
     }
     for h in list {
         match (h.act(), pane) {

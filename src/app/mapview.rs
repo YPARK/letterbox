@@ -208,21 +208,36 @@ impl App {
     /// through; never on the clusters, where a key is so easily pressed on
     /// the wrong one.
     pub fn map_refuses(&mut self, act: Act) -> bool {
-        let moves = matches!(
-            act,
-            Act::Trash
-                | Act::Archive
-                | Act::Move
-                | Act::NewLabel
-                | Act::FileFirst
-                | Act::FileAll
-                | Act::NotIt
-                | Act::Mark
-        );
-        let now = jiff::Timestamp::now().as_second();
-        moves && self.map.moving.is_none() && (act == Act::Mark || !self.map.at_message(now))
+        let down = self.map_down();
+        map_refuses(act, self.map.moving.is_some(), down)
     }
 
+    /// Whether the map is down at a message in a cluster's tree, where
+    /// mail may be moved: asked once, for every key the foot offers.
+    pub fn map_down(&mut self) -> bool {
+        let now = jiff::Timestamp::now().as_second();
+        self.map.at_message(now)
+    }
+}
+
+/// Whether the map refuses `act`, a message `moving` or not, and `down` at
+/// one in a cluster's tree or not.
+pub fn map_refuses(act: Act, moving: bool, down: bool) -> bool {
+    let moves = matches!(
+        act,
+        Act::Trash
+            | Act::Archive
+            | Act::Move
+            | Act::NewLabel
+            | Act::FileFirst
+            | Act::FileAll
+            | Act::NotIt
+            | Act::Mark
+    );
+    moves && !moving && (act == Act::Mark || !down)
+}
+
+impl App {
     /// A key in the map's view menu: what it shows changed, the menu kept
     /// open to change more; or the map laid out again; any other key
     /// closes it.

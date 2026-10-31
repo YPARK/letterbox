@@ -37,6 +37,7 @@ pub use self::folders::*;
 pub use self::form::*;
 pub use self::input::*;
 pub use self::listing::*;
+pub use self::mapview::map_refuses;
 use self::mapview::*;
 pub use self::papers::*;
 pub use self::relabel::*;
