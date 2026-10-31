@@ -63,15 +63,12 @@ fn held_said(secs: u64) -> String {
 /// Whether what is written, not what it quotes or forwards, speaks of a
 /// file attached.
 fn speaks_of_files(body: &str) -> bool {
-    body.lines()
-        .take_while(|l| l.trim() != compose::FORWARD_LINE)
-        .filter(|l| !l.trim_start().starts_with('>'))
-        .any(|l| {
-            let l = l.to_lowercase();
-            ["attached", "attaching", "attachment", "enclosed"]
-                .iter()
-                .any(|w| l.contains(w))
-        })
+    compose::own_lines(body.lines()).any(|(_, l)| {
+        let l = l.to_lowercase();
+        ["attached", "attaching", "attachment", "enclosed"]
+            .iter()
+            .any(|w| l.contains(w))
+    })
 }
 
 /// A message to answer once it is read: where it is, and how.

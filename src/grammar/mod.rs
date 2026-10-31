@@ -65,15 +65,11 @@ pub fn pieces(lines: &[String]) -> Vec<Piece> {
         .iter()
         .position(|l| l.trim().is_empty())
         .map_or(0, |b| b + 1);
+    let own = crate::compose::own_lines(lines.iter().skip(body).map(String::as_str))
+        .take_while(|(_, l)| *l != "-- ")
+        .filter(|(_, l)| !l.trim().ends_with("wrote:"));
     let mut out = Vec::new();
-    for (row, line) in lines.iter().enumerate().skip(body) {
-        if line == "-- " || line.trim() == crate::compose::FORWARD_LINE {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.starts_with('>') || trimmed.ends_with("wrote:") {
-            continue;
-        }
+    for (row, line) in own.map(|(i, l)| (body + i, l)) {
         out.extend(
             sentences(line)
                 .into_iter()

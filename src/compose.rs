@@ -345,6 +345,18 @@ fn when(message: &Message) -> Option<String> {
 /// The line a forward's message is below, as it was.
 pub const FORWARD_LINE: &str = "---------- Forwarded message ----------";
 
+/// The lines of a message's text its writer wrote, each with its number:
+/// those above the message it forwards, and none of what it quotes.
+pub fn own_lines<'a>(
+    lines: impl IntoIterator<Item = &'a str>,
+) -> impl Iterator<Item = (usize, &'a str)> {
+    lines
+        .into_iter()
+        .enumerate()
+        .take_while(|(_, l)| l.trim() != FORWARD_LINE)
+        .filter(|(_, l)| !l.trim_start().starts_with('>'))
+}
+
 /// The buffer a forward opens with, the message's headers and text below
 /// a line that says it is forwarded; point is at the end of `To:`. Its
 /// files go with it, taken by the caller.
