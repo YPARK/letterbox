@@ -139,11 +139,50 @@ fn bang_flags_and_capital_s_saves_all_into_a_folder_picked() {
     press(&mut app, &["!"]);
     assert_eq!(flagged(&app), was);
 
-    // S: straight to the folder, all of them saved there.
+    // S: straight to the folder; esc, back to the message, no list shown.
+    press(&mut app, &["S"]);
+    assert!(app.dialog.saving().is_some(), "no folder asked");
+    press(&mut app, &["<esc>"]);
+    assert!(!app.dialog.is_open(), "a list never opened");
+
+    // All of them saved there.
     press(&mut app, &["S"]);
     assert!(app.dialog.saving().is_some(), "no folder asked");
     press(&mut app, &["<enter>"]);
     assert!(dir.path().join("states.txt").is_file());
     assert!(dir.path().join("computable-numbers.pdf").is_file());
     assert!(!app.dialog.is_open(), "{}", app.status);
+}
+
+#[test]
+fn the_folder_to_save_in_shows_its_end_with_one_slash() {
+    let mut app = demo();
+    let dir = tempfile::tempdir().unwrap();
+    let deep = dir
+        .path()
+        .join("a-folder-of-a-long-name-to-push-the-end-out-of-sight")
+        .join("and-another-as-long-as-the-first")
+        .join("alpha");
+    std::fs::create_dir_all(&deep).unwrap();
+    app.save_dir = Some(deep);
+    read_turing(&mut app);
+    press(&mut app, &["S"]);
+    let screen = app::screen(&mut app, 80, 24);
+    let header = screen
+        .lines()
+        .find(|l| l.starts_with("│ …"))
+        .expect("its start cut");
+    let end = format!("{}alpha/ ", std::path::MAIN_SEPARATOR);
+    assert!(header.contains(&end), "{header}");
+
+    // At the root, a slash alone.
+    if cfg!(windows) {
+        return;
+    }
+    press(&mut app, &["<esc>"]);
+    app.save_dir = Some(PathBuf::from("/"));
+    press(&mut app, &["S"]);
+    let screen = app::screen(&mut app, 80, 24);
+    assert!(screen.contains("│ /  "), "{screen}");
+    assert!(!screen.contains("//"), "{screen}");
 }

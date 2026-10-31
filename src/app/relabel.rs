@@ -18,7 +18,7 @@ pub enum Last {
 }
 
 impl App {
-    /// A right-click on a cluster's anchor: what may be done with it.
+    /// A right-click on a cluster's anchor, or R: what may be done with it.
     pub(super) fn cluster_menu(&mut self, id: u32) {
         let label = self
             .map
@@ -120,8 +120,7 @@ impl App {
             return;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
-            self.rename_label(&old, &new);
-            if self.status.starts_with("renamed") {
+            if self.rename_label(&old, &new) {
                 self.status.push_str(" · C-x u renames it back");
                 self.last = Some(Last::Rename(old, new));
             }
@@ -135,8 +134,7 @@ impl App {
     pub(super) fn undo_last(&mut self) {
         match self.last.take() {
             Some(Last::Rename(old, new)) => {
-                self.rename_label(&new, &old);
-                if self.status.starts_with("renamed") {
+                if self.rename_label(&new, &old) {
                     self.status = format!("{new} renamed back to {old}");
                 }
             }

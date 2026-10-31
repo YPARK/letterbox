@@ -5,18 +5,16 @@ use super::*;
 /// The Inbox looked through, beside the map: each message, newest first,
 /// with what may be done with it, what will be done lit; and a button that
 /// does it all.
-pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) -> Option<u16> {
     use crate::app::Choice;
     let t = app.theme;
     let focused = app.focus == Focus::Reader;
     f.render_widget(Block::new().style(Style::new().bg(t.page)), area);
     app.targets.push((area, Target::Reader));
     if area.height < 4 || area.width < 24 {
-        return;
+        return None;
     }
-    let Some(s) = app.map.snapshot.clone() else {
-        return;
-    };
+    let s = app.map.snapshot.clone()?;
     let rows = app.review_rows();
     let picked = app
         .review
@@ -65,11 +63,23 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     // Only those chosen are done; the rest are left as they are.
-    let counts = if filed + discarded + kept == 0 {
-        " none chosen: look through as many as you like; C-c C-c does only those".to_string()
+    // The longest that fits whole, else the shortest, cut.
+    let said: Vec<String> = if filed + discarded + kept == 0 {
+        vec![
+            " none chosen: look through as many as you like; C-c C-c does only those".to_string(),
+            " none chosen: C-c C-c does only those chosen".to_string(),
+            " none chosen".to_string(),
+        ]
     } else {
-        format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left")
+        vec![
+            format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left"),
+            format!(" {filed} to file · {discarded} to discard · {kept} to keep"),
+        ]
     };
+    let counts = first_fitting(&said, usize::from(width), |c| c.width())
+        .or(said.last())
+        .cloned()
+        .unwrap_or_default();
     buf.set_stringn(
         x,
         area.y + 1,
@@ -90,7 +100,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             usize::from(width),
             Style::new().fg(t.dim),
         );
-        return;
+        return None;
     }
     // Two lines a message; what is seen moves to keep the one picked in it.
     let room = usize::from(area.height.saturating_sub(3)) / 2;
@@ -246,9 +256,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         }
         y += 2;
     }
-    if let Some(under) = menu_at {
-        label_menu(f, app, area, under);
-    }
+    menu_at
 }
 
 /// The labels a message may be moved to, dropped down under it in the

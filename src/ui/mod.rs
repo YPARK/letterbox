@@ -5,6 +5,7 @@
 
 mod blocks;
 mod dialogs;
+pub(crate) mod files;
 mod foot;
 mod form;
 mod list;
@@ -14,6 +15,7 @@ mod review;
 mod writing;
 use self::blocks::*;
 use self::dialogs::*;
+use self::files::*;
 use self::foot::*;
 use self::form::*;
 use self::list::*;
@@ -164,11 +166,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if side_w > 0 {
         sidebar(f, app, side);
     }
+    // Where the labels drop down: under the message's row, where it is in
+    // sight; else over the message read, at its top.
+    let mut menu_under = None;
     if list_w > 0 {
         if app.map.mode == crate::map::Mode::Map {
             map_pane(f, app, list);
         } else {
-            messages(f, app, list);
+            menu_under = messages(f, app, list).map(|y| (list, y));
         }
     }
     let edge = if popup {
@@ -184,13 +189,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         Borders::LEFT
     };
-    if read.width > 0 && read.height > 0 {
-        if app.map.mode == crate::map::Mode::Map && app.review.as_ref().is_some_and(|r| !r.reading)
-        {
-            review_pane(f, app, read);
+    let reading = !read.is_empty();
+    if reading {
+        if app.reviewing() {
+            menu_under = review_pane(f, app, read).map(|y| (read, y));
         } else {
             reader(f, app, read, edge);
         }
+    }
+    if app.menu.is_some() {
+        let over = if reading { read } else { main };
+        let (area, under) = menu_under.unwrap_or((over, over.y));
+        label_menu(f, app, area, under);
     }
     // The line before the message, to drag: it and a column either side,
     // as one alone is hard to hit; below the list, its line alone.
@@ -214,7 +224,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let popup = match &app.dialog {
         Dialog::Closed => None,
         &Dialog::Help(scroll) => {
-            let (area, scroll) = help(f, &t, scroll);
+            let (area, scroll) = help(f, &t, scroll, app.compose.is_some());
             app.dialog = Dialog::Help(scroll);
             Some((area, Vec::new()))
         }
@@ -327,7 +337,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             f,
             &t,
             "Rename label",
-            "⏎ renames · esc keeps it",
+            "⏎ renames · C-u clears · esc keeps it",
             &format!(
                 "What is {old} to be called? On every account, and on its server; called as another label is, the two are one."
             ),
@@ -581,6 +591,41 @@ fn clip(s: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// Of `candidates`, longest first, the first that fits whole in `room`
+/// columns, as `width` measures each.
+fn first_fitting<T>(
+    candidates: impl IntoIterator<Item = T>,
+    room: usize,
+    width: impl Fn(&T) -> usize,
+) -> Option<T> {
+    candidates.into_iter().find(|c| width(c) <= room)
+}
+
+/// `items`, those at the end left out till they `fit`, but those that
+/// `stay`, never left out.
+fn drop_to_fit<T>(
+    mut items: Vec<T>,
+    stays: impl Fn(&T) -> bool,
+    fit: impl Fn(&[T]) -> bool,
+) -> Vec<T> {
+    while !fit(&items)
+        && let Some(at) = items.iter().rposition(|i| !stays(i))
+    {
+        items.remove(at);
+    }
+    items
+}
+
+/// How wide `items`, each a key and what it does, are as `keyed` lays
+/// them out, without the spaces after the last.
+fn keyed_width(items: &[(&str, &str)]) -> usize {
+    let w: usize = items
+        .iter()
+        .map(|(k, what)| k.width() + what.width() + 5)
+        .sum();
+    w.saturating_sub(3)
 }
 
 /// The end of `s`, as much as `width` columns show, `…` before it if it is

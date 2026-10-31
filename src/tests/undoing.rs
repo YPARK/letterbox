@@ -171,3 +171,61 @@ fn what_was_brought_to_another_account_is_not_left_in_both_by_c_x_u() {
         app.status
     );
 }
+
+#[test]
+fn one_archived_from_the_list_is_picked_again_once_put_back() {
+    let mut app = demo();
+    let subject = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["e"]);
+    app.settle(Duration::from_secs(5));
+    // The next read meanwhile: it is the one put back that is read after.
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert_ne!(app.current().unwrap().summary.subject, subject);
+    undo(&mut app);
+    assert_eq!(
+        app.current().unwrap().summary.subject,
+        subject,
+        "{}",
+        app.status
+    );
+    assert_eq!(app.message().unwrap().subject, subject, "the one read");
+}
+
+#[test]
+fn after_many_are_put_back_the_one_the_key_was_pressed_on_is_picked() {
+    let mut app = demo_map();
+    press(&mut app, &["M"]);
+    press(&mut app, &["j", "j", "j"]);
+    let picked = app.shown[3].summary.subject.clone();
+    // y files them; any key closes how it went.
+    press(&mut app, &["Y", "y", "x"]);
+    undo(&mut app);
+    assert!(
+        app.status.contains("put back as they were"),
+        "{}",
+        app.status
+    );
+    let at = app.list.selected().unwrap();
+    assert_eq!(app.shown[at].summary.subject, picked);
+}
+
+#[test]
+fn after_several_are_trashed_and_put_back_the_one_the_key_was_pressed_on_is_picked() {
+    let mut app = demo_map();
+    press(&mut app, &["M"]);
+    // Dragged up, the cursor on the first of them.
+    super::selecting::drag(&mut app, app::Target::Message(4), app::Target::Message(1));
+    assert_eq!(app.list.selected(), Some(1));
+    let picked = app.current().unwrap().summary.subject.clone();
+    // Inbox and all, to Trash: the one picked dropped first.
+    press(&mut app, &["d", "i", "y"]);
+    if matches!(app.dialog, app::Dialog::Applied(_)) {
+        press(&mut app, &["x"]);
+    }
+    app.settle(Duration::from_secs(5));
+    assert_ne!(app.current().unwrap().summary.subject, picked);
+    undo(&mut app);
+    let at = app.list.selected().unwrap();
+    assert_eq!(app.shown[at].summary.subject, picked, "{}", app.status);
+}

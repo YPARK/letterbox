@@ -98,7 +98,7 @@ pub fn in_message(from: &str, html: Option<&str>, text: &str) -> Vec<Paper> {
             if !titled(&title) {
                 continue;
             }
-            let link = unwrapped(&href);
+            let link = unwrapped(&decode(&href));
             let what = doi_of(&link)
                 .or_else(|| arxiv_of(&link).map(|id| format!("arXiv:{id}")))
                 .or_else(|| paper_host(&link).then(|| link.clone()))
@@ -140,9 +140,9 @@ pub fn fold(title: &str) -> String {
         .collect()
 }
 
-/// Each link of `html`: where it goes, what is inside it, and what follows
-/// it, up to the next link.
-fn anchors(html: &str) -> Vec<(String, String, String)> {
+/// Each link of `html`: where it goes, as its `href` is written, entities
+/// and all; what is inside it; and what follows it, up to the next link.
+pub(crate) fn anchors(html: &str) -> Vec<(String, String, String)> {
     let lower = html.to_ascii_lowercase();
     let mut out = Vec::new();
     let mut at = 0;
@@ -156,7 +156,7 @@ fn anchors(html: &str) -> Vec<(String, String, String)> {
         let href = attribute(&html[start..open_end], "href").unwrap_or_default();
         let inner = html[open_end + 1..close].to_string();
         let next = lower[close..].find("<a ").map_or(html.len(), |i| close + i);
-        out.push((decode(&href), inner, html[close + 4..next].to_string()));
+        out.push((href, inner, html[close + 4..next].to_string()));
         at = close + 4;
     }
     out
@@ -188,7 +188,7 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
 }
 
 /// What `html` says, its tags taken out and its entities read.
-fn text_of(html: &str) -> String {
+pub(crate) fn text_of(html: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
     for c in html.chars() {
@@ -207,7 +207,7 @@ fn text_of(html: &str) -> String {
 
 /// Whitespace made single spaces, and a space before punctuation that
 /// a tag left taken out.
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -265,45 +265,233 @@ pub(crate) fn decode(s: &str) -> String {
     out
 }
 
-/// Where `href` sends one on to, through Scholar's and Google's redirects.
-fn unwrapped(href: &str) -> String {
-    for (host, key) in [
-        ("scholar.google.", "url="),
-        ("www.google.", "q="),
-        ("www.google.", "url="),
-    ] {
-        if href.contains(host)
-            && let Some(q) = href.split_once('?').map(|(_, q)| q)
-            && let Some(v) = q.split('&').find_map(|kv| kv.strip_prefix(key))
-            && v.starts_with("http")
-        {
-            return percent_decoded(v);
-        }
-    }
-    href.to_string()
+/// Google's own domains, whose redirects are followed: no other, however
+/// it is named. As Google lists them, www.google.com/supported_domains;
+/// sorted, to be searched.
+pub(crate) const GOOGLE: &[&str] = &[
+    "google.ad",
+    "google.ae",
+    "google.al",
+    "google.am",
+    "google.as",
+    "google.at",
+    "google.az",
+    "google.ba",
+    "google.be",
+    "google.bf",
+    "google.bg",
+    "google.bi",
+    "google.bj",
+    "google.bs",
+    "google.bt",
+    "google.by",
+    "google.ca",
+    "google.cat",
+    "google.cd",
+    "google.cf",
+    "google.cg",
+    "google.ch",
+    "google.ci",
+    "google.cl",
+    "google.cm",
+    "google.cn",
+    "google.co.ao",
+    "google.co.bw",
+    "google.co.ck",
+    "google.co.cr",
+    "google.co.id",
+    "google.co.il",
+    "google.co.in",
+    "google.co.jp",
+    "google.co.ke",
+    "google.co.kr",
+    "google.co.ls",
+    "google.co.ma",
+    "google.co.mz",
+    "google.co.nz",
+    "google.co.th",
+    "google.co.tz",
+    "google.co.ug",
+    "google.co.uk",
+    "google.co.uz",
+    "google.co.ve",
+    "google.co.vi",
+    "google.co.za",
+    "google.co.zm",
+    "google.co.zw",
+    "google.com",
+    "google.com.af",
+    "google.com.ag",
+    "google.com.ar",
+    "google.com.au",
+    "google.com.bd",
+    "google.com.bh",
+    "google.com.bn",
+    "google.com.bo",
+    "google.com.br",
+    "google.com.bz",
+    "google.com.co",
+    "google.com.cu",
+    "google.com.cy",
+    "google.com.do",
+    "google.com.ec",
+    "google.com.eg",
+    "google.com.et",
+    "google.com.fj",
+    "google.com.gh",
+    "google.com.gi",
+    "google.com.gt",
+    "google.com.hk",
+    "google.com.jm",
+    "google.com.kh",
+    "google.com.kw",
+    "google.com.lb",
+    "google.com.ly",
+    "google.com.mm",
+    "google.com.mt",
+    "google.com.mx",
+    "google.com.my",
+    "google.com.na",
+    "google.com.ng",
+    "google.com.ni",
+    "google.com.np",
+    "google.com.om",
+    "google.com.pa",
+    "google.com.pe",
+    "google.com.pg",
+    "google.com.ph",
+    "google.com.pk",
+    "google.com.pr",
+    "google.com.py",
+    "google.com.qa",
+    "google.com.sa",
+    "google.com.sb",
+    "google.com.sg",
+    "google.com.sl",
+    "google.com.sv",
+    "google.com.tj",
+    "google.com.tr",
+    "google.com.tw",
+    "google.com.ua",
+    "google.com.uy",
+    "google.com.vc",
+    "google.com.vn",
+    "google.cv",
+    "google.cz",
+    "google.de",
+    "google.dj",
+    "google.dk",
+    "google.dm",
+    "google.dz",
+    "google.ee",
+    "google.es",
+    "google.fi",
+    "google.fm",
+    "google.fr",
+    "google.ga",
+    "google.ge",
+    "google.gg",
+    "google.gl",
+    "google.gm",
+    "google.gr",
+    "google.gy",
+    "google.hn",
+    "google.hr",
+    "google.ht",
+    "google.hu",
+    "google.ie",
+    "google.im",
+    "google.iq",
+    "google.is",
+    "google.it",
+    "google.je",
+    "google.jo",
+    "google.kg",
+    "google.ki",
+    "google.kz",
+    "google.la",
+    "google.li",
+    "google.lk",
+    "google.lt",
+    "google.lu",
+    "google.lv",
+    "google.md",
+    "google.me",
+    "google.mg",
+    "google.mk",
+    "google.ml",
+    "google.mn",
+    "google.mu",
+    "google.mv",
+    "google.mw",
+    "google.ne",
+    "google.nl",
+    "google.no",
+    "google.nr",
+    "google.nu",
+    "google.pl",
+    "google.pn",
+    "google.ps",
+    "google.pt",
+    "google.ro",
+    "google.rs",
+    "google.ru",
+    "google.rw",
+    "google.sc",
+    "google.se",
+    "google.sh",
+    "google.si",
+    "google.sk",
+    "google.sm",
+    "google.sn",
+    "google.so",
+    "google.sr",
+    "google.st",
+    "google.td",
+    "google.tg",
+    "google.tl",
+    "google.tm",
+    "google.tn",
+    "google.to",
+    "google.tt",
+    "google.vu",
+    "google.ws",
+];
+
+/// Whether `host` is one of Google's own domains.
+fn google(host: &str) -> bool {
+    GOOGLE.binary_search(&host).is_ok()
 }
 
-fn percent_decoded(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = b
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (b[i], hex) {
-            (b'%', Some(v)) => {
-                out.push(v);
-                i += 3;
-            }
-            (v, _) => {
-                out.push(v);
-                i += 1;
-            }
+/// The host `href` goes to, as a browser reads it: past any name and
+/// password before an `@`, without its port; none if it is not an address.
+pub(crate) fn host_of(href: &str) -> Option<String> {
+    url::Url::parse(href).ok()?.host_str().map(str::to_string)
+}
+
+/// Where `href` sends one on to, through Scholar's and Google's redirects:
+/// only those, by their own host and path, as a browser reads them; never
+/// an address that names them elsewhere in it.
+pub(crate) fn unwrapped(href: &str) -> String {
+    let Ok(u) = url::Url::parse(href) else {
+        return href.to_string();
+    };
+    let host = u.host_str().unwrap_or("");
+    let ours = |h: Option<&str>| h.is_some_and(google);
+    let keys: &[&str] = match (u.scheme(), u.path()) {
+        ("http" | "https", "/scholar_url") if ours(host.strip_prefix("scholar.")) => &["url"],
+        ("http" | "https", "/url") if ours(host.strip_prefix("www.")) || ours(Some(host)) => {
+            &["q", "url"]
         }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+        _ => &[],
+    };
+    keys.iter()
+        .find_map(|key| {
+            u.query_pairs()
+                .find(|(k, v)| k == key && crate::mail::is_web(v))
+                .map(|(_, v)| v.into_owned())
+        })
+        .unwrap_or_else(|| href.to_string())
 }
 
 /// The DOI in `link`'s path: `10.`, digits, `/`, up to its query.
@@ -342,28 +530,32 @@ fn id_like(id: &str) -> bool {
         && (a.to_owned() + b).chars().all(|c| c.is_ascii_digit())
 }
 
-/// Whether `link` goes to where papers are kept.
-fn paper_host(link: &str) -> bool {
-    let rest = link
-        .strip_prefix("https://")
-        .or_else(|| link.strip_prefix("http://"))
-        .unwrap_or(link);
-    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+/// Whether `link` goes to where papers are kept: by its host as a browser
+/// reads it, the domain itself or one under it, and the path a host's
+/// entry names, if it names one.
+pub(crate) fn paper_host(link: &str) -> bool {
+    let Ok(u) = url::Url::parse(link) else {
+        return false;
+    };
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    let host = host.strip_prefix("www.").unwrap_or(host);
     // A journal's mail is sent through trackers of its own: they tell
     // nothing of where the paper is.
     if [
         "click.", "links.", "link.", "email.", "e.", "t.", "mail.", "track",
     ]
     .iter()
-    .any(|t| rest.starts_with(t))
+    .any(|t| host.starts_with(t))
     {
         return false;
     }
+    let path = u.path().trim_start_matches('/');
     PAPER_HOSTS.iter().any(|h| {
-        rest.starts_with(h)
-            || rest
-                .split_once('/')
-                .is_some_and(|(host, _)| host.ends_with(&format!(".{h}")))
+        let (domain, under) = h.split_once('/').unwrap_or((h, ""));
+        let on = host == domain || host.ends_with(&format!(".{domain}"));
+        on && (under.is_empty() || path == under || path.starts_with(&format!("{under}/")))
     })
 }
 

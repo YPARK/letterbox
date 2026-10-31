@@ -695,15 +695,32 @@ impl App {
                 .collect(),
             (_, None) => Vec::new(),
         };
-        let at = picked
-            .and_then(|(a, f, u)| self.shown.iter().position(|m| m.is(a, &f, u)))
+        let back = self
+            .pick_back
+            .as_ref()
+            .filter(|b| b.at.elapsed() < super::undoing::PICK_BACK)
+            .and_then(|b| {
+                self.shown.iter().position(|m| {
+                    m.account == b.a && m.folder == b.folder && m.summary.message_id == b.message_id
+                })
+            });
+        if back.is_some() {
+            self.pick_back = None;
+            // Read, as what is picked is, rather than another left read.
+            if self.side_by_side || self.reading.is_some() {
+                self.due = Some((Instant::now(), Due::Message));
+            }
+        }
+        let at = back
+            .or_else(|| picked.and_then(|(a, f, u)| self.shown.iter().position(|m| m.is(a, &f, u))))
             .or(self.list.selected())
             .unwrap_or(0);
         self.list
             .select((!self.shown.is_empty()).then(|| at.min(self.shown.len() - 1)));
     }
 
-    /// Read the message picked in the list: at once, if it was read before.
+    /// Read the message picked in the list, and show it: at once, if it
+    /// was read before.
     pub(super) fn read_picked(&mut self) {
         let Some(s) = self.current() else { return };
         let (a, folder, uid, seen) = (s.account, s.folder.clone(), s.uid, s.flags.seen);
@@ -712,7 +729,7 @@ impl App {
             .as_ref()
             .is_some_and(|r| r.account == a && r.folder == folder && r.uid == uid)
         {
-            return;
+            return self.show_read();
         }
         self.scroll = 0;
         let mark = self.mark_read && !seen;
@@ -742,6 +759,7 @@ impl App {
             body,
             on_map: false,
         });
+        self.show_read();
     }
 
     /// Mark the message picked, or not, here and on its server.
@@ -768,6 +786,7 @@ impl App {
             Flag::Answered => !s.flags.answered,
         };
         self.set(flag, on);
+        self.status = format!("marked {}", flag.said(on));
     }
 
     /// The message read, if it has come.
@@ -814,8 +833,9 @@ impl App {
         }
         // Of every folder of every account, from what letterbox knows: at
         // once, and never only the folder listed. The servers are asked
-        // only where the map is not begun.
-        if self.map.snapshot.is_some() {
+        // only where the map is not begun, or of a folder it does not
+        // read, as Drafts and Trash.
+        if self.searches_everywhere() {
             let words = self.query.trim().to_string();
             // A cluster listed, or what fits nowhere, is searched alone;
             // and a search again of what was found there, there again.
@@ -835,16 +855,13 @@ impl App {
             self.open_view(View::Found(words.clone(), within));
             let n = self.shown.len();
             self.status = match (n, place) {
-                (0, None) => format!("nothing found for {words}, in every folder letterbox knows"),
+                (0, None) => {
+                    format!("nothing found for {words}, in every folder but Drafts, Junk and Trash")
+                }
                 (0, Some(place)) => format!("nothing found for {words} in {place}"),
-                (n, None) => {
-                    format!(
-                        "{n} found in every folder, newest first · esc, or the sidebar, goes back"
-                    )
-                }
-                (n, Some(place)) => {
-                    format!("{n} found in {place}, newest first · esc, or the sidebar, goes back")
-                }
+                // Short enough for the way back to be seen 60 wide.
+                (n, None) => format!("{n} found in every folder, newest first · esc goes back"),
+                (n, Some(place)) => format!("{n} found in {place}, newest first · esc goes back"),
             };
             return;
         }
@@ -856,6 +873,19 @@ impl App {
         for (a, folder) in parts {
             self.ask_search(a, folder);
         }
+    }
+
+    /// Whether ⏎ in the search looks in every folder letterbox knows: once
+    /// the map is begun, but from a folder it does not read, as Drafts,
+    /// Junk and Trash, where the server searches that one alone.
+    pub fn searches_everywhere(&self) -> bool {
+        let unread = |role: Role| matches!(role, Role::Junk | Role::Trash | Role::Drafts);
+        self.map.snapshot.is_some()
+            && match self.listing.as_ref().map(|l| &l.view) {
+                Some(View::All(role)) => !unread(*role),
+                Some(View::Folder(..)) => !self.folder().is_some_and(|f| unread(f.role)),
+                _ => true,
+            }
     }
 
     /// Move through the sidebar or the list, or scroll the message read.
@@ -914,7 +944,6 @@ impl App {
             .select(Some(at.saturating_add_signed(by).min(self.shown.len() - 1)));
         self.due = None;
         self.read_picked();
-        self.show_read();
         self.more();
     }
 

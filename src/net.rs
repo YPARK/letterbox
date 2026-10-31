@@ -76,7 +76,7 @@ pub fn pdf_of(url: &str) -> Option<String> {
 /// The PDF at `url`, and a name for it, from its address; anything else, as
 /// a page asking to sign in, is an error.
 pub fn pdf(url: &str) -> anyhow::Result<(String, Vec<u8>)> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
+    if !crate::mail::is_web(url) {
         bail!("{url} is not a web address");
     }
     let mut resp = agent()

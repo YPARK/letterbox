@@ -9,7 +9,10 @@ use crate::index::labels;
 use crate::index::record::Indexed;
 use crate::mail::{self, Flags, Folder, Role, Summary};
 use crate::store::{Change, Filed, Flag, Kind, Page, Status, Store};
+
+pub mod shelf;
 use jiff::{ToSpan, Zoned};
+pub use shelf::shelf;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -232,8 +235,8 @@ fn inbox() -> Vec<Kept> {
                 "Content-Type: multipart/mixed; boundary=\"m1\"\r\n",
                 &format!(
                     "--m1\nContent-Type: text/plain; charset=utf-8\n\nThe paper is attached, \
-                 with the table of the machine's states. Press f to read it in ohp, or a to \
-                 save them to your Downloads.\n\nAlan\n\n--m1\nContent-Type: text/plain; name=\"states.txt\"\n\
+                 with the table of the machine's states. Press o to read it in ohp, or s to \
+                 save them.\n\nAlan\n\n--m1\nContent-Type: text/plain; name=\"states.txt\"\n\
                  Content-Disposition: attachment; filename=\"states.txt\"\n\n\
                  b  None  P0, R   c\nc  None  R       e\ne  None  P1, R   f\n\
                  f  None  R       b\n--m1\nContent-Type: application/pdf; \

@@ -27,8 +27,19 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
     if app.compose.is_some() {
         spans = vec![Span::styled(" Compose", Style::new().fg(t.title).bold())];
     } else if app.query.is_empty() && !app.searching {
+        let found = match app.listing.as_ref().map(|l| &l.view) {
+            Some(View::Found(words, _)) => Some(words),
+            _ => None,
+        };
         let what = if app.map.mode == crate::map::Mode::Map && room >= 16 {
             "Search the map".to_string()
+        } else if let Some(words) = found {
+            // What was found, by its name, else by the words alone.
+            if folder.width() <= room {
+                folder
+            } else {
+                words.clone()
+            }
         } else if folder.is_empty() || room < 16 {
             "Search".to_string()
         } else {
@@ -51,6 +62,8 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
         field,
     );
     let count = match &app.listing {
+        // The map says its own count; the list's is not on screen.
+        _ if app.map.mode == crate::map::Mode::Map => String::new(),
         Some(l) if l.fetching() => "fetching… ".to_string(),
         Some(l) => {
             let unseen = match l.view {
@@ -359,7 +372,9 @@ pub(super) fn folder_row(t: Theme, width: usize, row: FolderRow) -> ListItem<'st
     ]))
 }
 
-pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
+/// The list of messages; the row of the message picked, where it is in
+/// sight, for the labels to drop down under.
+pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) -> Option<u16> {
     let t = app.theme;
     let focused = app.focus == Focus::List;
     let block = Block::new()
@@ -373,7 +388,7 @@ pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     if app.shown.is_empty() {
         f.render_widget(block, area);
         empty(f, app, inner);
-        return;
+        return None;
     }
     // A column for the mark of the message picked; four lines a message.
     let width = (inner.width as usize).saturating_sub(1);
@@ -504,12 +519,7 @@ pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
         }
         app.targets.push((row, Target::Message(top + at)));
     }
-    // The labels it may be moved to, dropped down under it.
-    if app.menu.is_some()
-        && let Some(under) = picked_at
-    {
-        label_menu(f, app, area, under);
-    }
+    picked_at
 }
 
 /// What an empty list says: how to set up an account, that the account is
@@ -548,10 +558,12 @@ pub(super) fn empty(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled("  fetching…", dim));
         } else if !app.query.is_empty() && app.found.is_none() {
             lines.push(Line::styled("  Nothing listed matches.", title));
-            lines.push(Line::styled(
-                "  ⏎ searches the whole folder on the server.",
-                dim,
-            ));
+            let enter = if app.searches_everywhere() {
+                "  ⏎ searches every folder letterbox knows."
+            } else {
+                "  ⏎ searches the whole folder on the server."
+            };
+            lines.push(Line::styled(enter, dim));
         } else if !app.query.is_empty() {
             lines.push(Line::styled("  Nothing found.", title));
         } else {

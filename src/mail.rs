@@ -2,6 +2,7 @@
 //! message's summary, as listed; and a message read whole. Messages are
 //! parsed from their RFC 5322 bytes, whatever store they came from.
 
+use mail_parser::decoders::html::html_to_text;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use serde::{Deserialize, Serialize};
 
@@ -361,7 +362,7 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
         .then(|| m.body_html(0).map(|h| h.into_owned()))
         .flatten();
     let attachments = m.attachments().map(attachment).collect();
-    let text = m.body_text(0).map(|t| body(&t)).unwrap_or_default();
+    let text = plain(&m).map(|t| body(&t)).unwrap_or_default();
     let links = links(&text, html.as_deref());
     let message = Message {
         uid,
@@ -389,13 +390,12 @@ const LINKS: usize = 200;
 /// around it.
 pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
-    let mut add = |url: &str| {
-        let url = url
-            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
-            .replace("&amp;", "&");
-        let web = url.starts_with("https://") || url.starts_with("http://");
-        if web && url.len() > 10 && !found.contains(&url) && found.len() < LINKS {
-            found.push(clean(&url));
+    let mut add = |url: Option<String>| {
+        if let Some(url) = url
+            && !found.contains(&url)
+            && found.len() < LINKS
+        {
+            found.push(url);
         }
     };
     let words = |s: &str| -> Vec<String> {
@@ -403,7 +403,7 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
         let mut rest = s;
         while let Some(at) = rest.find("http") {
             let from = &rest[at..];
-            if from.starts_with("https://") || from.starts_with("http://") {
+            if is_web(from) {
                 let end = from
                     .find(|c: char| c.is_whitespace() || "<>\"'`".contains(c))
                     .unwrap_or(from.len());
@@ -416,7 +416,7 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
         out
     };
     for w in words(text) {
-        add(&w);
+        add(web_address(&w));
     }
     if let Some(h) = html {
         let mut rest = h;
@@ -430,11 +430,60 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
                     .next()
                     .unwrap_or_default(),
             };
-            add(value.trim());
+            add(href_address(value));
             rest = from;
         }
     }
     found
+}
+
+/// Whether `s` is a web address, by its scheme.
+pub(crate) fn is_web(s: &str) -> bool {
+    s.starts_with("https://") || s.starts_with("http://")
+}
+
+/// `url` as `links` keeps it, if it is a web address: without the
+/// punctuation that ends a sentence after one, or the brackets around it.
+fn web_address(url: &str) -> Option<String> {
+    let url = url
+        .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
+        .replace("&amp;", "&");
+    (is_web(&url) && url.len() > 10).then(|| clean(&url))
+}
+
+/// The address an HTML link's `href` gives, its entities read, as `links`
+/// keeps it: one way for both `links` and `link_names`, so each finds the
+/// other's.
+fn href_address(href: &str) -> Option<String> {
+    web_address(&crate::papers::decode(href.trim()))
+}
+
+/// What each of `links` is called: the text of the first link to it in
+/// `html` that has any; else, behind a redirect, where it goes; else none.
+pub fn link_names(links: &[String], html: Option<&str>) -> Vec<Option<String>> {
+    let anchors = html.map(crate::papers::anchors).unwrap_or_default();
+    let mut named: std::collections::HashMap<String, String> = Default::default();
+    for (href, inner, _) in &anchors {
+        let Some(url) = href_address(href) else {
+            continue;
+        };
+        if named.contains_key(&url) {
+            continue;
+        }
+        let text = clean(&crate::papers::clean(&crate::papers::text_of(inner)));
+        if !text.is_empty() && text != url {
+            named.insert(url, text);
+        }
+    }
+    links
+        .iter()
+        .map(|url| {
+            named
+                .get(url)
+                .cloned()
+                .or_else(|| Some(crate::papers::unwrapped(url)).filter(|to| to != url))
+        })
+        .collect()
 }
 
 /// The attachments of a message, by name, and what they hold.
@@ -506,6 +555,111 @@ fn phrase(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// A message's text: its plain text, else its HTML read in lines, a line
+/// for each heading, block and row.
+fn plain<'x>(m: &'x mail_parser::Message<'x>) -> Option<std::borrow::Cow<'x, str>> {
+    match m.text_part(0).map(|p| &p.body) {
+        Some(PartType::Html(h)) => Some(html_to_text(&blocks(h)).into()),
+        _ => m.body_text(0),
+    }
+}
+
+/// The tags of HTML that begin and end a line of it read as text:
+/// mail-parser ends one only at `<br>` and `</p>`.
+const BLOCKS: &[&str] = &[
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "tr",
+    "table",
+    "ul",
+    "ol",
+    "blockquote",
+    "pre",
+    "hr",
+    "section",
+    "article",
+    "header",
+    "footer",
+];
+
+/// What mail-parser leaves out of the text, nothing in it read.
+const UNREAD: &[&str] = &["head", "script", "style", "template"];
+
+/// `html` with a `<br>` at each tag of a block, begun or ended, but where
+/// a line has just ended, and none in what is not read.
+fn blocks(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    let mut unread: Option<&str> = None;
+    // A line just ended, or nothing written yet: no line more.
+    let mut ended = true;
+    while let Some(at) = rest.find('<') {
+        let Some(end) = tag_end(&rest[at..]).map(|e| at + e) else {
+            break;
+        };
+        let text = &rest[..at];
+        ended &= text.trim().is_empty();
+        out.push_str(text);
+        let tag = &rest[at + 1..end - 1];
+        let closing = tag.starts_with('/');
+        let name = tag
+            .trim_start_matches('/')
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("");
+        match unread {
+            Some(u) => {
+                if closing && name.eq_ignore_ascii_case(u) {
+                    unread = None;
+                }
+            }
+            None => {
+                if !closing && let Some(u) = UNREAD.iter().find(|u| u.eq_ignore_ascii_case(name)) {
+                    unread = Some(u);
+                } else if BLOCKS.iter().any(|b| b.eq_ignore_ascii_case(name)) && !ended {
+                    out.push_str("<br>");
+                    ended = true;
+                } else if name.eq_ignore_ascii_case("br")
+                    || closing && name.eq_ignore_ascii_case("p")
+                {
+                    ended = true;
+                }
+            }
+        }
+        out.push_str(&rest[at..end]);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Where the tag `s` begins with ends, past its `>`: a comment at its
+/// `-->`, else at the first `>` outside an attribute's quotes.
+fn tag_end(s: &str) -> Option<usize> {
+    if s.starts_with("<!--") {
+        return s.find("-->").map(|e| e + 3);
+    }
+    let (mut quote, mut last) = (None, ' ');
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') if last == '=' => quote = Some(c),
+            (None, '>') => return Some(i + 1),
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = c;
+        }
+    }
+    None
 }
 
 /// A message's text, its lines ended alike, without the blank lines it ends

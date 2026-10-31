@@ -30,6 +30,34 @@ fn m_goes_between_the_map_and_the_list_and_lets_go_of_what_was_the_maps() {
 }
 
 #[test]
+fn m_drops_down_the_labels_over_a_message_read_alone() {
+    let mut app = demo();
+    // Narrow: the message read has the screen, no row of it in sight.
+    app::screen(&mut app, 70, 30);
+    press(&mut app, &["<enter>"]);
+    assert_eq!(app.focus, app::Focus::Reader);
+    press(&mut app, &["m"]);
+    assert!(app.menu.is_some());
+    let screen = app::screen(&mut app, 70, 30);
+    assert!(
+        screen.contains("Move to") && screen.contains("pick on the map"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_flag_toggled_with_the_list_out_of_sight_is_said() {
+    let mut app = demo();
+    app::screen(&mut app, 70, 30);
+    press(&mut app, &["<enter>", "!"]);
+    assert_eq!(app.status, "marked flagged");
+    press(&mut app, &["!"]);
+    assert_eq!(app.status, "marked unflagged");
+    press(&mut app, &["u"]);
+    assert_eq!(app.status, "marked unread");
+}
+
+#[test]
 fn in_the_list_a_message_is_filed_as_in_the_map() {
     let mut app = demo();
     let subject = app.current().unwrap().summary.subject.clone();
@@ -170,55 +198,7 @@ fn an_arxiv_listing_in_text_gives_its_papers() {
     );
 }
 
-/// A library in memory, as paperstack would answer.
-#[derive(Default)]
-pub(super) struct Shelf {
-    pub(super) papers: Vec<crate::paperstack::Found>,
-    pub(super) added: Vec<String>,
-}
-
-impl crate::paperstack::Library for Shelf {
-    fn search(
-        &mut self,
-        query: &str,
-        _limit: usize,
-    ) -> anyhow::Result<Vec<crate::paperstack::Found>> {
-        let starred = query.contains("is:starred");
-        let words: Vec<String> = query
-            .replace("is:starred", "")
-            .replace("title:", "")
-            .replace('"', " ")
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .collect();
-        Ok(self
-            .papers
-            .iter()
-            .filter(|p| !starred || p.starred)
-            .filter(|p| {
-                let t = p.title.to_lowercase();
-                words.iter().all(|w| t.contains(w.as_str()))
-            })
-            .cloned()
-            .collect())
-    }
-    fn add(&mut self, what: &str) -> anyhow::Result<crate::paperstack::Found> {
-        self.added.push(what.to_string());
-        let found = crate::paperstack::Found {
-            key: format!("Key{}", self.added.len()),
-            title: what.to_string(),
-            starred: false,
-        };
-        self.papers.push(found.clone());
-        Ok(found)
-    }
-    fn star(&mut self, key: &str) -> anyhow::Result<()> {
-        for p in self.papers.iter_mut().filter(|p| p.key == key) {
-            p.starred = true;
-        }
-        Ok(())
-    }
-}
+pub(super) use crate::demo::shelf::Shelf;
 
 #[test]
 fn a_paper_is_in_your_library_like_what_you_starred_or_new() {

@@ -26,7 +26,11 @@ impl App {
             && keys == [k.clone()]
             && !label.is_empty()
         {
-            r.chosen.insert(k, Choice::Move(label.clone()));
+            r.set_all(
+                vec![(k, Some(Choice::Move(label.clone())))],
+                &mut self.untaught,
+                true,
+            );
             self.status = format!("to go to {label} · C-c C-c does it, with the rest");
             self.focus = Focus::Reader;
             return;
@@ -399,12 +403,24 @@ impl App {
         };
     }
 
-    /// Ask what to call the label of the message picked: its cluster's, or
-    /// the last it was given.
+    /// What may be done with the label of the message picked: down at it,
+    /// its cluster's renamed, split or removed; else, and on the clusters,
+    /// where a key is so easily pressed on the wrong one, only renamed:
+    /// its cluster's, or the last it was given.
     pub(super) fn ask_rename_label(&mut self) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
+        let now = jiff::Timestamp::now().as_second();
+        if self.map.at_message(now)
+            && let Some(g) = self
+                .map
+                .picked()
+                .and_then(|i| s.group_of(i))
+                .filter(|g| g.label.is_some())
+        {
+            return self.cluster_menu(g.id);
+        }
         let label = self.map.picked().and_then(|i| {
             s.group_of(i)
                 .and_then(|g| g.label.clone())
@@ -418,13 +434,14 @@ impl App {
 
     /// Call the label `old` `new`, on every account that has it, and where
     /// letterbox alone keeps it; onto a label there is, the two are one.
-    pub(super) fn rename_label(&mut self, old: &str, new: &str) {
+    /// Whether it was renamed.
+    pub(super) fn rename_label(&mut self, old: &str, new: &str) -> bool {
         if new.is_empty() || crate::index::fold(old) == crate::index::fold(new) && old == new {
             self.status = format!("kept {old}");
-            return;
+            return false;
         }
         let Some(s) = self.map.snapshot.clone() else {
-            return;
+            return false;
         };
         let folded = crate::index::fold(old);
         let accounts: std::collections::BTreeSet<usize> = s
@@ -452,12 +469,13 @@ impl App {
             }]);
         if let Err(e) = kept {
             self.status = format!("cannot rename {old}: {e:#}");
-            return;
+            return false;
         }
         if self.map.suggesting.as_deref().map(crate::index::fold) == Some(folded) {
             self.map.suggesting = Some(new.to_string());
         }
         self.status = format!("renamed {old} to {new}");
+        true
     }
 
     /// Take what a server said of filing a message: a label it does not

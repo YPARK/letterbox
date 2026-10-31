@@ -2,7 +2,10 @@
 //! what a click on each does.
 use super::*;
 
-pub(super) fn dialog<'a>(t: &Theme, title: &'a str, foot: &'a str) -> Block<'a> {
+/// A box `width` wide, its title on top and the keys it takes, `foot`, on
+/// its bottom edge, as many as fit.
+pub(super) fn dialog<'a>(t: &Theme, width: u16, title: &'a str, foot: &str) -> Block<'a> {
+    let foot = fit_foot(foot, (width as usize).saturating_sub(4));
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.dim))
@@ -13,6 +16,27 @@ pub(super) fn dialog<'a>(t: &Theme, title: &'a str, foot: &'a str) -> Block<'a> 
         .title_bottom(Line::styled(format!(" {foot} "), Style::new().fg(t.dim)))
         .padding(Padding::horizontal(1))
         .style(Style::new().bg(t.page).fg(t.text))
+}
+
+/// `foot`, its hints dropped whole from the end till it is `room` wide,
+/// but the one for esc, kept last: how to leave is never lost.
+pub(super) fn fit_foot(foot: &str, room: usize) -> String {
+    if foot.width() <= room {
+        return foot.to_string();
+    }
+    let mut hints: Vec<&str> = foot.split(" · ").collect();
+    let esc = hints
+        .iter()
+        .rposition(|h| h.starts_with("esc"))
+        .map(|e| hints.remove(e));
+    hints.extend(esc);
+    // That one esc, by where it is in `foot`, not another like it.
+    let stays = |h: &&str| esc.is_some_and(|e| std::ptr::eq(*h, e));
+    let kept = drop_to_fit(hints, stays, |h| h.join(" · ").width() <= room);
+    match kept.as_slice() {
+        [] => clip(foot, room),
+        _ => clip(&kept.join(" · "), room),
+    }
 }
 
 /// A line of buttons, the first lit; and where each is along it.
@@ -48,89 +72,6 @@ pub(super) fn spot(area: Rect, line: usize, x: u16, width: u16) -> Rect {
         width: width.min(area.width.saturating_sub(4 + x)),
         height: 1,
     }
-}
-
-/// The message's attachments and links: each on a line, the one picked
-/// lit, with what ⏎ does with it.
-pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Targets) {
-    let width = f.area().width.min(96);
-    let room = (width as usize).saturating_sub(4);
-    let side = 22.min(room / 3);
-    let mut lines = vec![Line::raw("")];
-    for (i, item) in files.items.iter().enumerate() {
-        let (icon, name, what) = match item {
-            Item::Page => ("◳", "this message".to_string(), "browser".to_string()),
-            Item::Present => ("◳", "this message".to_string(), "ohp".to_string()),
-            Item::File {
-                name,
-                mime,
-                size: bytes,
-                ..
-            } => {
-                let kind = mime.rsplit('/').next().unwrap_or(mime).to_uppercase();
-                let what = match (files.saving, ohp_reads(name)) {
-                    (true, _) => format!("{kind} · {}", size(*bytes)),
-                    (false, true) => format!("{kind} · {} · ohp", size(*bytes)),
-                    (false, false) => format!("{kind} · {} · open", size(*bytes)),
-                };
-                ("▤", name.clone(), what)
-            }
-            Item::Link(url) => {
-                let what = match crate::net::pdf_of(url) {
-                    Some(_) => "PDF · ohp",
-                    None => "browser",
-                };
-                ("↗", url.clone(), what.to_string())
-            }
-        };
-        let here = i == files.at;
-        let name_room = room.saturating_sub(side + 4);
-        let name = clip(&name, name_room);
-        let pad = name_room.saturating_sub(name.width());
-        let style = if here {
-            Style::new().bg(t.focus)
-        } else {
-            Style::new()
-        };
-        lines.push(
-            Line::from(vec![
-                Span::styled(format!(" {icon} "), Style::new().fg(t.dim)),
-                Span::styled(name, Style::new().fg(t.text)),
-                Span::raw(" ".repeat(pad + 1)),
-                Span::styled(
-                    format!("{:>side$}", clip(&what, side)),
-                    Style::new().fg(t.dim),
-                ),
-            ])
-            .style(style),
-        );
-    }
-    if let Some(note) = &files.note {
-        lines.push(Line::raw(""));
-        lines.extend(
-            wrap(note, room)
-                .into_iter()
-                .map(|l| Line::styled(l, Style::new().fg(t.soft))),
-        );
-    }
-    let area = centered(f.area(), width, lines.len() as u16 + 2);
-    f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(lines).block(if files.saving {
-            dialog(t, "Save", "⏎ save · a save all · esc close")
-        } else {
-            dialog(
-                t,
-                "Open",
-                "⏎ open · s save · S save all · y copy address · esc close",
-            )
-        }),
-        area,
-    );
-    let targets = (0..files.items.len())
-        .map(|i| (spot(area, 1 + i, 0, room as u16), Target::Item(i)))
-        .collect();
-    (area, targets)
 }
 
 /// The papers of the message read, two lines each: its title and where it
@@ -171,7 +112,7 @@ pub(super) fn papers_dialog(
             Line::from(vec![
                 Span::styled(format!(" {title}"), Style::new().fg(t.text)),
                 Span::raw(" ".repeat(pad + 1)),
-                Span::styled(format!("{said:>side$}"), style),
+                Span::styled(format!("{:>side$}", clip(&said, side)), style),
             ])
             .style(Style::new().bg(ground)),
         );
@@ -196,6 +137,7 @@ pub(super) fn papers_dialog(
     f.render_widget(
         Paragraph::new(lines).block(dialog(
             t,
+            area.width,
             "Papers in it",
             "⏎ put in paperstack, starred · o open · esc close",
         )),
@@ -282,6 +224,7 @@ pub(super) fn debrief_dialog(
     f.render_widget(
         Paragraph::new(lines).block(dialog(
             t,
+            area.width,
             &d.title,
             "⏎ put back · u put all back · tab looks like junk · esc ok",
         )),
@@ -330,147 +273,17 @@ pub(super) fn view_dialog(f: &mut Frame, t: &Theme, map: &crate::map::Map) -> (R
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, "View", "letters change it · esc closes")),
+        Paragraph::new(lines).block(dialog(
+            t,
+            area.width,
+            "View",
+            "letters change it · esc closes",
+        )),
         area,
     );
     let room = width.saturating_sub(4);
     let targets = (0..keymap::VIEW.len())
         .map(|i| (spot(area, 1 + i, 0, room), Target::Item(i)))
-        .collect();
-    (area, targets)
-}
-
-/// Files to attach, picked a folder at a time: the folder, what is typed,
-/// and its entries, the one picked lit, those marked `●`, the newest `★`.
-/// Or the folder to save in, picked so: its folders, and `.` to save there.
-pub(super) fn attach_dialog(f: &mut Frame, t: &Theme, p: &crate::pick::Picker) -> (Rect, Targets) {
-    use crate::pick::Entry;
-    let width = f.area().width.min(84);
-    let height = f.area().height.saturating_sub(4).clamp(8, 30);
-    let room = (width as usize).saturating_sub(4);
-    let mut lines = vec![
-        Line::styled(
-            clip(&format!("{}/", crate::compose::named(&p.dir)), room),
-            Style::new().fg(t.dim),
-        ),
-        Line::from(vec![
-            Span::styled("narrow ", Style::new().fg(t.dim)),
-            Span::styled(
-                tail(&p.filter, room.saturating_sub(9)),
-                Style::new().fg(t.text),
-            ),
-            Span::styled("▏", Style::new().fg(t.accent)),
-        ]),
-        Line::styled(
-            clip(
-                if p.folders {
-                    "type to narrow, or a path from /; ⏎ on . saves here"
-                } else {
-                    "type to narrow, or a path from /; ␣ marks several to attach"
-                },
-                room,
-            ),
-            Style::new().fg(t.faint),
-        ),
-        Line::raw(""),
-    ];
-    let top = lines.len();
-    let rows = (height as usize).saturating_sub(2 + top + 2).max(1);
-    let shown = p.shown();
-    let offset = (p.row + 1).saturating_sub(rows);
-    for (i, e) in shown.iter().enumerate().skip(offset).take(rows) {
-        let (mark, name, about, style) = match e {
-            Entry::Up => (
-                "  ",
-                "..".to_string(),
-                String::new(),
-                Style::new().fg(t.dim),
-            ),
-            Entry::Here => {
-                let here = p.here();
-                let about = if here == p.dir {
-                    "save here".to_string()
-                } else {
-                    format!("make {}/ and save", crate::compose::named(&here))
-                };
-                (
-                    "  ",
-                    "./".to_string(),
-                    about,
-                    Style::new().fg(t.accent).bold(),
-                )
-            }
-            Entry::Dir(n) => (
-                "  ",
-                format!("{n}/"),
-                String::new(),
-                Style::new().fg(t.title),
-            ),
-            Entry::File { name, size: bytes } => {
-                let mark = if p.marked.contains(&p.dir.join(name)) {
-                    "● "
-                } else if p.newest.as_deref() == Some(name) {
-                    "★ "
-                } else {
-                    "  "
-                };
-                (
-                    mark,
-                    name.clone(),
-                    size(*bytes as usize),
-                    Style::new().fg(t.text),
-                )
-            }
-        };
-        let side = about.width();
-        let name = clip(&name, room.saturating_sub(side + 4));
-        let pad = room.saturating_sub(2 + name.width() + side);
-        let line = Line::from(vec![
-            Span::styled(mark, Style::new().fg(t.accent)),
-            Span::styled(name, style),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(about, Style::new().fg(t.dim)),
-        ]);
-        lines.push(if i == p.row {
-            line.style(Style::new().bg(t.focus))
-        } else {
-            line
-        });
-    }
-    while lines.len() < top + rows {
-        lines.push(Line::raw(""));
-    }
-    lines.push(Line::raw(""));
-    let note = match (&p.note, p.marked.len()) {
-        (Some(note), _) => Line::styled(clip(note, room), Style::new().fg(t.error)),
-        (None, 0) => Line::raw(""),
-        (None, n) => Line::styled(
-            format!("{n} marked: ⏎ attaches them"),
-            Style::new().fg(t.soft),
-        ),
-    };
-    lines.push(note);
-    let area = centered(f.area(), width, lines.len() as u16 + 2);
-    f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(lines).block(if p.folders {
-            dialog(t, "Save to", "⏎ into · ⏎ on . save · ← up · ~ home · esc")
-        } else {
-            dialog(
-                t,
-                "Attach files",
-                "⏎ attach · ␣ mark · C-a all · ← up · ~ home · esc",
-            )
-        }),
-        area,
-    );
-    let targets = (offset..shown.len().min(offset + rows))
-        .map(|i| {
-            (
-                spot(area, top + i - offset, 0, room as u16),
-                Target::Item(i),
-            )
-        })
         .collect();
     (area, targets)
 }
@@ -508,7 +321,7 @@ pub(super) fn trash_dialog(f: &mut Frame, t: &Theme, pick: &TrashPick) -> (Rect,
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, "Trash", "⏎ this folder · esc cancel")),
+        Paragraph::new(lines).block(dialog(t, area.width, "Trash", "⏎ this folder · esc cancel")),
         area,
     );
     let targets = (start..start + shows)
@@ -541,47 +354,11 @@ pub(super) fn question(
     lines.push(last(room));
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(dialog(t, title, foot)), area);
-    (area, last_at)
-}
-
-/// The name to save a file under, in `dir`: the part picked lit, to be
-/// typed over, else the cursor where it is.
-pub(super) fn save_as(
-    f: &mut Frame,
-    t: &Theme,
-    dir: &std::path::Path,
-    name: &crate::app::Name,
-) -> (Rect, Targets) {
-    let field = Style::new().fg(t.text).bg(t.field);
-    let lit = Style::new().fg(t.on_accent).bg(t.accent);
-    let asked = format!("In {}/, saved as:", crate::compose::named(dir));
-    let (area, _) = question(
-        f,
-        t,
-        "Save as",
-        "⏎ save · ← → edit · esc back",
-        &asked,
-        |room| {
-            let chars: Vec<char> = name.text.chars().collect();
-            let (a, b) = name.range().unwrap_or((name.at, name.at));
-            let part = |r: std::ops::Range<usize>| chars[r].iter().collect::<String>();
-            let (before, picked, after) = (part(0..a), part(a..b), part(b..chars.len()));
-            let cursor = if picked.is_empty() { "▏" } else { "" };
-            let used = before.width() + picked.width() + after.width() + cursor.width();
-            // Its end shown, if it is longer than the field.
-            let skip = used.saturating_sub(room);
-            let before = before.chars().skip(skip).collect::<String>();
-            let pad = " ".repeat(room.saturating_sub(used));
-            Line::from(vec![
-                Span::styled(before, field),
-                Span::styled(cursor, field.fg(t.accent)),
-                Span::styled(picked, lit),
-                Span::styled(format!("{after}{pad}"), field),
-            ])
-        },
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, area.width, title, foot)),
+        area,
     );
-    (area, Vec::new())
+    (area, last_at)
 }
 
 /// A question answered by a name typed: what is asked, and the field.
@@ -608,7 +385,7 @@ pub(super) fn renaming(f: &mut Frame, t: &Theme, name: &str, typed: &str) -> (Re
         f,
         t,
         "Rename account",
-        "⏎ renames · esc keeps it",
+        "⏎ renames · C-u clears · esc keeps it",
         &format!("What is {name} to be called? Only letterbox's name for it changes."),
         |room| {
             let value = tail(typed, room.saturating_sub(1));
@@ -749,7 +526,7 @@ pub(super) fn applied_dialog(
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, title, "any key closes")),
+        Paragraph::new(lines).block(dialog(t, area.width, title, "any key closes")),
         area,
     );
     (area, Vec::new())
@@ -785,7 +562,7 @@ pub(super) fn bulk_dialog(
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, &said.title, "y does it · esc not")),
+        Paragraph::new(lines).block(dialog(t, area.width, &said.title, "y does it · esc not")),
         area,
     );
     (area, Vec::new())
@@ -857,7 +634,7 @@ pub(super) fn junk_dialog(
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(lines).block(dialog(
-            t,
+            t, area.width,
             &format!("{} new look like junk", pick.items.len()),
             "␣ choose · d throw away chosen · n not junk · i look through · tab thrown away · esc leave",
         )),
@@ -915,6 +692,7 @@ pub(super) fn split_dialog(
     f.render_widget(
         Paragraph::new(lines).block(dialog(
             t,
+            area.width,
             &format!("Split {} ({total}) into {}?", plan.label, plan.parts.len()),
             "↑ ↓ pick · ⏎ rename · y split · esc not",
         )),
@@ -959,6 +737,7 @@ pub(super) fn remove_label_dialog(
     f.render_widget(
         Paragraph::new(lines).block(dialog(
             t,
+            area.width,
             &format!("Remove {} ({total})?", plan.label),
             "y remove · esc not",
         )),

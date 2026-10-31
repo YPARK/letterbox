@@ -34,23 +34,7 @@ impl App {
             self.relayout();
             return true;
         }
-        // The map is looked at: what moves mail, or marks it to, is done
-        // down at a message in a cluster's tree, reading it, or in the
-        // Inbox looked through; never on the clusters, where a key is so
-        // easily pressed on the wrong one.
-        let moves = matches!(
-            act,
-            Act::Trash
-                | Act::Archive
-                | Act::Move
-                | Act::NewLabel
-                | Act::FileFirst
-                | Act::FileAll
-                | Act::NotIt
-                | Act::Mark
-        );
-        let now = jiff::Timestamp::now().as_second();
-        if moves && self.map.moving.is_none() && (act == Act::Mark || !self.map.at_message(now)) {
+        if self.map_refuses(act) {
             self.status = "the map is looked at: ⏎ goes down to a message, or i looks through the Inbox, to act on mail".to_string();
             return true;
         }
@@ -197,6 +181,13 @@ impl App {
                 }
             }
             Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,
+            // The message read beside the map is paged from it, as from
+            // the list; only while it is on screen there.
+            Act::PageDown | Act::PageUp | Act::ScreenDown | Act::ScreenUp
+                if self.reader_beside() =>
+            {
+                return false;
+            }
             Act::Back
             | Act::Top
             | Act::End
@@ -211,6 +202,49 @@ impl App {
         true
     }
 
+    /// Whether a message read is on screen beside the map, not hidden nor
+    /// in the place of the Inbox looked through.
+    fn reader_beside(&self) -> bool {
+        self.reading.is_some() && self.side_by_side && !self.reviewing()
+    }
+
+    /// Whether the map, with the focus on it, refuses `act` where it is.
+    /// The map is looked at: what moves mail, or marks it to, is done down
+    /// at a message in a cluster's tree, reading it, or in the Inbox looked
+    /// through; never on the clusters, where a key is so easily pressed on
+    /// the wrong one.
+    pub fn map_refuses(&self, act: Act) -> bool {
+        let now = jiff::Timestamp::now().as_second();
+        map_refuses(act, self.map.moving.is_some(), || self.map.at_message(now))
+    }
+
+    /// Whether the map is down at a message in a cluster's tree, where
+    /// mail may be moved, nothing of it changed to say so: asked once, for
+    /// every key the foot offers.
+    pub fn map_down(&self) -> bool {
+        let now = jiff::Timestamp::now().as_second();
+        self.map.at_message(now)
+    }
+}
+
+/// Whether the map refuses `act`, a message `moving` or not, and `down` at
+/// one in a cluster's tree or not: asked only where it matters.
+pub fn map_refuses(act: Act, moving: bool, down: impl FnOnce() -> bool) -> bool {
+    let moves = matches!(
+        act,
+        Act::Trash
+            | Act::Archive
+            | Act::Move
+            | Act::NewLabel
+            | Act::FileFirst
+            | Act::FileAll
+            | Act::NotIt
+            | Act::Mark
+    );
+    moves && !moving && (act == Act::Mark || !down())
+}
+
+impl App {
     /// A key in the map's view menu: what it shows changed, the menu kept
     /// open to change more; or the map laid out again; any other key
     /// closes it.
@@ -244,6 +278,7 @@ impl App {
                     crate::index::Lens::Words => crate::index::Lens::People,
                     crate::index::Lens::People => crate::index::Lens::Both,
                 };
+                self.map.tried = None;
                 format!("the map laid out by {}", self.map.lens.name())
             }
             Act::Since => {
@@ -623,6 +658,7 @@ impl App {
                 on,
             },
         );
+        self.status = format!("marked {}", flag.said(on));
     }
 
     /// Move the message picked on the map to Trash.
@@ -744,6 +780,11 @@ impl App {
             self.map.preview = (old.lens == snapshot.lens)
                 .then(|| map::onto(&snapshot, &old.model.keys, &p))
                 .flatten();
+        }
+        // Laid out again no nearer, it was of other messages, or another
+        // lens: this map is not the one tried.
+        if self.map.tried.as_ref().is_some_and(|t| !t.of(&snapshot)) {
+            self.map.tried = None;
         }
         self.map.snapshot = Some(Arc::new(snapshot));
         if self.map.mode == Mode::Map {

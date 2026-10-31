@@ -133,11 +133,13 @@ impl Batch {
         }
     }
 
-    /// Where nothing looks at `account`'s mail: what its server says it
-    /// did is taken as done.
-    pub fn trust(&mut self, account: usize) {
+    /// What `account`'s server says it did, taken as done: all of it,
+    /// where nothing looks at its mail; else, `unseen`, only what it did to
+    /// a message no look can see, in a folder the index does not read, as
+    /// Drafts.
+    pub fn trust(&mut self, account: usize, unseen: bool) {
         for job in self.jobs.iter_mut().filter(|j| j.account == account) {
-            if matches!(job.state, State::Done { .. }) {
+            if (!unseen || job.key.is_none()) && matches!(job.state, State::Done { .. }) {
                 job.state = State::Confirmed;
             }
         }

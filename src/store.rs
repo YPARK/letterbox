@@ -18,6 +18,18 @@ impl Flag {
             Flag::Answered => "\\Answered",
         }
     }
+
+    /// What it set, or not, is said to be: a message's, or several's.
+    pub fn said(self, on: bool) -> &'static str {
+        match (self, on) {
+            (Flag::Seen, true) => "read",
+            (Flag::Seen, false) => "unread",
+            (Flag::Flagged, true) => "flagged",
+            (Flag::Flagged, false) => "unflagged",
+            (Flag::Answered, true) => "answered",
+            (Flag::Answered, false) => "not answered",
+        }
+    }
 }
 
 /// Some of a folder's messages, newest first, and how many it holds.

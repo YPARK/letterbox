@@ -108,8 +108,8 @@ pub(super) fn keys(
 }
 
 /// The keys of the pane with the focus, as many lines of them as the
-/// foot takes on a screen `width` wide: hints left out to fit, but help and
-/// quit.
+/// foot takes on a screen `width` wide: those refused where it is left
+/// out, and more to fit, but help and quit.
 pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
@@ -119,26 +119,54 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if matches!(&app.dialog, Dialog::Signed(s) if s.saving.is_some()) => Pane::Saving,
         _ if matches!(app.dialog, Dialog::View) => Pane::Viewing,
         _ if app.compose.is_some() => Pane::Writing,
+        _ if app.searching => Pane::Searching,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,
-        Focus::Reader
-            if app.map.mode == crate::map::Mode::Map
-                && app.review.as_ref().is_some_and(|r| !r.reading) =>
-        {
-            Pane::Review
+        Focus::Reader if app.reviewing() => Pane::Review,
+        Focus::Reader if app.map.mode == crate::map::Mode::Map && app.review.is_some() => {
+            Pane::Looked
         }
         Focus::List => Pane::List,
         Focus::Reader => Pane::Reader,
     };
     let mut list = keymap::foot(pane);
-    let mut lines = lay(&list, width);
-    while lines.len() > FOOT
-        && let Some(last) = list.iter().rposition(|h| !h.kept)
-    {
-        list.remove(last);
-        lines = lay(&list, width);
+    in_context(app, pane, &mut list);
+    let list = drop_to_fit(list, |h| h.kept, |l| lay(l, width).len() <= FOOT);
+    lay(&list, width)
+}
+
+/// The hints as each key does here: < and > left out where they size
+/// nothing, d's said as it puts back in Trash, ⏎'s as the search goes
+/// on the map or to the server; esc, the way back from the message read,
+/// kept with help and quit.
+fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
+    let map = app.map.mode == crate::map::Mode::Map;
+    let trash = app.picked_in_trash();
+    list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());
+    // A hint whose keys are all refused there offers nothing.
+    if pane == Pane::Map {
+        // Down at a message or not, asked once at most.
+        let moving = app.map.moving.is_some();
+        let down = std::cell::OnceCell::new();
+        let down = || *down.get_or_init(|| app.map_down());
+        list.retain(|h| {
+            h.keys.is_empty()
+                || h.keys
+                    .iter()
+                    .any(|&(_, a)| !crate::app::map_refuses(a, moving, down))
+        });
     }
-    lines
+    for h in list {
+        match (h.act(), pane) {
+            (Some(keymap::Act::Trash), Pane::List | Pane::Reader) if trash => h.what = "put back",
+            (Some(keymap::Act::Open), Pane::Searching) if map => h.what = "light it on the map",
+            (Some(keymap::Act::Open), Pane::Searching) if !app.searches_everywhere() => {
+                h.what = "search the server"
+            }
+            (Some(keymap::Act::Back), Pane::Reader) => h.kept = true,
+            _ => {}
+        }
+    }
 }
 
 pub(super) fn lay(list: &[keymap::Hint], width: u16) -> Vec<Vec<(String, String)>> {
@@ -157,10 +185,15 @@ pub(super) fn lay(list: &[keymap::Hint], width: u16) -> Vec<Vec<(String, String)
     lines
 }
 
-pub(super) fn help(f: &mut Frame, t: &Theme, scroll: usize) -> (Rect, usize) {
-    let rows: Vec<(&str, &str)> = keymap::help()
-        .chain([("click", "pick; the wheel scrolls")])
-        .collect();
+/// Every key, in a pop-up scrolled to `scroll`: those of the message
+/// being written first, while one is.
+pub(super) fn help(f: &mut Frame, t: &Theme, scroll: usize, writing: bool) -> (Rect, usize) {
+    let keys: Box<dyn Iterator<Item = (&str, &str)>> = if writing {
+        Box::new(keymap::help_writing())
+    } else {
+        Box::new(keymap::help())
+    };
+    let rows: Vec<(&str, &str)> = keys.chain([("click", "pick; the wheel scrolls")]).collect();
     // Each key's line wrapped under itself, past the keys' column: as wide
     // as the widest keys, and a space.
     let key = rows

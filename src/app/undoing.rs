@@ -33,6 +33,20 @@ pub(super) struct Before {
     passes: u8,
 }
 
+/// The message C-x u put back, alone: picked in the list once it is
+/// listed again where it was, soon, and unless a key or the mouse comes
+/// first.
+#[derive(Debug)]
+pub(super) struct PickBack {
+    pub a: usize,
+    pub folder: String,
+    pub message_id: String,
+    pub at: std::time::Instant,
+}
+
+/// How long a message put back is waited for, to be picked.
+pub(super) const PICK_BACK: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What was last moved together, for C-x u: when the key that moved it
 /// was pressed, each as it was, and how many letterbox did not know.
 #[derive(Debug, Default)]
@@ -42,6 +56,9 @@ pub struct Moves {
     unknown: usize,
     /// Brought to another account: not put back by C-x u.
     elsewhere: usize,
+    /// The `Message-ID` of the message picked as the key was pressed: picked
+    /// again once put back, however many go with it.
+    on: Option<String>,
 }
 
 /// What was noted of a move asked, before it went.
@@ -185,6 +202,7 @@ impl App {
         if !std::mem::replace(&mut self.moves_begun, true) {
             self.undoable = Moves {
                 at: self.input_at,
+                on: self.input_on.clone(),
                 ..Moves::default()
             };
             self.last = Some(Last::Moves);
@@ -267,6 +285,8 @@ impl App {
         let mut done: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
         let mut waiting = Vec::new();
         let mut gone = 0;
+        let mut back_to: Option<PickBack> = None;
+        let on = moves.on.filter(|id| !id.is_empty());
         {
             let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
             for b in moves.before {
@@ -312,6 +332,16 @@ impl App {
                 }
                 asks.extend(back.into_iter().map(|ask| (b.a, ask)));
                 done.insert(b.key.clone());
+                // The first put back, till the one the key was pressed on.
+                let was_on = on.as_ref() == Some(&b.message_id);
+                if !b.message_id.is_empty() && (was_on || back_to.is_none()) {
+                    back_to = Some(PickBack {
+                        a: b.a,
+                        folder: b.folder.clone(),
+                        message_id: b.message_id.clone(),
+                        at: std::time::Instant::now(),
+                    });
+                }
             }
             drop(index);
         }
@@ -342,6 +372,9 @@ impl App {
         for (a, ask) in asks {
             self.ask_quietly(a, ask);
         }
+        // One put back, or the one the key was pressed on: picked once it
+        // is listed again.
+        self.pick_back = back_to.filter(|p| done.len() == 1 || on.as_ref() == Some(&p.message_id));
         let mut said = match done.len() {
             1 => "1 put back as it was".to_string(),
             n => format!("{n} put back as they were"),
@@ -374,6 +407,7 @@ impl App {
                 before: waiting,
                 unknown: 0,
                 elsewhere: 0,
+                on,
             };
             self.last = Some(Last::Moves);
         }

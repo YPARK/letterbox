@@ -20,6 +20,25 @@ pub fn ohp_reads(name: &str) -> bool {
         .any(|e| name.ends_with(e))
 }
 
+/// A link as the files listed show it: its name, else its address; beside
+/// it, named, the host it truly goes to, as a text may name another
+/// address than its own; and what opens it.
+pub(crate) fn link_label(url: &str, name: Option<&str>) -> (String, Option<String>, &'static str) {
+    let what = match crate::net::pdf_of(url) {
+        Some(_) => "PDF · ohp",
+        None => "browser",
+    };
+    match name {
+        Some(name) => {
+            let to = crate::papers::unwrapped(url);
+            let host = crate::papers::host_of(&to).unwrap_or(to);
+            let host = host.trim_start_matches("www.").to_string();
+            (name.to_string(), Some(host), what)
+        }
+        None => (url.to_string(), None, what),
+    }
+}
+
 pub(super) fn open(path: &std::path::Path) -> anyhow::Result<()> {
     let program = if cfg!(target_os = "macos") {
         "open"
@@ -86,7 +105,7 @@ pub fn with_remote_images(
         };
         let raw = &html[value.0..value.1];
         let url = crate::papers::decode(raw.trim());
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
+        if !crate::mail::is_web(&url) {
             continue;
         }
         let data = fetched.entry(url).or_insert_with_key(|url| {
@@ -330,7 +349,11 @@ impl App {
             mime: a.mime.clone(),
             size: a.size,
         }));
-        items.extend(m.links.iter().cloned().map(Item::Link));
+        let names = mail::link_names(&m.links, m.html.as_deref());
+        items.extend(m.links.iter().zip(names).map(|(url, name)| Item::Link {
+            url: url.clone(),
+            name,
+        }));
         // On its first file, if it has one; else on the message itself.
         let at = if items.len() > 2 { 2 } else { 0 };
         self.dialog = Dialog::Files(Files {
@@ -355,7 +378,7 @@ impl App {
             (_, KeyCode::Char('s')) => {
                 files.note = match files.items.get(files.at) {
                     Some(Item::File { .. }) => return self.pick_save_dir(false),
-                    Some(Item::Link(_)) => Some("a link is opened, not saved: ⏎".to_string()),
+                    Some(Item::Link { .. }) => Some("a link is opened, not saved: ⏎".to_string()),
                     _ => Some("only its files are saved: S saves them all".to_string()),
                 };
             }
@@ -366,11 +389,10 @@ impl App {
                     self.pick_save_dir(true);
                 }
             }
-            (_, KeyCode::Char('y')) => {
-                if let Some(Item::Link(url)) = files.items.get(files.at) {
-                    self.launch = Some(Launch::Copy(url.clone()));
-                }
-            }
+            (_, KeyCode::Char('y')) => match files.items.get(files.at) {
+                Some(Item::Link { url, .. }) => self.launch = Some(Launch::Copy(url.clone())),
+                _ => files.note = Some("only a link's address is copied".to_string()),
+            },
             _ => self.dialog = Dialog::Closed,
         }
     }
@@ -409,7 +431,7 @@ impl App {
                     Err(e) => files.note = Some(format!("cannot keep {name}: {e:#}")),
                 }
             }
-            Some(Item::Link(url)) => match crate::net::pdf_of(&url) {
+            Some(Item::Link { url, .. }) => match crate::net::pdf_of(&url) {
                 Some(pdf) => {
                     files.note = Some(format!("downloading {pdf}…"));
                     let replies = self.replies_to.clone();

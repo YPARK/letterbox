@@ -5,6 +5,7 @@
 mod bringing;
 mod bulk;
 mod checking;
+mod choosing;
 mod dialog;
 mod files;
 mod filing;
@@ -17,6 +18,7 @@ mod mapview;
 mod marking;
 mod pages;
 mod papers;
+mod passing;
 mod relabel;
 mod replies;
 mod review;
@@ -36,8 +38,10 @@ pub use self::folders::*;
 pub use self::form::*;
 pub use self::input::*;
 pub use self::listing::*;
+pub use self::mapview::map_refuses;
 use self::mapview::*;
 pub use self::papers::*;
+use self::passing::*;
 pub use self::relabel::*;
 pub use self::review::*;
 pub use self::saving::*;
@@ -138,6 +142,11 @@ impl Placement {
         }
     }
 
+    /// What \ says once it puts the message read here.
+    pub fn placed_said(self) -> String {
+        format!("the message read: {}", self.said())
+    }
+
     pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.name() == name)
     }
@@ -169,8 +178,16 @@ impl App {
         self.placed() == Placement::Below
     }
 
-    /// The message just read shown, alone if it is not with the list.
+    /// Whether < and > size the message read: below the list, or beside
+    /// it; not alone, nor over it.
+    pub fn resizable(&self) -> bool {
+        self.sizing().is_some()
+    }
+
+    /// The message just read shown, alone if it is not with the list: what
+    /// \ said, hidden until one is read, is not so once one is.
     pub(super) fn show_read(&mut self) {
+        self.clear_passing(Transient::Hidden);
         if !self.side_by_side {
             self.focus = Focus::Reader;
         }
@@ -333,6 +350,8 @@ pub struct App {
     pub focus: Focus,
     pub theme: Theme,
     pub status: String,
+    /// The passing word the status line says, if it says one.
+    passing: Option<Passing>,
     pub targets: Vec<(Rect, Target)>,
     /// Whether to mark a message read when it is shown.
     pub mark_read: bool,
@@ -393,13 +412,20 @@ pub struct App {
     /// A move remembered since the key pressed last: the rest of its are
     /// remembered with it.
     moves_begun: bool,
+    /// The message C-x u put back, to be picked once it is listed again.
+    pick_back: Option<undoing::PickBack>,
+    /// How many each account's Inbox held as U looked for new mail, those
+    /// counted, till it is done.
+    looking_new: Option<Vec<(usize, u32)>>,
     /// Moves not to remember: those that put back.
     quiet_moves: bool,
     /// A server's answer is taken: what it asks follows it, not a key, and
     /// is not remembered for C-x u.
     replying: bool,
-    /// When the key pressed last was, in seconds since 1970.
+    /// When the key pressed last was, in seconds since 1970, and the
+    /// `Message-ID` of the message picked as it was pressed.
     input_at: i64,
+    input_on: Option<String>,
     /// How long a message sent is held, to be taken back.
     pub send_hold: Duration,
     /// Asks that change mail, not yet answered: quitting while there are
@@ -685,6 +711,7 @@ impl App {
             focus: Focus::List,
             theme: Theme::of(theme::Name::default()),
             status,
+            passing: None,
             targets: Vec::new(),
             mark_read: true,
             config,
@@ -727,9 +754,12 @@ impl App {
             },
             undoable: undoing::Moves::default(),
             moves_begun: false,
+            pick_back: None,
+            looking_new: None,
             quiet_moves: false,
             replying: false,
             input_at: 0,
+            input_on: None,
             changing: 0,
             quitting: false,
             mark_big: MARK_BIG,

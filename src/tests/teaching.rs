@@ -80,3 +80,62 @@ fn the_filters_own_guess_taken_as_it_is_is_not_learnt() {
     apply(&mut app);
     assert_eq!(thrown(&app), before, "its own guess, not learnt");
 }
+
+#[test]
+fn y_capital_leaves_what_was_chosen_already_as_it_was() {
+    let mut app = super::mapscreen::demo_map();
+    press(&mut app, &["i"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let rows = app.review_rows();
+    // Two rows suggested alike, to be filed.
+    let (a, b) = (0..rows.len())
+        .flat_map(|a| (a + 1..rows.len()).map(move |b| (a, b)))
+        .find(|&(a, b)| {
+            let like = App::suggested(&s, rows[a]);
+            matches!(like, app::Choice::Move(_)) && like == App::suggested(&s, rows[b])
+        })
+        .expect("two suggested alike");
+    for _ in 0..a {
+        press(&mut app, &["<down>"]);
+    }
+    press(&mut app, &["d"]);
+    for _ in a + 1..b {
+        press(&mut app, &["<down>"]);
+    }
+    press(&mut app, &["Y"]);
+    assert_eq!(
+        app.chosen(rows[a]),
+        Some(app::Choice::Discard),
+        "kept as chosen"
+    );
+    assert_eq!(app.chosen(rows[b]), Some(App::suggested(&s, rows[b])));
+}
+
+#[test]
+fn a_choice_taken_back_is_learnt_from_as_it_was_before() {
+    let mut app = super::mapscreen::demo_map();
+    press(&mut app, &["i"]);
+    let (t, k) = (thrown(&app), kept(&app));
+    super::selecting::drag(
+        &mut app,
+        app::Target::ReviewRow(0),
+        app::Target::ReviewRow(2),
+    );
+    press(&mut app, &["d"]);
+    // The first kept alone, then taken back: discarded with the rest,
+    // and not learnt, as it was.
+    press(&mut app, &["<up>", "<up>", "<up>"]);
+    let first = app.review_rows()[0];
+    assert_eq!(app.review_at().map(|(i, _)| i), Some(first));
+    press(&mut app, &[" "]);
+    assert_eq!(app.chosen(first), Some(app::Choice::Keep));
+    press(&mut app, &["<c-/>"]);
+    assert_eq!(
+        app.chosen(first),
+        Some(app::Choice::Discard),
+        "{}",
+        app.status
+    );
+    apply(&mut app);
+    assert_eq!((thrown(&app), kept(&app)), (t, k), "{}", app.status);
+}

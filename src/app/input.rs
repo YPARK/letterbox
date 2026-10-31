@@ -17,10 +17,16 @@ pub(super) fn capitalised(word: &str) -> String {
 }
 
 /// Edit a line typed in, a field's or the search's, by `key`: a character
-/// typed, `⌫` the last taken back, `C-u` all of it. Whether it changed.
+/// typed, `⌫` the last taken back, `C-w` or `M-⌫` the last word, `C-u` all
+/// of it. Whether it changed.
 pub(super) fn edit_line(line: &mut String, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
+        // The word before the cursor, always at the end, cut, as Emacs's
+        // C-w and M-DEL cut it there.
+        KeyCode::Backspace if alt => cut_word(line),
+        KeyCode::Char('w') if ctrl => cut_word(line),
         KeyCode::Backspace => line.pop().is_some(),
         KeyCode::Char('u') if ctrl => {
             let had = !line.is_empty();
@@ -33,6 +39,18 @@ pub(super) fn edit_line(line: &mut String, key: KeyEvent) -> bool {
         }
         _ => false,
     }
+}
+
+/// The last word of `line` cut, and the spaces after it; whether there
+/// was one.
+fn cut_word(line: &mut String) -> bool {
+    let had = !line.is_empty();
+    let start = line
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_whitespace())
+        .len();
+    line.truncate(start);
+    had
 }
 
 /// `key` as the table reads it: a letter said in lower case with Shift
@@ -164,15 +182,37 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
         .collect()
 }
 
+/// What < and > size of the message read: its height below the list, or
+/// its width beside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Sizing {
+    Height,
+    Width,
+}
+
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
-    /// A key pressed, or a click: what it moves is remembered anew.
+    /// What < and > size of the message read: below the list, or beside
+    /// it; nothing alone, nor over it.
+    pub(super) fn sizing(&self) -> Option<Sizing> {
+        if self.stacked() {
+            Some(Sizing::Height)
+        } else if self.read_width > 0 && self.side_by_side {
+            Some(Sizing::Width)
+        } else {
+            None
+        }
+    }
+
+    /// A key pressed, or a click: what it moves is remembered anew, and
+    /// the message it was pressed on, before anything goes.
     fn began_input(&mut self) {
         self.moves_begun = false;
         self.input_at = jiff::Timestamp::now().as_second();
+        self.input_on = self.picked().map(|l| l.summary.message_id);
     }
 
     /// Quit; while mail is still being changed, ask first.
@@ -191,6 +231,8 @@ impl App {
 
     pub fn key(&mut self, key: KeyEvent) {
         self.began_input();
+        // What is picked is the key's now, not what C-x u put back.
+        self.pick_back = None;
         let key = capital(key);
         if self.compose.is_some() {
             if matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
@@ -410,10 +452,7 @@ impl App {
             Act::ReplyAll => self.respond(Respond::All),
             Act::Reply => self.respond(Respond::Reply),
             Act::Forward => self.respond(Respond::Forward),
-            Act::NewMail => {
-                self.refresh();
-                self.status = "looking for new mail…".to_string();
-            }
+            Act::NewMail => self.look_for_new(),
             Act::NextMessage => self.next(1),
             Act::PreviousMessage => self.next(-1),
             Act::Seen => self.toggle(Flag::Seen),
@@ -445,19 +484,32 @@ impl App {
             | Act::ZoomOut
             | Act::ZoomAll
             | Act::Relayout => {
-                self.status = "that is the map's: M shows it".to_string();
+                // The map shown, it is a pane away; else M shows it.
+                self.status = match self.map.mode {
+                    Mode::Map => "that is the map's: tab goes to it",
+                    Mode::List => "that is the map's: M shows it",
+                }
+                .to_string();
             }
-            Act::Wider | Act::Narrower if self.stacked() => {
-                let by: i16 = if act == Act::Wider { 2 } else { -2 };
-                self.reader_height = Some(self.read_height.saturating_add_signed(by));
-                self.remember_look();
+            Act::Wider | Act::Narrower => {
+                let wider = act == Act::Wider;
+                match self.sizing() {
+                    Some(Sizing::Height) => {
+                        let by: i16 = if wider { 2 } else { -2 };
+                        self.reader_height = Some(self.read_height.saturating_add_signed(by));
+                        self.remember_look();
+                    }
+                    Some(Sizing::Width) => {
+                        let by: i16 = if wider { 4 } else { -4 };
+                        self.reader_width = Some(self.read_width.saturating_add_signed(by));
+                        self.remember_look();
+                    }
+                    None => {
+                        self.status = "< and > size the message read beside the list, or below it"
+                            .to_string();
+                    }
+                }
             }
-            Act::Wider | Act::Narrower if self.read_width > 0 && self.side_by_side => {
-                let by: i16 = if act == Act::Wider { 4 } else { -4 };
-                self.reader_width = Some(self.read_width.saturating_add_signed(by));
-                self.remember_look();
-            }
-            Act::Wider | Act::Narrower => {}
             Act::Place => {
                 self.placement = self.placement.next();
                 if self.focus == Focus::Reader {
@@ -467,26 +519,36 @@ impl App {
                 // till then, nothing read as the list is moved along.
                 self.side_by_side = false;
                 self.due = None;
-                self.status = format!("the message read: {}", self.placement.said());
+                let mut said = self.placement.placed_said();
                 if self.placed() != self.placement {
-                    self.status += if self.panes.width < ui::MEDIUM {
+                    said += if self.panes.width < ui::MEDIUM {
                         ", when the window is wider; this narrow, one pane at a time"
                     } else {
                         ", once the Inbox looked through is closed"
                     };
                 }
+                // Hidden until one is read: said until one is.
+                if self.placement == Placement::Hidden {
+                    self.say_passing(Transient::Hidden, said);
+                } else {
+                    self.status = said;
+                }
                 self.remember_look();
             }
-            Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
-            Act::SwitchView => self.show_map(),
+            // What was said of the view left is not said of the other.
+            Act::SwitchView => {
+                self.status.clear();
+                if self.map.mode == Mode::Map {
+                    self.show_list();
+                } else {
+                    self.show_map();
+                }
+            }
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
             Act::Save => self.list_to_save(),
-            Act::SaveAll => {
-                self.list_to_save();
-                self.pick_save_dir(true);
-            }
+            Act::SaveAll => self.save_all(),
             Act::Junk => self.show_junk(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),
@@ -505,6 +567,11 @@ impl App {
     pub fn mouse(&mut self, m: MouseEvent) {
         if matches!(m.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_)) {
             self.began_input();
+        }
+        // Clicked or turned, what is picked is the mouse's; not on the
+        // button let go, after a click on C-x u in the foot.
+        if !matches!(m.kind, MouseEventKind::Up(_) | MouseEventKind::Moved) {
+            self.pick_back = None;
         }
         let at = self
             .targets

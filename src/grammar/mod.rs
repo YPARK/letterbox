@@ -58,22 +58,18 @@ pub fn open(_name: &str) -> anyhow::Result<Box<dyn Corrector>> {
 }
 
 /// What is written of a message, as `lines`, in sentences: past its head,
-/// to its signature, and none of what it quotes or the line saying who
-/// wrote it.
+/// to its signature or the message it forwards, and none of what it quotes
+/// or the line saying who wrote it.
 pub fn pieces(lines: &[String]) -> Vec<Piece> {
     let body = lines
         .iter()
         .position(|l| l.trim().is_empty())
         .map_or(0, |b| b + 1);
+    let own = crate::compose::own_lines(lines.iter().skip(body).map(String::as_str))
+        .take_while(|(_, l)| *l != "-- ")
+        .filter(|(_, l)| !l.trim().ends_with("wrote:"));
     let mut out = Vec::new();
-    for (row, line) in lines.iter().enumerate().skip(body) {
-        if line == "-- " {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.starts_with('>') || trimmed.ends_with("wrote:") {
-            continue;
-        }
+    for (row, line) in own.map(|(i, l)| (body + i, l)) {
         out.extend(
             sentences(line)
                 .into_iter()

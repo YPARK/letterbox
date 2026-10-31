@@ -160,7 +160,7 @@ letterbox search grant report --account Work
 | `\` | put the message read elsewhere, in turn: below the list, hidden until `enter` reads one, a pop-up over the list until `esc`, or beside it again. It opens where it was left |
 | `n` / `p` | read the next message, or the one before; in the map, searched, the next found, or the one before |
 | `g` / `G`, `M-<` / `M->` | go to the top, or the end |
-| `/` | search the messages listed as you type; `enter` searches every folder of every account at once, from what letterbox already knows (each message's sender, address, subject, first lines and labels, every word to be there, case let go): what is found is listed newest first, and `esc` goes back to what was listed. With a cluster of the map listed, or what fits nowhere, `enter` searches only it, and a search again of what was found there stays in it. Before the map is begun, `enter` asks the servers, of the folder listed. In the map, what holds every word is lit as you type, the rest faded |
+| `/` | search the messages listed as you type; `enter` searches every folder of every account at once, from what letterbox already knows (each message's sender, address, subject, first lines and labels, every word to be there, case let go): what is found is listed newest first, and `esc` goes back to what was listed. With a cluster of the map listed, or what fits nowhere, `enter` searches only it, and a search again of what was found there stays in it. Before the map is begun, `enter` asks the servers, of the folder listed; so it does from Drafts, Junk or Trash, which the map does not read. In the map, what holds every word is lit as you type, the rest faded |
 | `esc` / `C-g` | back to the list; clear the search; close a dialog; out of a cluster gone into, a level. `C-g` as Emacs has it, wherever `esc` goes back |
 | `u` | mark read, or unread |
 | `!` | flag, or unflag |
@@ -179,7 +179,7 @@ letterbox search grant report --account Work
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, and the list closes, saying so below; `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
-| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: asked first, how many carry it and where, and never onto a label there is. A right-click on a label's anchor on the map offers it too, with splitting it and removing it, as [the map](#the-map) says. `C-x u` undoes each |
+| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: down at a message, its cluster's renamed, split into subfolders or removed, as a right-click on its anchor offers too and [the map](#the-map) says; on the clusters, only renamed. Asked first, how many carry it and where, and never renamed onto a label there is. `C-x u` undoes each |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M` | the map: every account's mail laid out by what it is about and who it is from; or back to the list from it, of what the sidebar picks: a folder, a label, a cluster, or every cluster. Or click Map or List at the top |
 | `z` / `Z` / `0` | in the map, into the block picked, its parts a mosaic too, or out a level; `0` all the clusters. The wheel too, up over a block and down |
@@ -192,21 +192,21 @@ letterbox search grant report --account Work
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
-| `?`, `F1` | all the keys; `F1` while writing too |
+| `?`, `F1` | all the keys; `F1` while writing too, the keys of writing first |
 | `C-x` `u`, `C-/`, `C-_` | undo what was done last, as Emacs's three do: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `C-c C-c` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
 
 `c` opens a message to write, `r` a reply, over the list or the map,
-which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
+which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line (in a header, `C-a` goes past its name first, as message-mode's does), `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
 back, `M-f` `M-b` `M-d` by word. `C-/`, `C-_` or `C-x u` undoes what
 was last changed, a step at a time, as Emacs does: a kill, a yank, a
 grammar fix put in (all of them, if all were taken), or up to twenty
 characters typed in a row; after any other key, undo again takes the
 undoing back. The last hundred steps are kept. `tab` goes from field to field, To, Cc,
-Subject, then what is written, and round, `S-tab` back. `C-SPC` sets the mark: `C-w` kills the
+Subject, then what is written, and round, past the Attach lines; `S-tab` back. A line too long for the box ends in `$` where it is cut, as in Emacs. `C-c` or `C-x` pressed is said at the foot until the next key, and a key neither takes is said to be undefined. `C-SPC` sets the mark: `C-w` kills the
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
 again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
@@ -220,7 +220,7 @@ asking first if you changed it or it carries files. `esc` does as `C-g`. Outside
 `C-c C-s`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
-saying who wrote it, nor the signature. Each change the model would make
+saying who wrote it, the message it forwards, nor the signature. Each change the model would make
 is asked in turn in a pop-up, the sentence it is in shown, what it would
 change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
 (`n`) leaves it, Accept all (`a`) takes all that are left, Ignore all
@@ -353,11 +353,12 @@ message picked is named: what the keys act on, its block's name lit. The
 line below says how faithful the map is: of each message's ten nearest
 by what they say, how many are near it on the map too. Below 70%, `M-r`
 (or `,` `l`) lays it out again from where it is, the blocks shown where
-they would be, to keep with `⏎` or drop with `esc`.
+they would be, to keep with `⏎` or drop with `esc`. Laid out again no
+nearer, it says so, and `M-r` is not offered again for it.
 
 The arrows and `h` `j` `k` `l` go from block to block, and the message
 read beside the map follows, with its labels, the cluster it is in, and
-the five messages nearest it. `⏎`, `z`, a click or the wheel up over a
+the five messages nearest it; `space` and `b` page it. `⏎`, `z`, a click or the wheel up over a
 block goes into it: a mosaic of its parts, by what they are about, each
 a block, its messages each a tile; the way in said over the map, as
 `Grant › budget aims`. A part of twelve messages or more is gone into
@@ -411,6 +412,9 @@ named as a label shown, or holding what is typed. `↑` `↓` pick one and `⏎`
 takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
+`Y` takes it for every one suggested to go where it would. `C-/` takes
+back the last choice not yet done, one made for several at once
+together.
 `←` and `→` go round them, and back to none chosen; and `C-f` and `C-b`, as Emacs's keys move everywhere; `C-v` and `M-v` a page; a click picks one, and
 again leaves it. Nothing is done until `C-c C-c`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
@@ -517,10 +521,10 @@ label instead. Several are acted on together in the list, or in the
 Inbox looked through, selected with the mouse, and asked first.
 
 On the clusters, a label is changed whole, by a right-click on its
-anchor, `↑` `↓` and `⏎`; each shown first, done only on `y`, and undone
-by `C-x u`:
+anchor, or `R` down at a message of it, then `↑` `↓` and `⏎`; each
+shown first, done only on `y`, and undone by `C-x u`:
 
-- **Rename…**, as `R`: never onto a label there is.
+- **Rename…**, as `R` on the clusters: never onto a label there is.
 - **Split into subfolders…**: its mail, twelve or more, in parts by what
   each is about, as a cluster gone into is, each a subfolder named by
   the two words most its own, `⏎` typing a name over. On a server of
@@ -542,7 +546,8 @@ as `d` puts one, to be put back from there. A copy refused, or not found
 where it went, leaves the original where it was; each is followed till
 confirmed, and what fails is said, as for the rest. Once a message is filed, the message read says what would go to
 the label too: `y` files the first, `Y` all of them, and `-` says the
-first is not one, which the map learns from. `R` renames a label.
+first is not one, which the map learns from. `R` renames a label, or,
+down at a message, splits or removes it too.
 
 Labels are flat: a message may have several, and a label of one name is
 the same label on every account. Folders are labels, every level of

@@ -9,6 +9,9 @@ pub struct SaveTo {
     pub picker: crate::pick::Picker,
     pub files: Files,
     pub all: bool,
+    /// Whether the files were shown before, to go back to when let go:
+    /// not when S, from the message, saves them all.
+    pub listed: bool,
     /// Once its folder is picked, the name to save the one picked under:
     /// the folder, and the name as it is typed.
     pub naming: Option<(PathBuf, Name)>,
@@ -180,6 +183,12 @@ impl App {
     /// Pick the folder to save in, the files listed put by till it is:
     /// begun where the last was saved, else in the downloads folder.
     pub(super) fn pick_save_dir(&mut self, all: bool) {
+        self.save_dir_of_listed(all, true);
+    }
+
+    /// Pick the folder to save in, the files listed put by, and shown
+    /// again after if they were `listed`.
+    fn save_dir_of_listed(&mut self, all: bool, listed: bool) {
         let Dialog::Files(files) = std::mem::take(&mut self.dialog) else {
             return;
         };
@@ -188,8 +197,16 @@ impl App {
             picker: crate::pick::Picker::folder(dir),
             files,
             all,
+            listed,
             naming: None,
         }));
+    }
+
+    /// Pick the folder to save all the message's attachments in, straight
+    /// from the message: let go, back to it.
+    pub(super) fn save_all(&mut self) {
+        self.list_to_save();
+        self.save_dir_of_listed(true, false);
     }
 
     /// A key while the folder to save in is picked, or the name to save
@@ -214,7 +231,7 @@ impl App {
 
     /// What came of picking the folder to save in: the name of the one
     /// picked asked; or all of them saved there, and closed; or, let go,
-    /// the files listed again.
+    /// the files listed again, if they were shown.
     pub(super) fn saved_to(&mut self, picked: crate::pick::Picked) {
         use crate::pick::Picked;
         let dir = match picked {
@@ -242,7 +259,8 @@ impl App {
                     self.save_dir = Some(dir);
                 }
             }
-            None => self.dialog = Dialog::Files(s.files),
+            None if s.listed => self.dialog = Dialog::Files(s.files),
+            None => {}
         }
     }
 

@@ -85,9 +85,8 @@ impl App {
         {
             self.status = format!("✗ {} {}: {why}", j.subject, j.goal.said());
         }
-        if self.syncs.get(account).and_then(Option::as_ref).is_none() {
-            self.batch.trust(account);
-        }
+        let looked_at = self.syncs.get(account).and_then(Option::as_ref).is_some();
+        self.batch.trust(account, looked_at);
         self.choose_again();
         self.say_settled();
     }
@@ -173,6 +172,60 @@ impl App {
         let was = std::mem::replace(&mut self.replying, true);
         self.answer_reply(reply);
         self.replying = was;
+        self.looked_for_new();
+    }
+
+    /// U: look for new mail, what each Inbox holds kept to say how many
+    /// came; nothing asked, said so at once.
+    pub(super) fn look_for_new(&mut self) {
+        self.looking_new = Some(self.inbox_totals());
+        let was = self.pending;
+        self.refresh();
+        if self.pending == was {
+            self.looking_new = None;
+            self.status = if self.live().next().is_none() {
+                "no account to look in".to_string()
+            } else {
+                "no account could be asked for new mail".to_string()
+            };
+            return;
+        }
+        self.say_passing(Transient::LookingNew, "looking for new mail…".to_string());
+    }
+
+    /// Once all U asked is answered, what it found, said in place of its
+    /// looking, unless something else was said since: of each Inbox counted
+    /// before, never one first counted since.
+    fn looked_for_new(&mut self) {
+        if self.pending > 0 {
+            return;
+        }
+        let Some(before) = self.looking_new.take() else {
+            return;
+        };
+        if !self.passing(Transient::LookingNew) {
+            return;
+        }
+        let now = self.inbox_totals();
+        let n: u32 = before
+            .iter()
+            .filter_map(|&(a, was)| {
+                let (_, total) = now.iter().find(|&&(b, _)| b == a)?;
+                Some(total.saturating_sub(was))
+            })
+            .sum();
+        self.status = match n {
+            0 => "no new mail".to_string(),
+            n => format!("{n} new in the Inbox"),
+        };
+    }
+
+    /// How many messages each account's Inbox holds, as last counted: those
+    /// counted.
+    fn inbox_totals(&self) -> Vec<(usize, u32)> {
+        self.live()
+            .filter_map(|a| Some((a, self.role_folder(a, Role::Inbox)?.total?)))
+            .collect()
     }
 
     fn answer_reply(&mut self, reply: Reply) {
@@ -372,6 +425,10 @@ impl App {
                 let result: Result<(), String> = filed.as_ref().map(|_| ()).map_err(Clone::clone);
                 let landed = filed.as_ref().map(|f| f.moved.clone()).map_err(|_| ());
                 self.move_answered(a, &folder, uid, landed);
+                if result.is_ok() {
+                    // Out of it: what it holds, and holds unread, counted again.
+                    self.ask(a, Ask::Count(folder.clone()));
+                }
                 self.filed(a, key, label, filed);
                 self.took(
                     a,
@@ -393,6 +450,7 @@ impl App {
                 self.move_answered(a, &folder, uid, landed);
                 match &result {
                     Ok(()) => {
+                        self.ask(a, Ask::Count(folder.clone()));
                         self.reload(a);
                         self.map_pass(a);
                     }

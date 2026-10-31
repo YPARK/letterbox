@@ -36,7 +36,7 @@ fn the_map_and_the_list_are_clicked_at_the_top() {
     assert_eq!(app.map.mode, crate::map::Mode::Map);
     let screen = app::screen(&mut app, 120, 40);
     assert!(
-        screen.lines().next().unwrap().contains(" List  Map "),
+        screen.lines().next().unwrap().contains(" List  Map"),
         "{screen}"
     );
     click_at(&mut app, app::Target::Key(m));
@@ -96,8 +96,9 @@ fn the_map_lays_out_every_message_with_its_clusters() {
     );
     let foot: Vec<&str> = screen.lines().rev().take(2).collect();
     let foot = foot.join(" ");
+    // On the clusters, m is refused, and not offered.
     assert!(
-        foot.contains("/ search") && foot.contains("m move to"),
+        foot.contains("/ search") && !foot.contains("m move to"),
         "{foot}"
     );
 }
