@@ -26,7 +26,11 @@ impl App {
             && keys == [k.clone()]
             && !label.is_empty()
         {
-            r.set(k, Some(Choice::Move(label.clone())));
+            r.set_all(
+                vec![(k, Some(Choice::Move(label.clone())))],
+                &mut self.untaught,
+                true,
+            );
             self.status = format!("to go to {label} · C-c C-c does it, with the rest");
             self.focus = Focus::Reader;
             return;

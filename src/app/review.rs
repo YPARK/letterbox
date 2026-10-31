@@ -29,27 +29,33 @@ pub struct Review {
     pub selected: Vec<crate::index::Key>,
     /// What each choice made, alone or for several at once, took the
     /// place of, the last last: C-/ takes it back before it is done.
-    pub before: Vec<Vec<(crate::index::Key, Option<Choice>)>>,
+    pub before: Vec<Vec<Was>>,
 }
 
-impl Review {
-    /// Choose `c` for the message `key`, or, none, leave it as it is; what
-    /// it was kept, to be taken back.
-    pub fn set(&mut self, key: crate::index::Key, c: Option<Choice>) {
-        self.set_all([(key, c)]);
-    }
+/// What a choice took the place of for one message: what was chosen for
+/// it, if anything, and whether it was not to be learnt from.
+pub type Was = (crate::index::Key, Option<Choice>, bool);
 
-    /// Choose for several messages at once, each its choice or none: what
-    /// each was kept together, to be taken back as one.
-    pub fn set_all(
+impl Review {
+    /// Choose for several messages at once, each its choice or none, and
+    /// each to be learnt from, `taught`, or not: what each was, choice and
+    /// all, kept together, to be taken back as one.
+    pub(super) fn set_all(
         &mut self,
-        choices: impl IntoIterator<Item = (crate::index::Key, Option<Choice>)>,
+        choices: Vec<(crate::index::Key, Option<Choice>)>,
+        untaught: &mut std::collections::HashSet<crate::index::Key>,
+        taught: bool,
     ) {
-        let step: Vec<_> = choices
+        let step: Vec<Was> = choices
             .into_iter()
             .map(|(key, c)| {
                 let was = self.put(key.clone(), c);
-                (key, was)
+                let unt = if taught {
+                    untaught.remove(&key)
+                } else {
+                    !untaught.insert(key.clone())
+                };
+                (key, was, unt)
             })
             .collect();
         if !step.is_empty() {
@@ -57,8 +63,28 @@ impl Review {
         }
     }
 
+    /// Take back the last choice made, each message's choice and whether
+    /// it was to be learnt from as they were: the messages it was made
+    /// for, if there was one.
+    pub(super) fn take_back(
+        &mut self,
+        untaught: &mut std::collections::HashSet<crate::index::Key>,
+    ) -> Option<Vec<crate::index::Key>> {
+        let last = self.before.pop()?;
+        let keys = last.iter().map(|(k, _, _)| k.clone()).collect();
+        for (key, was, unt) in last.into_iter().rev() {
+            if unt {
+                untaught.insert(key.clone());
+            } else {
+                untaught.remove(&key);
+            }
+            self.put(key, was);
+        }
+        Some(keys)
+    }
+
     /// `c` chosen for `key`, or, none, nothing; what it was.
-    pub(super) fn put(&mut self, key: crate::index::Key, c: Option<Choice>) -> Option<Choice> {
+    fn put(&mut self, key: crate::index::Key, c: Option<Choice>) -> Option<Choice> {
         match c {
             Some(c) => self.chosen.insert(key, c),
             None => self.chosen.remove(&key),
@@ -329,25 +355,26 @@ impl App {
     /// Choose `c` for the message `i`, or, none, leave it as it is; then,
     /// `on`, go on to the next.
     pub(super) fn decide(&mut self, i: usize, c: Option<Choice>, on: bool) {
-        self.decide_all(&[i], |_| c.clone());
+        self.decide_all(&[i], |_| c.clone(), true);
         if on {
             self.review_step(1);
         }
     }
 
     /// Choose for each of the messages `all` what `c` says, or leave it as
-    /// it is: taken back as one.
-    pub(super) fn decide_all(&mut self, all: &[usize], c: impl Fn(usize) -> Option<Choice>) {
+    /// it is, each to be learnt from, `taught`, or not: taken back as one.
+    pub(super) fn decide_all(
+        &mut self,
+        all: &[usize],
+        c: impl Fn(usize) -> Option<Choice>,
+        taught: bool,
+    ) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
         let keys: Vec<_> = all.iter().map(|&i| (s.dots[i].key.clone(), c(i))).collect();
-        // Decided alone: learnt, once done.
-        for (key, _) in &keys {
-            self.untaught.remove(key);
-        }
         if let Some(r) = &mut self.review {
-            r.set_all(keys);
+            r.set_all(keys, &mut self.untaught, taught);
         }
     }
 
@@ -535,7 +562,7 @@ impl App {
                 let all: Vec<usize> = std::iter::once(i)
                     .chain(menu.with.iter().filter_map(|k| s.find(k)))
                     .collect();
-                self.decide_all(&all, |_| Some(choice.clone()));
+                self.decide_all(&all, |_| Some(choice.clone()), true);
                 self.status = format!(
                     "{} to go to {said} · C-c C-c does it, with the rest",
                     all.len()
@@ -657,13 +684,11 @@ impl App {
                     .snapshot
                     .as_ref()
                     .map_or(Choice::Keep, |s| Self::suggested(s, i));
-                let guessed = suggested == Choice::Discard;
-                self.choose(i, suggested, true);
                 // The filter's own guess, taken as it was: not learnt from,
                 // or it would teach itself.
-                if guessed && let Some(s) = &self.map.snapshot {
-                    self.untaught.insert(s.dots[i].key.clone());
-                }
+                let guessed = suggested == Choice::Discard;
+                self.decide_all(&[i], |_| Some(suggested.clone()), !guessed);
+                self.review_step(1);
             }
             (Act::Open, Some(_)) => {
                 self.read_dot();

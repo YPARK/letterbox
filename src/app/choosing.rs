@@ -5,8 +5,9 @@ use super::*;
 
 impl App {
     /// Every message of the Inbox looked through suggested to go where the
-    /// message `i` is, chosen to go there: nothing is done till C-c C-c,
-    /// so nothing is asked. Chosen together, nothing is learnt of each.
+    /// message `i` is, and not chosen for yet, chosen to go there: nothing
+    /// is done till C-c C-c, so nothing is asked. Chosen together, nothing
+    /// is learnt of each.
     pub(super) fn choose_like(&mut self, i: usize) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
@@ -15,11 +16,13 @@ impl App {
         let all: Vec<usize> = self
             .review_rows()
             .into_iter()
-            .filter(|&j| Self::suggested(&s, j) == like)
+            .filter(|&j| self.chosen(j).is_none() && Self::suggested(&s, j) == like)
             .collect();
-        self.decide_all(&all, |_| Some(like.clone()));
-        self.untaught
-            .extend(all.iter().map(|&j| s.dots[j].key.clone()));
+        if all.is_empty() {
+            self.status = "all suggested alike are chosen for already".to_string();
+            return;
+        }
+        self.decide_all(&all, |_| Some(like.clone()), false);
         let to = match &like {
             Choice::Move(label) => format!("to go to {label}"),
             Choice::Discard => "to be discarded".to_string(),
@@ -32,16 +35,15 @@ impl App {
     /// Take back the last choice made in the Inbox looked through, and pick
     /// the message it was made for; with none, what was last done.
     pub(super) fn unchoose(&mut self) -> bool {
-        let Some(last) = self.review.as_mut().and_then(|r| r.before.pop()) else {
+        let Some(last) = self
+            .review
+            .as_mut()
+            .and_then(|r| r.take_back(&mut self.untaught))
+        else {
             return false;
         };
         let n = last.len();
-        let first = last.first().map(|(k, _)| k.clone());
-        if let Some(r) = &mut self.review {
-            for (key, was) in last.into_iter().rev() {
-                r.put(key, was);
-            }
-        }
+        let first = last.into_iter().next();
         let i = first.and_then(|k| self.map.snapshot.as_ref()?.find(&k));
         if i.is_some() {
             self.pick_review(i);
@@ -131,9 +133,7 @@ impl App {
             // Chosen for several together: nothing said of each, so
             // nothing learnt.
             Act::Trash | Act::ScreenDown | Act::FileFirst => {
-                self.decide_all(&selected, choice);
-                self.untaught
-                    .extend(selected.iter().map(|&i| s.dots[i].key.clone()));
+                self.decide_all(&selected, choice, false);
             }
             // The labels dropped down for the one picked, the rest with it.
             Act::Move => {
