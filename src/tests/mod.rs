@@ -26,6 +26,7 @@ mod filter;
 mod folders;
 mod gmail;
 mod grammar;
+mod hints;
 mod imap_server;
 mod junk;
 mod keys_index;

@@ -129,6 +129,8 @@ pub enum Pane {
     Map,
     /// The Inbox looked through, beside the map.
     Review,
+    /// The search, being typed.
+    Searching,
 }
 
 pub struct Binding {
@@ -149,8 +151,8 @@ pub struct Binding {
 
 use Act::*;
 use Pane::{
-    Attaching, List, Map, Naming, Picking, Reader, Review as Reviewing, Saving, Side, Viewing,
-    Writing,
+    Attaching, List, Map, Naming, Picking, Reader, Review as Reviewing, Saving, Searching, Side,
+    Viewing, Writing,
 };
 
 /// What the map's view menu changes, by the key that changes it there.
@@ -178,6 +180,7 @@ pub const KEYS: &[Binding] = &[
             (Saving, "into · on . save"),
             (Naming, "save"),
             (Reviewing, "read"),
+            (Searching, "every folder"),
         ],
         help: "open the folder, or read the message",
     },
@@ -296,7 +299,7 @@ pub const KEYS: &[Binding] = &[
         name: "/",
         hint: "/",
         foot: &[(List, "search"), (Map, "search")],
-        help: "search as you type; ⏎ every folder of every account at once, esc back. In the map, what is found is lit; n p go along it",
+        help: "search as you type; ⏎ every folder of every account at once, from Drafts, Junk or Trash that one; esc back. In the map, what is found is lit; n p go along it",
     },
     Binding {
         keys: &[("u", Seen)],
@@ -376,8 +379,17 @@ pub const KEYS: &[Binding] = &[
             (Saving, "cancel"),
             (Naming, "back"),
             (Viewing, "close"),
+            (Searching, "clear"),
         ],
         help: "back to the list; clear the search; out of a cluster gone into, a level. C-g too, as Emacs has it",
+    },
+    Binding {
+        // Read by the search as it is typed, as j and k are typed.
+        keys: &[],
+        name: "↓",
+        hint: "↓",
+        foot: &[(Searching, "to the list")],
+        help: "",
     },
     Binding {
         keys: &[("A", AddAccount)],
@@ -665,11 +677,12 @@ pub fn act(key: KeyEvent) -> Option<Act> {
     chords.get(&chord(key)).copied()
 }
 
-/// A hint at the foot: the key, what it does, and whether it is kept when
-/// there is no room for every hint.
+/// A hint at the foot: the key, what it does, what its first key does by
+/// the table, and whether it is kept when there is no room for every hint.
 pub struct Hint {
     pub key: &'static str,
     pub what: &'static str,
+    pub act: Option<Act>,
     pub kept: bool,
 }
 
@@ -682,6 +695,7 @@ pub fn foot(pane: Pane) -> Vec<Hint> {
             Some(Hint {
                 key: b.hint,
                 what,
+                act: b.keys.first().map(|&(_, a)| a),
                 kept,
             })
         })

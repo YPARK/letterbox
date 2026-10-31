@@ -731,6 +731,10 @@ impl App {
             return;
         }
         self.scroll = 0;
+        // What \ said, hidden until one is read, is not so once one is.
+        if self.status.starts_with(&Placement::Hidden.placed_said()) {
+            self.status.clear();
+        }
         let mark = self.mark_read && !seen;
         let body = match self.read.get(&(a, folder.clone(), uid)) {
             Some(m) => {
@@ -831,8 +835,9 @@ impl App {
         }
         // Of every folder of every account, from what letterbox knows: at
         // once, and never only the folder listed. The servers are asked
-        // only where the map is not begun.
-        if self.map.snapshot.is_some() {
+        // only where the map is not begun, or of a folder it does not
+        // read, as Drafts and Trash.
+        if self.searches_everywhere() {
             let words = self.query.trim().to_string();
             // A cluster listed, or what fits nowhere, is searched alone;
             // and a search again of what was found there, there again.
@@ -852,16 +857,13 @@ impl App {
             self.open_view(View::Found(words.clone(), within));
             let n = self.shown.len();
             self.status = match (n, place) {
-                (0, None) => format!("nothing found for {words}, in every folder letterbox knows"),
+                (0, None) => {
+                    format!("nothing found for {words}, in every folder but Drafts, Junk and Trash")
+                }
                 (0, Some(place)) => format!("nothing found for {words} in {place}"),
-                (n, None) => {
-                    format!(
-                        "{n} found in every folder, newest first · esc, or the sidebar, goes back"
-                    )
-                }
-                (n, Some(place)) => {
-                    format!("{n} found in {place}, newest first · esc, or the sidebar, goes back")
-                }
+                // Short enough for the way back to be seen 60 wide.
+                (n, None) => format!("{n} found in every folder, newest first · esc goes back"),
+                (n, Some(place)) => format!("{n} found in {place}, newest first · esc goes back"),
             };
             return;
         }
@@ -873,6 +875,19 @@ impl App {
         for (a, folder) in parts {
             self.ask_search(a, folder);
         }
+    }
+
+    /// Whether ⏎ in the search looks in every folder letterbox knows: once
+    /// the map is begun, but from a folder it does not read, as Drafts,
+    /// Junk and Trash, where the server searches that one alone.
+    pub fn searches_everywhere(&self) -> bool {
+        let unread = |role: Role| matches!(role, Role::Junk | Role::Trash | Role::Drafts);
+        self.map.snapshot.is_some()
+            && match self.listing.as_ref().map(|l| &l.view) {
+                Some(View::All(role)) => !unread(*role),
+                Some(View::Folder(..)) => !self.folder().is_some_and(|f| unread(f.role)),
+                _ => true,
+            }
     }
 
     /// Move through the sidebar or the list, or scroll the message read.

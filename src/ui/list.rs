@@ -27,8 +27,19 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
     if app.compose.is_some() {
         spans = vec![Span::styled(" Compose", Style::new().fg(t.title).bold())];
     } else if app.query.is_empty() && !app.searching {
+        let found = match app.listing.as_ref().map(|l| &l.view) {
+            Some(View::Found(words, _)) => Some(words),
+            _ => None,
+        };
         let what = if app.map.mode == crate::map::Mode::Map && room >= 16 {
             "Search the map".to_string()
+        } else if let Some(words) = found {
+            // What was found, by its name, else by the words alone.
+            if folder.width() <= room {
+                folder
+            } else {
+                words.clone()
+            }
         } else if folder.is_empty() || room < 16 {
             "Search".to_string()
         } else {
@@ -545,10 +556,12 @@ pub(super) fn empty(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled("  fetching…", dim));
         } else if !app.query.is_empty() && app.found.is_none() {
             lines.push(Line::styled("  Nothing listed matches.", title));
-            lines.push(Line::styled(
-                "  ⏎ searches the whole folder on the server.",
-                dim,
-            ));
+            let enter = if app.searches_everywhere() {
+                "  ⏎ searches every folder letterbox knows."
+            } else {
+                "  ⏎ searches the whole folder on the server."
+            };
+            lines.push(Line::styled(enter, dim));
         } else if !app.query.is_empty() {
             lines.push(Line::styled("  Nothing found.", title));
         } else {

@@ -87,6 +87,8 @@ impl App {
         }
         if self.syncs.get(account).and_then(Option::as_ref).is_none() {
             self.batch.trust(account);
+        } else {
+            self.batch.trust_unseen(account);
         }
         self.choose_again();
         self.say_settled();
@@ -173,6 +175,32 @@ impl App {
         let was = std::mem::replace(&mut self.replying, true);
         self.answer_reply(reply);
         self.replying = was;
+        self.looked_for_new();
+    }
+
+    /// Once all U asked is answered, what it found, said in place of its
+    /// looking, unless something else was said since.
+    fn looked_for_new(&mut self) {
+        if self.pending > 0 {
+            return;
+        }
+        let Some(before) = self.looking_new.take() else {
+            return;
+        };
+        if self.status != super::input::LOOKING_NEW {
+            return;
+        }
+        self.status = match self.inbox_total().saturating_sub(before) {
+            0 => "no new mail".to_string(),
+            n => format!("{n} new in the Inbox"),
+        };
+    }
+
+    /// How many messages the accounts' Inboxes hold, as last counted.
+    pub(super) fn inbox_total(&self) -> u32 {
+        self.live()
+            .filter_map(|a| self.role_folder(a, Role::Inbox)?.total)
+            .sum()
     }
 
     fn answer_reply(&mut self, reply: Reply) {

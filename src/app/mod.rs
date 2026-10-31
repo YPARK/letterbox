@@ -138,6 +138,11 @@ impl Placement {
         }
     }
 
+    /// What \ says once it puts the message read here.
+    pub fn placed_said(self) -> String {
+        format!("the message read: {}", self.said())
+    }
+
     pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.name() == name)
     }
@@ -167,6 +172,12 @@ impl App {
     /// Below the list, as last drawn.
     pub fn stacked(&self) -> bool {
         self.placed() == Placement::Below
+    }
+
+    /// Whether < and > size the message read: below the list, or beside
+    /// it; not alone, nor over it.
+    pub fn resizable(&self) -> bool {
+        self.stacked() || self.read_width > 0 && self.side_by_side
     }
 
     /// The message just read shown, alone if it is not with the list.
@@ -395,6 +406,8 @@ pub struct App {
     moves_begun: bool,
     /// The message C-x u put back, to be picked once it is listed again.
     pick_back: Option<undoing::PickBack>,
+    /// How many the Inboxes held as U looked for new mail, till it is done.
+    looking_new: Option<u32>,
     /// Moves not to remember: those that put back.
     quiet_moves: bool,
     /// A server's answer is taken: what it asks follows it, not a key, and
@@ -730,6 +743,7 @@ impl App {
             undoable: undoing::Moves::default(),
             moves_begun: false,
             pick_back: None,
+            looking_new: None,
             quiet_moves: false,
             replying: false,
             input_at: 0,
