@@ -160,6 +160,12 @@ pub struct Plan {
 }
 
 impl App {
+    /// Whether the Inbox looked through is beside the map, its list shown,
+    /// not one of it read.
+    pub fn reviewing(&self) -> bool {
+        self.map.mode == Mode::Map && self.review.as_ref().is_some_and(|r| !r.reading)
+    }
+
     /// Narrow the map to the cluster of the anchor clicked; again, to all.
     /// The messages in an Inbox, to look through: newest first, by their
     /// place in the map, those kept before after the rest; none sent from

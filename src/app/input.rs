@@ -182,11 +182,31 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
         .collect()
 }
 
+/// What < and > size of the message read: its height below the list, or
+/// its width beside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Sizing {
+    Height,
+    Width,
+}
+
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
 
 impl App {
+    /// What < and > size of the message read: below the list, or beside
+    /// it; nothing alone, nor over it.
+    pub(super) fn sizing(&self) -> Option<Sizing> {
+        if self.stacked() {
+            Some(Sizing::Height)
+        } else if self.read_width > 0 && self.side_by_side {
+            Some(Sizing::Width)
+        } else {
+            None
+        }
+    }
+
     /// A key pressed, or a click: what it moves is remembered anew.
     fn began_input(&mut self) {
         self.moves_begun = false;
@@ -473,19 +493,24 @@ impl App {
                 }
                 .to_string();
             }
-            Act::Wider | Act::Narrower if self.stacked() => {
-                let by: i16 = if act == Act::Wider { 2 } else { -2 };
-                self.reader_height = Some(self.read_height.saturating_add_signed(by));
-                self.remember_look();
-            }
-            Act::Wider | Act::Narrower if self.read_width > 0 && self.side_by_side => {
-                let by: i16 = if act == Act::Wider { 4 } else { -4 };
-                self.reader_width = Some(self.read_width.saturating_add_signed(by));
-                self.remember_look();
-            }
             Act::Wider | Act::Narrower => {
-                self.status =
-                    "< and > size the message read beside the list, or below it".to_string();
+                let wider = act == Act::Wider;
+                match self.sizing() {
+                    Some(Sizing::Height) => {
+                        let by: i16 = if wider { 2 } else { -2 };
+                        self.reader_height = Some(self.read_height.saturating_add_signed(by));
+                        self.remember_look();
+                    }
+                    Some(Sizing::Width) => {
+                        let by: i16 = if wider { 4 } else { -4 };
+                        self.reader_width = Some(self.read_width.saturating_add_signed(by));
+                        self.remember_look();
+                    }
+                    None => {
+                        self.status = "< and > size the message read beside the list, or below it"
+                            .to_string();
+                    }
+                }
             }
             Act::Place => {
                 self.placement = self.placement.next();

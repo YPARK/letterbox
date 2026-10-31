@@ -181,7 +181,7 @@ impl App {
     /// Whether < and > size the message read: below the list, or beside
     /// it; not alone, nor over it.
     pub fn resizable(&self) -> bool {
-        self.stacked() || self.read_width > 0 && self.side_by_side
+        self.sizing().is_some()
     }
 
     /// The message just read shown, alone if it is not with the list.

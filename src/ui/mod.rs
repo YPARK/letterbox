@@ -191,8 +191,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     let reading = !read.is_empty();
     if reading {
-        if app.map.mode == crate::map::Mode::Map && app.review.as_ref().is_some_and(|r| !r.reading)
-        {
+        if app.reviewing() {
             menu_under = review_pane(f, app, read).map(|y| (read, y));
         } else {
             reader(f, app, read, edge);

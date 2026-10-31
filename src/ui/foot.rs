@@ -122,11 +122,9 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if app.searching => Pane::Searching,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,
+        Focus::Reader if app.reviewing() => Pane::Review,
         Focus::Reader if app.map.mode == crate::map::Mode::Map && app.review.is_some() => {
-            match app.review.as_ref().is_some_and(|r| r.reading) {
-                true => Pane::Looked,
-                false => Pane::Review,
-            }
+            Pane::Looked
         }
         Focus::List => Pane::List,
         Focus::Reader => Pane::Reader,
