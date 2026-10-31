@@ -9,8 +9,9 @@ pub struct Compose {
     pub account: usize,
     /// What it answers, if anything.
     pub(super) thread: Thread,
-    /// `C-c` was pressed, and the next key sends or cancels.
-    pub prefix: bool,
+    /// The prefix pressed, `c` or `x`: after `C-c`, the next key sends or
+    /// cancels; after `C-x`, `u` undoes.
+    pub prefix: Option<char>,
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
@@ -190,7 +191,7 @@ impl App {
             buffer,
             account,
             thread,
-            prefix: false,
+            prefix: None,
             scroll: 0,
             sending: false,
             files,
@@ -246,7 +247,7 @@ impl App {
         }
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
         // Sent as it is only by the C-c C-c that let its checking go.
-        if done == Done::Stay && !compose.prefix {
+        if done == Done::Stay && compose.prefix.is_none() {
             self.send_as_is = false;
         }
         match done {
@@ -447,7 +448,7 @@ impl App {
         };
         let account = compose.account;
         compose.sending = true;
-        compose.prefix = false;
+        compose.prefix = None;
         self.status = "sending…".to_string();
         self.ask(
             account,
@@ -468,13 +469,13 @@ impl App {
         match key.code {
             KeyCode::Char('g') if ctrl => {
                 compose.held = None;
-                compose.prefix = false;
+                compose.prefix = None;
                 self.status = "not sent: still yours to change · C-c C-c sends it".to_string();
             }
-            KeyCode::Char('c') if ctrl && compose.prefix => self.send_held(),
-            KeyCode::Char('c') if ctrl => compose.prefix = true,
+            KeyCode::Char('c') if ctrl && compose.prefix == Some('c') => self.send_held(),
+            KeyCode::Char('c') if ctrl => compose.prefix = Some('c'),
             _ => {
-                compose.prefix = false;
+                compose.prefix = None;
                 let secs = compose.held.as_ref().map_or(0, |h| h.shown);
                 self.status = held_said(secs);
             }

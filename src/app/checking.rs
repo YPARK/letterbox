@@ -165,6 +165,10 @@ impl App {
     /// editor's, `C-c` sending it as it is if it was to be sent: whether it
     /// was theirs.
     pub(super) fn checking_key(&mut self, key: KeyEvent) -> bool {
+        // What a key puts in, one fix or all of them, one step to undo.
+        if let Some(compose) = &mut self.compose {
+            compose.buffer.begin_step();
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         match key.code {

@@ -34,7 +34,27 @@ pub struct Buffer {
     search: Option<Search>,
     /// What was last searched for, for `C-s C-s` to search for again.
     last_search: String,
+    /// The text and point before each step of changes, the last last, at
+    /// most `STEPS` of them: `C-/` puts it back. An undo is a step too, so
+    /// that after any other key it is undone in turn, as in Emacs.
+    undo: Vec<(Vec<String>, usize, usize)>,
+    /// While undoing, the step last put back: the next undo goes on from
+    /// before it. Any other key ends it.
+    undoing: Option<usize>,
+    /// Whether the step being made is saved already: more changes by the
+    /// same key, or typed in a row, are of it.
+    stepped: bool,
+    /// Where point was as the step began, saved with the text.
+    step_at: (usize, usize),
+    /// How many characters were typed in a row into the step, up to
+    /// `TYPED`.
+    typed: usize,
 }
+
+/// How many characters typed in a row are undone as one, as Emacs has it.
+const TYPED: usize = 20;
+/// How many steps are kept to undo, each the whole text as it was.
+const STEPS: usize = 100;
 
 /// A search as you type: what is typed, where it began, which way it
 /// goes, where what it last found starts, and whether the last look failed.
@@ -75,6 +95,11 @@ impl Buffer {
             mark: None,
             search: None,
             last_search: String::new(),
+            undo: Vec::new(),
+            undoing: None,
+            stepped: false,
+            step_at: (0, 0),
+            typed: 0,
         }
     }
 
@@ -183,6 +208,7 @@ impl Buffer {
     }
 
     pub fn insert_lines(&mut self, at: usize, new: &[String]) {
+        self.begin_step();
         self.edited();
         let at = at.min(self.lines.len());
         self.lines.splice(at..at, new.iter().cloned());
@@ -193,6 +219,7 @@ impl Buffer {
 
     /// `text` put in at point, as typed, its lines broken where it breaks.
     pub fn paste(&mut self, text: &str) {
+        self.begin_step();
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         for (i, part) in text.split('\n').enumerate() {
             if i > 0 {
@@ -206,9 +233,57 @@ impl Buffer {
         &self.lines[self.row]
     }
 
-    /// The text changes: the mark is let go, as Emacs lets it go.
+    /// The text changes: the mark is let go, as Emacs lets it go, and
+    /// the text as it was saved, once a step.
     fn edited(&mut self) {
         self.mark = None;
+        self.undoing = None;
+        if !self.stepped {
+            let (row, col) = self.step_at;
+            self.save((self.lines.clone(), row, col));
+            self.stepped = true;
+        }
+    }
+
+    /// `step` kept to undo, the oldest let go past `STEPS`: whether one
+    /// was.
+    fn save(&mut self, step: (Vec<String>, usize, usize)) -> bool {
+        self.undo.push(step);
+        let over = self.undo.len() > STEPS;
+        if over {
+            self.undo.remove(0);
+        }
+        over
+    }
+
+    /// A step of changes begun: a key's, a paste, or the model's fixes put
+    /// in, one or all of them.
+    pub fn begin_step(&mut self) {
+        // The step before changed nothing, as a backspace at the start:
+        // nothing to undo.
+        if self.stepped && self.undo.last().is_some_and(|s| s.0 == self.lines) {
+            self.undo.pop();
+        }
+        self.stepped = false;
+        self.typed = 0;
+        self.step_at = (self.row, self.col);
+    }
+
+    /// `C-/`, `C-_` or `C-x u`: the text and point as they were before the
+    /// last step that changed it, or, undoing still, the one before that.
+    /// A search under way ends first, as the text it looked in goes.
+    fn undo(&mut self) {
+        self.search = None;
+        let from = self.undoing.unwrap_or(self.undo.len());
+        let Some(at) = (0..from).rev().find(|&i| self.undo[i].0 != self.lines) else {
+            return;
+        };
+        let (lines, row, col) = self.undo[at].clone();
+        let here = std::mem::replace(&mut self.lines, lines);
+        let at = at - usize::from(self.save((here, self.row, self.col)));
+        self.place(row, col);
+        self.mark = None;
+        self.undoing = Some(at);
     }
 
     /// `killed`, as what `C-y` puts back: added to the last kill when that
@@ -648,26 +723,62 @@ fn byte_at(line: &str, col: usize) -> usize {
         .unwrap_or(line.len())
 }
 
-/// Do what `key` does in `buf`. `prefix` is set once `C-c` is pressed, and
-/// the next key sends, cancels, asks for a file, or is let go. Outside
-/// this buffer `C-c` quits; here it does not.
-pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
+/// Do what `key` does in `buf`. `prefix` is `c` once `C-c` is pressed, and
+/// the next key sends, cancels, asks for a file, or is let go; `x` once
+/// `C-x` is, and `u` undoes. Outside this buffer `C-c` quits; here it does
+/// not.
+pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Done {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    if *prefix {
-        *prefix = false;
-        buf.killing = false;
-        return match key.code {
-            KeyCode::Char('c' | 'C') => Done::Send,
-            KeyCode::Char('k' | 'K') => Done::Cancel,
-            KeyCode::Char('a' | 'A') => Done::Attach,
-            // C-c C-s: the grammar checked, as M-$, no Meta needed.
-            KeyCode::Char('s' | 'S') => Done::Check,
-            _ => Done::Stay,
-        };
+    // A typed character goes on the step of those typed before it, up to
+    // TYPED; any other key begins one.
+    let typing = matches!(key.code, KeyCode::Char(_)) && !ctrl && !alt && prefix.is_none();
+    if typing && (1..TYPED).contains(&buf.typed) {
+        buf.typed += 1;
+    } else {
+        buf.begin_step();
+        buf.typed = usize::from(typing);
     }
-    if ctrl && matches!(key.code, KeyCode::Char('c' | 'C')) {
-        *prefix = true;
+    // Any key but undo's, and C-x before its u, ends the undoing: undone
+    // again after it, what was undone comes back, as in Emacs.
+    let undoing = buf.undoing.take();
+    match prefix.take() {
+        Some('c') => {
+            buf.killing = false;
+            return match key.code {
+                KeyCode::Char('c' | 'C') => Done::Send,
+                KeyCode::Char('k' | 'K') => Done::Cancel,
+                KeyCode::Char('a' | 'A') => Done::Attach,
+                // C-c C-s: the grammar checked, as M-$, no Meta needed.
+                KeyCode::Char('s' | 'S') => Done::Check,
+                _ => Done::Stay,
+            };
+        }
+        // C-x u undoes, as Emacs's; C-x and anything else, nothing.
+        Some(_) => {
+            buf.killing = false;
+            if !ctrl && key.code == KeyCode::Char('u') {
+                buf.undoing = undoing;
+                buf.undo();
+            }
+            return Done::Stay;
+        }
+        None => {}
+    }
+    if let KeyCode::Char(c @ ('c' | 'C' | 'x' | 'X')) = key.code
+        && ctrl
+    {
+        *prefix = Some(c.to_ascii_lowercase());
+        if *prefix == Some('x') {
+            buf.undoing = undoing;
+        }
+        return Done::Stay;
+    }
+    // Undo's keys as the table has them, C-/ and C-_ as Emacs's.
+    if crate::keymap::act(key) == Some(crate::keymap::Act::Undo) {
+        buf.killing = false;
+        buf.undoing = undoing;
+        buf.undo();
         return Done::Stay;
     }
     // C-g lets the search go, else the mark, as Emacs's keyboard-quit

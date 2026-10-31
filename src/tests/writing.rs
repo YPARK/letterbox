@@ -761,7 +761,7 @@ fn a_forwards_files_keep_each_its_own_type() {
 
 /// Press `keys`, as `app::keys` names them, in `buffer`; what the last did.
 pub(super) fn edit_keys(buffer: &mut crate::edit::Buffer, keys: &[&str]) -> crate::edit::Done {
-    let mut prefix = false;
+    let mut prefix = None;
     let mut done = crate::edit::Done::Stay;
     for key in keys.iter().flat_map(|k| app::keys(k)) {
         done = crate::edit::handle(buffer, &mut prefix, key);
@@ -882,7 +882,7 @@ fn the_search_and_the_region_keep_to_emacs_in_the_corners() {
     // C-G, as some terminals say C-g, ends the search, not the message.
     let mut buffer = Buffer::from_text("one two");
     edit_keys(&mut buffer, &["<c-s>", "t"]);
-    assert_eq!(handle(&mut buffer, &mut false, shout('G')), Done::Stay);
+    assert_eq!(handle(&mut buffer, &mut None, shout('G')), Done::Stay);
     assert_eq!((buffer.searching(), buffer.col()), (None, 0));
     // Turned about, the search lands on the other end of what it found.
     let mut buffer = Buffer::from_text("one two");
@@ -948,4 +948,114 @@ fn tab_and_shift_tab_go_from_field_to_field_in_the_message_written() {
         text.starts_with("To: ada@analytical.example\nCc: \nSubject: Plans\n\nHello"),
         "{text}"
     );
+}
+
+#[test]
+fn c_slash_c_underscore_and_c_x_u_undo_what_was_written_a_step_at_a_time() {
+    use crate::edit::Buffer;
+    let mut b = Buffer::from_text("");
+    // Typed in a row: one step, as Emacs makes them.
+    edit_keys(&mut b, &["hello world", "<enter>", "bye"]);
+    assert_eq!(b.text(), "hello world\nbye\n");
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "hello world\n\n");
+    edit_keys(&mut b, &["<c-_>"]);
+    assert_eq!(b.text(), "hello world\n");
+    edit_keys(&mut b, &["<c-x>", "u"]);
+    assert_eq!(b.text(), "\n");
+    // Nothing left: nothing more undone; C-x and another key, nothing.
+    edit_keys(&mut b, &["<c-/>", "<c-x>", "z"]);
+    assert_eq!(b.text(), "\n");
+    // Twenty-five typed: two steps, of twenty and five.
+    edit_keys(&mut b, &["abcdefghijklmnopqrstuvwxy"]);
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "abcdefghijklmnopqrst\n");
+    // A kill and its yank, each a step; point back where it was.
+    let mut b = Buffer::from_text("one\ntwo");
+    edit_keys(&mut b, &["<c-k>", "<c-n>", "<c-y>"]);
+    assert_eq!(b.text(), "\nonetwo\n");
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "\ntwo\n");
+    edit_keys(&mut b, &["<c-/>", "x"]);
+    assert_eq!(b.text(), "xone\ntwo\n");
+    // A backspace with nothing before it changes nothing, and is no step.
+    let mut b = Buffer::from_text("ab");
+    edit_keys(&mut b, &["<c-e>", "c", "<c-a>", "<backspace>", "<c-/>"]);
+    assert_eq!(b.text(), "ab\n");
+    // A grammar fix put in is undone as one.
+    let mut b = Buffer::from_text("teh cat");
+    b.replace(0, 0, 3, "the");
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "teh cat\n");
+}
+
+#[test]
+fn in_the_message_being_written_undo_is_its_text_not_the_mail_moved() {
+    let mut app = demo();
+    press(&mut app, &["c"]);
+    let opened = app.compose.as_ref().unwrap().buffer.text();
+    press(&mut app, &["ada", "<c-/>"]);
+    assert_eq!(app.compose.as_ref().unwrap().buffer.text(), opened);
+    assert!(!app.status.contains("put back"), "{}", app.status);
+}
+
+#[test]
+fn undo_after_any_other_key_undoes_the_undoing_as_emacs_does() {
+    use crate::edit::Buffer;
+    let mut b = Buffer::from_text("");
+    edit_keys(&mut b, &["one", "<enter>", "two"]);
+    edit_keys(&mut b, &["<c-/>", "<c-/>"]);
+    assert_eq!(b.text(), "one\n");
+    // Another key, then undo: what was undone back, a step at a time.
+    edit_keys(&mut b, &["<c-f>", "<c-/>"]);
+    assert_eq!(b.text(), "one\n\n");
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "one\ntwo\n");
+    // C-x u goes on as C-/ does, its C-x no other key.
+    edit_keys(&mut b, &["<c-x>", "u", "<c-x>", "u"]);
+    assert_eq!(b.text(), "one\n");
+}
+
+#[test]
+fn undo_while_searching_ends_the_search_and_never_loses_its_place() {
+    use crate::edit::Buffer;
+    let mut b = Buffer::from_text("");
+    edit_keys(
+        &mut b,
+        &["<enter>", "<enter>", "<c-s>", "<c-/>", "<c-/>", "a"],
+    );
+    assert_eq!(b.text(), "a\n");
+    let mut b = Buffer::from_text("");
+    edit_keys(&mut b, &["<enter>", "<enter>", "<c-s>", "<c-x>", "u", "a"]);
+    assert_eq!(b.text(), "\na\n");
+}
+
+#[test]
+fn m_d_undone_puts_point_back_where_it_was() {
+    use crate::edit::Buffer;
+    let mut b = Buffer::from_text("one two");
+    edit_keys(&mut b, &["<m-d>", "<c-/>", "x"]);
+    assert_eq!(b.text(), "xone two\n");
+}
+
+#[test]
+fn fixes_put_in_together_are_undone_together_and_steps_kept_are_few() {
+    use crate::edit::Buffer;
+    let mut b = Buffer::from_text("teh cat sat");
+    edit_keys(&mut b, &["<c-e>", "!"]);
+    b.begin_step();
+    b.replace(0, 0, 3, "the");
+    b.replace(0, 8, 11, "sits");
+    assert_eq!(b.text(), "the cat sits!\n");
+    edit_keys(&mut b, &["<c-/>"]);
+    assert_eq!(b.text(), "teh cat sat!\n");
+    // Far more steps than are kept: the oldest gone, the text never.
+    let mut b = Buffer::from_text("");
+    for _ in 0..300 {
+        edit_keys(&mut b, &["x", "<enter>"]);
+    }
+    for _ in 0..400 {
+        edit_keys(&mut b, &["<c-/>"]);
+    }
+    assert!(b.text().len() > 100, "{}", b.text().len());
 }

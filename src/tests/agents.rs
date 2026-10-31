@@ -611,7 +611,7 @@ fn emacs_keys_kill_and_yank() {
     use crate::edit::{self, Buffer, Done};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut buffer = Buffer::from_text("hello");
-    let mut prefix = false;
+    let mut prefix = None;
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     assert_eq!(
         edit::handle(&mut buffer, &mut prefix, ctrl('e')),
