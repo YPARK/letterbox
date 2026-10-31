@@ -284,7 +284,7 @@ impl App {
                     if let Some(files) = self.dialog.files_mut() {
                         files.note = None;
                     }
-                    self.launch = Some(Launch::Ohp(path));
+                    self.launch = Some(Launch::Ohp(path, None));
                 }
                 Err(e) => match self.dialog.files_mut() {
                     Some(files) => files.note = Some(e),
@@ -504,6 +504,9 @@ impl App {
                     && let Some(m) = self.read.get(&(a, folder.clone(), uid))
                 {
                     self.open_reply(a, &folder, &m, p.how);
+                    if let Some(path) = p.attach {
+                        self.attach(&[path]);
+                    }
                 }
             }
             Answer::Set {

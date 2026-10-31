@@ -24,7 +24,7 @@ use self::writing::*;
 
 use crate::app::{
     AGAIN, App, Body, Button, Dialog, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP,
-    PASSPHRASE, PASSWORD, Row, SERVER, SIGN_IN, State, Target, TrashPick, View, ohp_reads,
+    PASSPHRASE, PASSWORD, Row, SERVER, SIGN_IN, Signed, State, Target, TrashPick, View, ohp_reads,
 };
 use crate::config::{self, Auth};
 use crate::keymap::{self, Pane};
@@ -196,6 +196,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )),
         Dialog::Trash(pick) => Some(trash_dialog(f, &t, pick)),
         &Dialog::Remove(a) => Some(removing(f, &t, &app.accounts[a].name)),
+        Dialog::Signed(signed) => Some(match &signed.saving {
+            Some(picker) => attach_dialog(f, &t, picker),
+            None => signed_dialog(f, &t, signed),
+        }),
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
         Dialog::Bulk(bulk) => Some(bulk_dialog(f, &t, &bulk.said)),
         Dialog::Junk(pick) => Some(junk_dialog(f, &t, pick)),

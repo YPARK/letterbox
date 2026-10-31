@@ -46,6 +46,11 @@ pub enum Button {
     /// Do what was chosen in the Inbox looked through.
     Apply,
     NotYet,
+    /// Reply with a signed copy, to the sender or to all, or not now.
+    Reply,
+    ReplyAll,
+    SaveCopy,
+    NotNow,
 }
 
 /// What the message read has to open: an attachment, by its place among
@@ -118,6 +123,8 @@ pub enum Dialog {
         count: usize,
         accounts: Vec<String>,
     },
+    /// A copy of a PDF attached, signed in ohp: whether to reply with it.
+    Signed(Box<Signed>),
 }
 
 /// How what was asked of the servers went: how many were confirmed, and
@@ -307,6 +314,7 @@ impl App {
             Dialog::Split(_) => self.split_key(key),
             Dialog::RemoveLabel(_) => self.remove_label_key(key),
             Dialog::ConfirmRename { .. } => self.confirm_rename_key(key),
+            Dialog::Signed(_) => self.signed_key(key),
             Dialog::Apply(_) => {
                 let Dialog::Apply(plan) = std::mem::take(&mut self.dialog) else {
                     unreachable!()
@@ -422,6 +430,16 @@ impl App {
                 self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             }
             (Dialog::Apply(_), _) => {}
+            (Dialog::Signed(s), Some(Target::Button(b))) if s.saving.is_none() => {
+                let code = match b {
+                    Button::Reply => KeyCode::Char('r'),
+                    Button::ReplyAll => KeyCode::Char('a'),
+                    Button::SaveCopy => KeyCode::Char('s'),
+                    _ => KeyCode::Esc,
+                };
+                self.dialog_key(KeyEvent::new(code, KeyModifiers::NONE))
+            }
+            (Dialog::Signed(_), _) => {}
             // Asked by its keys alone: a click on it does nothing, away
             // from it, nothing is done.
             (Dialog::Bulk(_), _) => {}
