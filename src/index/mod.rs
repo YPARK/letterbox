@@ -288,6 +288,12 @@ pub fn lock(dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
     }
 }
 
+/// How long a lock found held is tried again for before it is taken to be
+/// another letterbox's: a program being started keeps a copy of every file
+/// open until it runs, the lock among them, for a moment after its own
+/// letterbox has let it go.
+const HELD_AWHILE: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Hold the lock of the index in `dir`, if no other letterbox does.
 fn hold(dir: &Path) -> Hold {
     let file = std::fs::OpenOptions::new()
@@ -298,10 +304,16 @@ fn hold(dir: &Path) -> Hold {
     let Ok(file) = file else {
         return Hold::Held(None);
     };
-    match file.try_lock() {
-        Ok(()) => Hold::Held(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Hold::Busy,
-        Err(_) => Hold::Held(None),
+    let tried = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Hold::Held(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) if tried.elapsed() < HELD_AWHILE => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Hold::Busy,
+            Err(_) => return Hold::Held(None),
+        }
     }
 }
 

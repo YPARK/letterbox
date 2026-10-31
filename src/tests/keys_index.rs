@@ -829,3 +829,25 @@ fn the_app_maps_every_account_as_it_starts() {
     );
     assert!(app.mapping.is_empty(), "{}", app.mapping);
 }
+
+/// A program being started keeps a copy of the lock a moment after the
+/// index is let go: the index opened again meanwhile waits for it, and is
+/// written to, not taken for another letterbox's.
+#[test]
+fn an_index_opened_again_as_a_program_starts_is_written_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    drop(Index::open_with(dir.path(), &id));
+    let starting = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.path().join("lock"))
+        .unwrap();
+    starting.try_lock().unwrap();
+    let let_go = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(starting);
+    });
+    let index = Index::open_with(dir.path(), &id);
+    let_go.join().unwrap();
+    assert!(index.writes(), "{:?}", index.fault);
+}
