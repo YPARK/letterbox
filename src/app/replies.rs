@@ -256,25 +256,19 @@ impl App {
             }
             return;
         }
-        if let Answer::Shelved { asked, at, found } = reply.answer {
-            let said = match found {
-                Ok(f) => {
-                    if let Dialog::Papers(p) = &mut self.dialog
-                        && p.asked == asked
-                        && let Some(s) = p.standing.get_mut(at)
-                    {
-                        *s = Some(crate::paperstack::Standing::Have {
-                            key: f.key.clone(),
-                            starred: true,
-                        });
+        if let Answer::Shelved { asked, found } = reply.answer {
+            match (found, &mut self.dialog) {
+                // Done: the list put away, and what was done said below.
+                (Ok(f), dialog) => {
+                    if matches!(dialog, Dialog::Papers(p) if p.asked == asked) {
+                        self.dialog = Dialog::Closed;
                     }
-                    format!("in paperstack, starred, as {}", f.key)
+                    self.status = format!("in paperstack, starred, as {}", f.key);
                 }
-                Err(e) => first_line(&e).to_string(),
-            };
-            match &mut self.dialog {
-                Dialog::Papers(p) if p.asked == asked => p.note = Some(said),
-                _ => self.status = said,
+                (Err(e), Dialog::Papers(p)) if p.asked == asked => {
+                    p.note = Some(first_line(&e).to_string());
+                }
+                (Err(e), _) => self.status = first_line(&e).to_string(),
             }
             return;
         }

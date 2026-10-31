@@ -383,29 +383,25 @@ fn p_lists_the_papers_of_the_message_read_and_adds_one_to_paperstack_starred() {
     let screen = app::screen(&mut app, 120, 40);
     assert!(screen.contains("in your library"), "{screen}");
     assert!(screen.contains("Learning gene programs"), "{screen}");
-    // ⏎ on the new one: added, and starred, for you liked it.
-    press(&mut app, &["j", "<enter>"]);
-    app.settle(Duration::from_secs(5));
-    {
-        let shelf = shelf.lock().unwrap();
-        assert_eq!(shelf.added, ["arXiv:2410.01234"]);
-        assert!(shelf.papers.iter().all(|p| p.starred));
-    }
-    let app::Dialog::Papers(p) = &app.dialog else {
-        panic!("closed: {}", app.status);
-    };
-    assert!(matches!(
-        &p.standing[1],
-        Some(Standing::Have { starred: true, .. })
-    ));
     // o opens where it is.
-    press(&mut app, &["o"]);
+    press(&mut app, &["j", "o"]);
     assert_eq!(
         app.launch.take(),
         Some(app::Launch::Browse(
             "https://arxiv.org/abs/2410.01234".into()
         ))
     );
+    // ⏎ on the new one: added, and starred, for you liked it; the list
+    // put away, and what was done said below.
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    {
+        let shelf = shelf.lock().unwrap();
+        assert_eq!(shelf.added, ["arXiv:2410.01234"]);
+        assert!(shelf.papers.iter().all(|p| p.starred));
+    }
+    assert!(!app.dialog.is_open(), "still open");
+    assert!(app.status.contains("in paperstack"), "{}", app.status);
 }
 
 #[test]

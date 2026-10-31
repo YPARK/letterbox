@@ -802,7 +802,7 @@ fn the_message_read_opens_as_wide_as_it_was_left() {
     assert_eq!(again.reader_width, Some(wide));
     // Dragged: written down as the drag ends.
     let _ = app::screen(&mut app, 140, 40);
-    let x = app.panes_right - wide;
+    let x = app.panes.right() - wide;
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, 10));
     app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), x - 6, 10));
     app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), x - 6, 10));

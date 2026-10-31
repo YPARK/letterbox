@@ -914,6 +914,7 @@ impl App {
             .select(Some(at.saturating_add_signed(by).min(self.shown.len() - 1)));
         self.due = None;
         self.read_picked();
+        self.show_read();
         self.more();
     }
 

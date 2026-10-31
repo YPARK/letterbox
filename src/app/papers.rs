@@ -106,11 +106,10 @@ impl App {
         let Dialog::Papers(p) = &mut self.dialog else {
             return;
         };
-        let at = p.at;
-        let Some(paper) = p.papers.get(at).cloned() else {
+        let Some(paper) = p.papers.get(p.at).cloned() else {
             return;
         };
-        let have = match p.standing.get(at).and_then(Option::as_ref) {
+        let have = match p.standing.get(p.at).and_then(Option::as_ref) {
             Some(crate::paperstack::Standing::Have { starred: true, .. }) => {
                 p.note = Some("in your library, starred already".to_string());
                 return;
@@ -139,7 +138,6 @@ impl App {
                 account: usize::MAX,
                 answer: Answer::Shelved {
                     asked,
-                    at,
                     found: found.map_err(worker::text),
                 },
             });

@@ -104,6 +104,79 @@ pub enum Focus {
     Reader,
 }
 
+/// Where the message read is put, as `\` turns it: beside the list, below
+/// it, out of sight until a message is read, or over the list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Placement {
+    #[default]
+    Right,
+    Below,
+    Hidden,
+    Popup,
+}
+
+impl Placement {
+    const ALL: [Placement; 4] = [Self::Right, Self::Below, Self::Hidden, Self::Popup];
+
+    /// As it is written down, and said.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Below => "below",
+            Self::Hidden => "hidden",
+            Self::Popup => "pop-up",
+        }
+    }
+
+    /// Where it is, as the status says when it is turned to.
+    pub fn said(self) -> &'static str {
+        match self {
+            Self::Right => "right of the list",
+            Self::Below => "below the list",
+            Self::Hidden => "hidden until ⏎ reads one",
+            Self::Popup => "a pop-up over the list, until esc",
+        }
+    }
+
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// The one after it, as `\` turns them.
+    pub fn next(self) -> Self {
+        let at = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        Self::ALL[(at + 1) % Self::ALL.len()]
+    }
+}
+
+impl App {
+    /// Where the message read is put on the panes as last drawn: as it
+    /// was asked to be, but beside the list in a window too narrow for two
+    /// panes, one at a time, and beside the map with the Inbox looked
+    /// through, which follows its picks.
+    pub fn placed(&self) -> Placement {
+        if self.panes.width < crate::ui::MEDIUM
+            || self.map.mode == Mode::Map && self.review.is_some()
+        {
+            Placement::Right
+        } else {
+            self.placement
+        }
+    }
+
+    /// Below the list, as last drawn.
+    pub fn stacked(&self) -> bool {
+        self.placed() == Placement::Below
+    }
+
+    /// The message just read shown, alone if it is not with the list.
+    pub(super) fn show_read(&mut self) {
+        if !self.side_by_side {
+            self.focus = Focus::Reader;
+        }
+    }
+}
+
 pub enum State {
     Connecting,
     Ready,
@@ -250,7 +323,8 @@ pub struct App {
     pub scroll: usize,
     pub lines: usize,
     pub height: usize,
-    /// Whether the message read is on the screen beside the list.
+    /// Whether the message read is on the screen with the list, beside it
+    /// or below it, and so read as the list is moved along; as last drawn.
     pub side_by_side: bool,
     /// The message read as last drawn, its width and colours, and its
     /// lines: wrapped once, not again each time the screen is drawn.
@@ -387,17 +461,25 @@ pub struct App {
     /// How wide the message read is, as it was dragged; else as the
     /// screen's width has it.
     pub reader_width: Option<u16>,
+    /// Where the message read is put.
+    pub placement: Placement,
+    /// How tall the message read below the list is, as it was dragged;
+    /// else half.
+    pub reader_height: Option<u16>,
     /// The line before the message read is being dragged.
     pub resizing: bool,
     /// The row the left button was pressed on, to select as far as it is
     /// dragged.
     dragged_from: Option<Target>,
-    /// Where the panes end on the right, as last drawn.
-    pub panes_right: u16,
+    /// Where the panes are, as last drawn.
+    pub panes: Rect,
     /// How wide the message read was last drawn.
     pub read_width: u16,
     /// How tall the message read was last drawn.
     pub read_height: u16,
+    /// The room a page of it has: within its border and padding, above
+    /// its foot.
+    pub page_room: (u16, u16),
     /// Where it is written down how the mail was looked at, the list or
     /// the map, to open as it was left; none to keep nothing.
     pub look_file: Option<PathBuf>,
@@ -669,11 +751,14 @@ impl App {
             attach_dir: None,
             save_dir: None,
             reader_width: None,
+            placement: Placement::Right,
+            reader_height: None,
             resizing: false,
             dragged_from: None,
-            panes_right: 0,
+            panes: Rect::default(),
             read_width: 0,
             read_height: 0,
+            page_room: (0, 0),
             look_file: None,
             auto: Default::default(),
             filter_file: None,

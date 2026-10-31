@@ -178,10 +178,9 @@ pub enum Answer {
         asked: u64,
         said: Result<Vec<crate::paperstack::Standing>, String>,
     },
-    /// The paper `at` of those listed, put in paperstack, starred.
+    /// A paper of the list `asked`, put in paperstack, starred.
     Shelved {
         asked: u64,
-        at: usize,
         found: Result<crate::paperstack::Found, String>,
     },
     /// How far the map's sync of the account has got, as it goes; not an

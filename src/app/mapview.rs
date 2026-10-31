@@ -365,6 +365,12 @@ impl App {
             if let Some(w) = line.strip_prefix("reader ") {
                 self.reader_width = w.trim().parse().ok();
             }
+            if let Some(h) = line.strip_prefix("tall ") {
+                self.reader_height = h.trim().parse().ok();
+            }
+            if let Some(p) = line.strip_prefix("pane ").and_then(Placement::named) {
+                self.placement = p;
+            }
             if let Some(dir) = line.strip_prefix("save ") {
                 self.save_dir = Some(PathBuf::from(dir));
             }
@@ -377,8 +383,8 @@ impl App {
     }
 
     /// Write down how the mail is looked at, to open so again: the list or
-    /// the map, how wide the message read was made, if it was, and where
-    /// its files were last saved.
+    /// the map, where the message read is put and how wide or tall it was
+    /// made, if it was, and where its files were last saved.
     pub fn remember_look(&self) {
         let Some(path) = &self.look_file else {
             return;
@@ -387,9 +393,15 @@ impl App {
             Mode::Map => "map",
             Mode::List => "list",
         };
-        let wide = self
+        let mut wide = self
             .reader_width
             .map_or(String::new(), |w| format!("reader {w}\n"));
+        if let Some(h) = self.reader_height {
+            wide += &format!("tall {h}\n");
+        }
+        if self.placement != Placement::Right {
+            wide += &format!("pane {}\n", self.placement.name());
+        }
         // A folder named across lines is not kept: the line after it would
         // be read as more.
         let save = self
@@ -584,9 +596,7 @@ impl App {
             body,
             on_map: true,
         });
-        if !self.side_by_side {
-            self.focus = Focus::Reader;
-        }
+        self.show_read();
     }
 
     /// Mark the message picked on the map, or not, as `flag` says.
