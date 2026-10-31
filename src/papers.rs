@@ -309,14 +309,6 @@ pub(crate) fn host_of(href: &str) -> Option<String> {
 /// only those, by their own host and path, as a browser reads them; never
 /// an address that names them elsewhere in it.
 pub(crate) fn unwrapped(href: &str) -> String {
-    // None of Google's in it, there is nothing to go through.
-    if !href
-        .as_bytes()
-        .windows(7)
-        .any(|w| w.eq_ignore_ascii_case(b"google."))
-    {
-        return href.to_string();
-    }
     let Ok(u) = url::Url::parse(href) else {
         return href.to_string();
     };

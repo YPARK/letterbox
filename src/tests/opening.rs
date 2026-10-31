@@ -157,3 +157,11 @@ fn googles_redirect_is_gone_through_however_its_host_is_written() {
         "https://example.org/plain"
     );
 }
+
+#[test]
+fn googles_redirect_is_gone_through_by_its_host_as_parsed() {
+    assert_eq!(
+        crate::papers::unwrapped("https://%67oogle.com/url?q=https://example.org/x"),
+        "https://example.org/x"
+    );
+}
