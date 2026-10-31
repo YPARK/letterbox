@@ -46,10 +46,11 @@ pub(super) fn paged(f: &mut Frame, app: &mut App, area: Rect) -> bool {
     true
 }
 
-pub(super) fn reader(f: &mut Frame, app: &mut App, area: Rect) {
+/// The message read, its line to drag on the `edge` it has.
+pub(super) fn reader(f: &mut Frame, app: &mut App, area: Rect, edge: Borders) {
     let t = app.theme;
     let block = Block::new()
-        .borders(Borders::LEFT)
+        .borders(edge)
         .border_style(Style::new().fg(if app.resizing {
             t.accent
         } else if app.focus == Focus::Reader {
@@ -60,6 +61,7 @@ pub(super) fn reader(f: &mut Frame, app: &mut App, area: Rect) {
         .padding(Padding::horizontal(1))
         .style(Style::new().bg(t.page));
     let inner = block.inner(area);
+    app.page_room = (inner.width, inner.height.saturating_sub(1));
     f.render_widget(block, area);
     app.targets.push((area, Target::Reader));
     #[cfg(feature = "pages")]

@@ -2,6 +2,23 @@
 //! text as edited, and its keys on its edge.
 use super::*;
 
+/// Where a pop-up over the panes in `main` is: two thirds of them wide,
+/// at least 84 where there is room, nearly as tall.
+pub(super) fn over(main: Rect) -> Rect {
+    let width = (main.width * 2 / 3)
+        .max(84)
+        .min(main.width.saturating_sub(4));
+    centered(main, width, main.height.saturating_sub(2).max(3))
+}
+
+/// The edge of what is over the panes, the message read or being written.
+pub(super) fn popup_block(t: &Theme) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.dim))
+        .style(Style::new().bg(t.page).fg(t.text))
+}
+
 /// The message being written, over the screen, faded beneath it: as wide
 /// as two thirds of it, a letter's lines at least, and as tall as it.
 pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
@@ -17,30 +34,17 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
         f.render_widget(Clear, main);
         return compose_pane(f, app, main);
     }
-    let area = {
-        let width = (main.width * 2 / 3).max(84).min(main.width - 4);
-        let height = main.height.saturating_sub(2).max(3);
-        Rect {
-            x: main.x + (main.width - width) / 2,
-            y: main.y + (main.height - height) / 2,
-            width,
-            height,
-        }
-    };
+    let area = over(main);
     let from = app
         .compose
         .as_ref()
         .and_then(|c| app.accounts.get(c.account))
         .map(|a| a.email.clone())
         .unwrap_or_default();
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(t.dim))
-        .title(Span::styled(
-            format!(" From {from} "),
-            Style::new().fg(t.title).bold(),
-        ))
-        .style(Style::new().bg(t.page).fg(t.text));
+    let block = popup_block(&t).title(Span::styled(
+        format!(" From {from} "),
+        Style::new().fg(t.title).bold(),
+    ));
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);

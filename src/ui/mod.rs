@@ -24,7 +24,8 @@ use self::writing::*;
 
 use crate::app::{
     AGAIN, App, Body, Button, Dialog, EMAIL, FIELDS, Failure, Files, Focus, Form, Item, KEEP,
-    PASSPHRASE, PASSWORD, Row, SERVER, SIGN_IN, Signed, State, Target, TrashPick, View, ohp_reads,
+    PASSPHRASE, PASSWORD, Placement, Row, SERVER, SIGN_IN, Signed, State, Target, TrashPick, View,
+    ohp_reads,
 };
 use crate::config::{self, Auth};
 use crate::keymap::{self, Pane};
@@ -49,9 +50,11 @@ const LIST: u16 = 46;
 /// The narrowest screen with the sidebar, the list and the message read
 /// side by side; and with the sidebar beside the list.
 const WIDE: u16 = 120;
-const MEDIUM: u16 = 70;
+pub const MEDIUM: u16 = 70;
 /// How narrow the middle pane, or the message read, may be dragged.
 const NARROWEST: u16 = 24;
+/// How short the list, or the message read below it, may be dragged.
+const LOWEST: u16 = 6;
 const LABEL: usize = 6;
 /// The most lines the keys take at the foot.
 const FOOT: usize = 2;
@@ -105,10 +108,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
-    let [side_w, mut list_w, mut read_w] = if app.map.mode == crate::map::Mode::Map {
-        map_panes(main.width, app.focus)
-    } else {
-        panes(main.width, app.focus)
+    app.panes = main;
+    let place = app.placed();
+    let on_map = app.map.mode == crate::map::Mode::Map;
+    let widths = |focus| {
+        if on_map {
+            map_panes(main.width, focus)
+        } else {
+            panes(main.width, focus)
+        }
+    };
+    let [side_w, mut list_w, mut read_w] = match place {
+        Placement::Right => widths(app.focus),
+        // A message read alone has the screen, as in a narrow window.
+        Placement::Hidden if app.focus == Focus::Reader => [0, 0, main.width],
+        // The list in the message's room, the sidebar as it would be.
+        _ => {
+            let side = widths(Focus::List)[0];
+            [side, main.width - side, 0]
+        }
     };
     // The message as wide as it was dragged, with room left for the rest.
     if list_w > 0
@@ -119,14 +137,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         read_w = w.clamp(NARROWEST.min(both / 2), both.saturating_sub(NARROWEST));
         list_w = both - read_w;
     }
-    app.panes_right = main.right();
-    app.side_by_side = list_w > 0 && read_w > 0;
-    let [side, list, read] = Layout::horizontal([
+    let stacked = place == Placement::Below;
+    app.side_by_side = list_w > 0 && read_w > 0 || stacked;
+    let [side, mut list, mut read] = Layout::horizontal([
         Constraint::Length(side_w),
         Constraint::Length(list_w),
         Constraint::Length(read_w),
     ])
     .areas(main);
+    // Below the list, as tall as it was dragged, or half, with room left
+    // for the list.
+    if stacked {
+        let most = list.height.saturating_sub(LOWEST);
+        let tall = app
+            .reader_height
+            .unwrap_or(list.height / 2)
+            .clamp(LOWEST.min(list.height / 2).min(most), most);
+        [list, read] = Layout::vertical([Constraint::Min(0), Constraint::Length(tall)]).areas(list);
+    }
+    // Over the list, as the message being written is.
+    let popup = place == Placement::Popup && app.focus == Focus::Reader;
+    if popup {
+        read = over(main);
+    }
     search(f, app, top);
     if side_w > 0 {
         sidebar(f, app, side);
@@ -138,17 +171,33 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             messages(f, app, list);
         }
     }
-    if read_w > 0 {
+    let edge = if popup {
+        let block = popup_block(&t);
+        f.render_widget(Clear, read);
+        f.render_widget(&block, read);
+        // Its edge too is its: a click there is not the list's beneath.
+        app.targets.push((read, Target::Reader));
+        read = block.inner(read);
+        Borders::NONE
+    } else if stacked {
+        Borders::TOP
+    } else {
+        Borders::LEFT
+    };
+    if read.width > 0 && read.height > 0 {
         if app.map.mode == crate::map::Mode::Map && app.review.as_ref().is_some_and(|r| !r.reading)
         {
             review_pane(f, app, read);
         } else {
-            reader(f, app, read);
+            reader(f, app, read, edge);
         }
     }
     // The line before the message, to drag: it and a column either side,
-    // as one alone is hard to hit.
-    if list_w > 0 && read_w > 0 {
+    // as one alone is hard to hit; below the list, its line alone.
+    if stacked {
+        let grip = Rect { height: 1, ..read };
+        app.targets.push((grip, Target::Divider));
+    } else if list_w > 0 && read_w > 0 {
         let grip = Rect {
             x: read.x.saturating_sub(1),
             width: 3,
@@ -156,7 +205,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         };
         app.targets.push((grip, Target::Divider));
     }
-    app.read_width = read_w;
+    app.read_width = read.width;
     app.read_height = read.height;
     keys(f, app, foot_area, foot_lines, spots);
     if app.compose.is_some() {

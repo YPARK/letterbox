@@ -449,12 +449,36 @@ impl App {
             | Act::Relayout => {
                 self.status = "that is the map's: M or M-g shows it".to_string();
             }
-            Act::Wider | Act::Narrower if self.read_width > 0 => {
+            Act::Wider | Act::Narrower if self.stacked() => {
+                let by: i16 = if act == Act::Wider { 2 } else { -2 };
+                self.reader_height = Some(self.read_height.saturating_add_signed(by));
+                self.remember_look();
+            }
+            Act::Wider | Act::Narrower if self.read_width > 0 && self.side_by_side => {
                 let by: i16 = if act == Act::Wider { 4 } else { -4 };
                 self.reader_width = Some(self.read_width.saturating_add_signed(by));
                 self.remember_look();
             }
             Act::Wider | Act::Narrower => {}
+            Act::Place => {
+                self.placement = self.placement.next();
+                if self.focus == Focus::Reader {
+                    self.focus = Focus::List;
+                }
+                // Whether it is shown with the list is known once drawn:
+                // till then, nothing read as the list is moved along.
+                self.side_by_side = false;
+                self.due = None;
+                self.status = format!("the message read: {}", self.placement.said());
+                if self.placed() != self.placement {
+                    self.status += if self.panes.width < ui::MEDIUM {
+                        ", when the window is wider; this narrow, one pane at a time"
+                    } else {
+                        ", once the Inbox looked through is closed"
+                    };
+                }
+                self.remember_look();
+            }
             Act::MapView => self.show_map(),
             Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
             Act::SwitchView => self.show_map(),
@@ -530,8 +554,12 @@ impl App {
                 }
                 return self.click(at);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing && self.stacked() => {
+                self.reader_height = Some(self.panes.bottom().saturating_sub(m.row));
+                return;
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
-                self.reader_width = Some(self.panes_right.saturating_sub(m.column));
+                self.reader_width = Some(self.panes.right().saturating_sub(m.column));
                 return;
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {

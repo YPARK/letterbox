@@ -71,9 +71,13 @@ pub enum Act {
     Review,
     /// What was chosen for each message looked through, done.
     Apply,
-    /// The message read made wider, or narrower.
+    /// The message read made wider, or narrower; below the list, taller
+    /// or shorter.
     Wider,
     Narrower,
+    /// The message read put elsewhere: below the list, out of sight, over
+    /// it, or beside it again.
+    Place,
     /// The map, or the list, in the middle pane.
     MapView,
     ListView,
@@ -418,8 +422,15 @@ pub const KEYS: &[Binding] = &[
         keys: &[("<", Wider), (">", Narrower)],
         name: "< >",
         hint: "</>",
-        foot: &[(Reader, "width")],
-        help: "make the message read wider, or narrower; or drag the line before it with the mouse",
+        foot: &[(Reader, "size")],
+        help: "make the message read wider, or narrower; below the list, taller or shorter; or drag the line before it with the mouse",
+    },
+    Binding {
+        keys: &[("\\", Place)],
+        name: "\\",
+        hint: "\\",
+        foot: &[(List, "pane"), (Reader, "pane")],
+        help: "put the message read elsewhere, in turn: below the list, out of sight until ⏎ reads one, over the list until esc, or beside it again",
     },
     // The map.
     Binding {

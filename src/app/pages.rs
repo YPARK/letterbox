@@ -55,11 +55,9 @@ impl App {
                 "this terminal draws no images: O hands the message to ohp instead".to_string();
             return;
         };
-        // Within the pane's border and padding, and above its foot.
-        let (cols, rows) = if self.read_width > 3 && self.read_height > 1 {
-            (self.read_width - 3, self.read_height - 1)
-        } else {
-            (80, 40)
+        let (cols, rows) = match self.page_room {
+            (0, _) | (_, 0) => (80, 40),
+            room => room,
         };
         let font = picker.font_size();
         let width = u32::from(cols) * u32::from(font.width.max(1));
