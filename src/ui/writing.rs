@@ -195,7 +195,7 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, popup);
     let title = title.as_str();
     f.render_widget(
-        Paragraph::new(lines.clone()).block(dialog(&t, title, foot)),
+        Paragraph::new(lines.clone()).block(dialog(&t, popup.width, title, foot)),
         popup,
     );
     let row = popup.y + lines.len() as u16 + 1;

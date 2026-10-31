@@ -35,6 +35,7 @@ mod mapsafety;
 mod mapscreen;
 mod mosaic;
 mod moving;
+mod opening;
 mod passwords;
 mod placing;
 mod quitting;

@@ -177,7 +177,7 @@ pub(super) fn form_dialog(f: &mut Frame, t: &Theme, form: &Form) -> (Rect, Targe
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, "Add account", foot)),
+        Paragraph::new(lines).block(dialog(t, area.width, "Add account", foot)),
         area,
     );
     let mut targets: Targets = shown

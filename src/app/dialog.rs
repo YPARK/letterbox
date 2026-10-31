@@ -67,7 +67,9 @@ pub enum Item {
         mime: String,
         size: usize,
     },
-    Link(String),
+    /// A web address, and what it is called: the text it is linked from,
+    /// or where a redirect goes on to.
+    Link { url: String, name: Option<String> },
 }
 
 #[derive(Default)]

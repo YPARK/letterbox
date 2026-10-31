@@ -9,6 +9,9 @@ pub struct SaveTo {
     pub picker: crate::pick::Picker,
     pub files: Files,
     pub all: bool,
+    /// Whether the files were shown before, to go back to when let go:
+    /// not when S, from the message, saves them all.
+    pub listed: bool,
     /// Once its folder is picked, the name to save the one picked under:
     /// the folder, and the name as it is typed.
     pub naming: Option<(PathBuf, Name)>,
@@ -188,8 +191,19 @@ impl App {
             picker: crate::pick::Picker::folder(dir),
             files,
             all,
+            listed: true,
             naming: None,
         }));
+    }
+
+    /// Pick the folder to save all the message's attachments in, straight
+    /// from the message: let go, back to it.
+    pub(super) fn save_all(&mut self) {
+        self.list_to_save();
+        self.pick_save_dir(true);
+        if let Dialog::SaveTo(s) = &mut self.dialog {
+            s.listed = false;
+        }
     }
 
     /// A key while the folder to save in is picked, or the name to save
@@ -214,7 +228,7 @@ impl App {
 
     /// What came of picking the folder to save in: the name of the one
     /// picked asked; or all of them saved there, and closed; or, let go,
-    /// the files listed again.
+    /// the files listed again, if they were shown.
     pub(super) fn saved_to(&mut self, picked: crate::pick::Picked) {
         use crate::pick::Picked;
         let dir = match picked {
@@ -242,7 +256,8 @@ impl App {
                     self.save_dir = Some(dir);
                 }
             }
-            None => self.dialog = Dialog::Files(s.files),
+            None if s.listed => self.dialog = Dialog::Files(s.files),
+            None => {}
         }
     }
 

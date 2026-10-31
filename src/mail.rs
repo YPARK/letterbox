@@ -391,12 +391,11 @@ const LINKS: usize = 200;
 pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut add = |url: &str| {
-        let url = url
-            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
-            .replace("&amp;", "&");
-        let web = url.starts_with("https://") || url.starts_with("http://");
-        if web && url.len() > 10 && !found.contains(&url) && found.len() < LINKS {
-            found.push(clean(&url));
+        if let Some(url) = web_address(url)
+            && !found.contains(&url)
+            && found.len() < LINKS
+        {
+            found.push(url);
         }
     };
     let words = |s: &str| -> Vec<String> {
@@ -436,6 +435,36 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
         }
     }
     found
+}
+
+/// `url` as `links` keeps it, if it is a web address: without the
+/// punctuation that ends a sentence after one, or the brackets around it.
+fn web_address(url: &str) -> Option<String> {
+    let url = url
+        .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
+        .replace("&amp;", "&");
+    let web = url.starts_with("https://") || url.starts_with("http://");
+    (web && url.len() > 10).then(|| clean(&url))
+}
+
+/// What each of `links` is called: the text of the first link to it in
+/// `html` that has any; else, behind a redirect, where it goes; else none.
+pub fn link_names(links: &[String], html: Option<&str>) -> Vec<Option<String>> {
+    let anchors = html.map(crate::papers::anchors).unwrap_or_default();
+    links
+        .iter()
+        .map(|url| {
+            anchors
+                .iter()
+                .filter(|(href, _, _)| web_address(href.trim()).as_ref() == Some(url))
+                .map(|(_, inner, _)| {
+                    let text = crate::papers::text_of(inner);
+                    clean(&text.split_whitespace().collect::<Vec<_>>().join(" "))
+                })
+                .find(|text| !text.is_empty() && text != url)
+                .or_else(|| Some(crate::papers::unwrapped(url)).filter(|to| to != url))
+        })
+        .collect()
 }
 
 /// The attachments of a message, by name, and what they hold.
