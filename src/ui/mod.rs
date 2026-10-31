@@ -223,7 +223,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let popup = match &app.dialog {
         Dialog::Closed => None,
         &Dialog::Help(scroll) => {
-            let (area, scroll) = help(f, &t, scroll);
+            let (area, scroll) = help(f, &t, scroll, app.compose.is_some());
             app.dialog = Dialog::Help(scroll);
             Some((area, Vec::new()))
         }

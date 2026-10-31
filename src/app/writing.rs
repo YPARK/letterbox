@@ -36,6 +36,9 @@ pub struct Compose {
 pub const KILL_ANYWAY: &str =
     "Message modified; kill anyway? (y or n) · y discards it, n goes on writing";
 
+/// What is said while a message to answer is read first.
+const READING: &str = "reading it first";
+
 /// How much attached most servers take, in bytes.
 pub(super) const LARGE: usize = 25 * 1024 * 1024;
 
@@ -131,7 +134,7 @@ impl App {
             how,
             attach,
         });
-        self.status = "reading it first".to_string();
+        self.status = READING.to_string();
         self.ask(
             account,
             Ask::Open {
@@ -187,6 +190,10 @@ impl App {
             self.dialog = Dialog::Closed;
         }
         self.searching = false;
+        // Read, and its answer open: no longer waited for.
+        if self.status == READING {
+            self.status.clear();
+        }
         self.compose = Some(Compose {
             buffer,
             account,
@@ -245,13 +252,24 @@ impl App {
             }
             return;
         }
+        let before = compose.prefix;
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
         // Sent as it is only by the C-c C-c that let its checking go.
-        if done == Done::Stay && compose.prefix.is_none() {
+        if matches!(done, Done::Stay | Done::Undefined) && compose.prefix.is_none() {
             self.send_as_is = false;
+        }
+        // C-c or C-x pressed, said until the next key, as Emacs echoes it.
+        if let Some(p) = compose.prefix {
+            self.status = format!("C-{p}-");
+        } else if before.is_some_and(|p| self.status == format!("C-{p}-")) {
+            self.status.clear();
         }
         match done {
             Done::Stay => {}
+            Done::Undefined => {
+                let p = before.unwrap_or('c');
+                self.status = format!("C-{p} {} is undefined", edit::name(key));
+            }
             // Asked first if changed, or carrying files: a forward's, set
             // up, is not lost to a stray key.
             Done::Cancel
@@ -414,6 +432,9 @@ impl App {
         if !said.is_empty() && compose.warned.as_deref() != Some(said.as_str()) {
             self.status = format!("{said}: C-c C-c again sends it");
             self.compose.as_mut().expect("open").warned = Some(said);
+            // Its grammar gone through already: the C-c C-c asked for sends
+            // it as it is, unless another key comes first.
+            self.send_as_is = true;
             return;
         }
         let raw = compose::bytes(

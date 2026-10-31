@@ -57,13 +57,23 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
         ("Grammar", "C-c C-s", t.flag, t.on_accent),
         ("Discard", "C-c C-k", t.error, t.on_accent),
     ];
-    let said: Vec<String> = buttons
+    // Each with its keys where there is room, else its name alone.
+    let title_end = area.x + 2 + format!(" From {from} ").width() as u16;
+    let fits = |said: &[String]| {
+        let width: u16 = said.iter().map(|s| s.width() as u16 + 1).sum();
+        (area.right() >= title_end + width + 3).then_some(width)
+    };
+    let mut said: Vec<String> = buttons
         .iter()
         .map(|(what, key, ..)| format!(" {what}  {key} "))
         .collect();
-    let width: u16 = said.iter().map(|s| s.width() as u16 + 1).sum();
-    let title_end = area.x + 2 + format!(" From {from} ").width() as u16;
-    if area.right() >= title_end + width + 3 {
+    if fits(&said).is_none() {
+        said = buttons
+            .iter()
+            .map(|(what, ..)| format!(" {what} "))
+            .collect();
+    }
+    if let Some(width) = fits(&said) {
         let mut x = area.right() - 2 - width;
         let buf = f.buffer_mut();
         for ((_, key, bg, fg), said) in buttons.iter().zip(&said) {
@@ -260,20 +270,40 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let mut spots: Targets = Vec::new();
     if guide_h > 0 {
         let say = Style::new().fg(t.dim);
+        let room = usize::from(guide.width).saturating_sub(2);
+        let mut hints = vec![
+            ("C-c C-c", "send"),
+            ("C-c C-a", "attach"),
+            ("C-c C-k", "discard"),
+            ("C-g", "stops, never losing it"),
+        ];
+        if fitting(&hints, room, false).len() < hints.len() {
+            hints[3].1 = "stops";
+        }
         let mut first = vec![Span::raw("  ")];
         first.extend(keyed(
             &t,
-            &[
-                ("C-c C-c", "send"),
-                ("C-c C-a", "attach"),
-                ("C-c C-k", "discard"),
-                ("C-g", "stops, never losing it"),
-            ],
+            &fitting(&hints, room, false),
             guide.x + 2,
             guide.y,
             &mut spots,
         ));
-        let second = "  C-c is Ctrl+c, so C-c C-c is Ctrl+c twice. The arrows move. F1: every key.";
+        // Whole sentences, those said least left out to fit; F1 always.
+        let mut told = vec![
+            "C-c is Ctrl+c, so C-c C-c is Ctrl+c twice.",
+            "The arrows move.",
+            "F1: every key.",
+        ];
+        for least in [
+            "The arrows move.",
+            "C-c is Ctrl+c, so C-c C-c is Ctrl+c twice.",
+        ] {
+            if told.join(" ").width() <= room {
+                break;
+            }
+            told.retain(|s| *s != least);
+        }
+        let second = format!("  {}", told.join(" "));
         if let (Some(at), Some(f1)) = (second.find("F1"), keymap::key_named("F1")) {
             let x = guide.x + second[..at].width() as u16;
             spots.push((Rect::new(x, guide.y + 1, 14, 1), Target::Key(f1)));
@@ -370,13 +400,19 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
         Some(s) => spans.push(Span::styled(s, Style::new().fg(t.title).bold())),
         None => spans.extend(keyed(
             &t,
-            &[
-                ("C-SPC", "mark"),
-                ("C-w", "cut"),
-                ("C-y", "yank"),
-                ("C-s", "search"),
-                ("F1", "all keys"),
-            ],
+            &fitting(
+                &[
+                    ("C-/", "undo"),
+                    ("C-c C-s", "grammar"),
+                    ("C-SPC", "mark"),
+                    ("C-w", "cut"),
+                    ("C-y", "yank"),
+                    ("C-s", "search"),
+                    ("F1", "all keys"),
+                ],
+                usize::from(mode.right().saturating_sub(x)),
+                true,
+            ),
             x,
             mode.y,
             &mut spots,
@@ -389,8 +425,34 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     app.targets.extend(spots);
 }
 
+/// Of `items`, those that fit in `room` columns as `keyed` lays them out:
+/// those at the end left out first, but the last if `keep_last`.
+fn fitting<'a>(
+    items: &[(&'a str, &'a str)],
+    room: usize,
+    keep_last: bool,
+) -> Vec<(&'a str, &'a str)> {
+    let wide = |v: &[(&str, &str)]| -> usize {
+        let w: usize = v.iter().map(|(k, what)| k.width() + what.width() + 5).sum();
+        // The spaces after the last are not needed.
+        w.saturating_sub(3)
+    };
+    let mut out = items.to_vec();
+    while !out.is_empty() && wide(&out) > room {
+        let at = if keep_last && out.len() > 1 {
+            out.len() - 2
+        } else {
+            out.len() - 1
+        };
+        out.remove(at);
+    }
+    out
+}
+
 /// A line of the message being written: the cursor reversed, and the
-/// columns in `region` marked in `mark`, its end too when it goes on.
+/// columns in `region` marked in `mark`, its end too when it goes on. Too
+/// long for `width`, it is cut with a `$` where it goes on, as Emacs cuts
+/// a line it does not wrap; the cursor's line scrolled to show the cursor.
 pub(super) fn compose_line(
     line: &str,
     cursor: bool,
@@ -407,19 +469,38 @@ pub(super) fn compose_line(
         .collect();
     let col = col.min(chars.len());
     let cursor_x: usize = widths.iter().take(col).sum();
+    // The last column kept for the `$`, so the cursor is never under it.
+    let inner = width.saturating_sub(1).max(1);
     let mut start = 0;
     let mut start_x = 0;
-    if cursor && width > 0 && cursor_x >= width {
-        while cursor_x.saturating_sub(start_x) >= width && start < chars.len() {
+    if cursor && cursor_x >= inner {
+        while cursor_x.saturating_sub(start_x) >= inner && start < chars.len() {
             start_x += widths[start];
             start += 1;
         }
     }
     let quoted = line.trim_start().starts_with('>');
+    let cut_style = Style::new().fg(t.dim);
+    let past_end = usize::from(cursor && col >= chars.len());
+    let cut = widths[start..].iter().sum::<usize>() + past_end > width;
+    let room = if cut { inner } else { width };
     let mut spans = Vec::new();
     let mut x = 0;
     let mut i = start;
-    while i < chars.len() && x + widths[i] <= width {
+    // Scrolled, its first column says there is more before it.
+    if start > 0 && width > 2 {
+        spans.push(Span::styled("$", cut_style));
+        x += 1;
+        while x > widths[start..i].iter().sum::<usize>() && i < chars.len() {
+            i += 1;
+        }
+        let skipped: usize = widths[start..i].iter().sum();
+        if skipped > x {
+            spans.push(Span::raw(" ".repeat(skipped - x)));
+            x = skipped;
+        }
+    }
+    while i < chars.len() && x + widths[i] <= room {
         let style = if cursor && i == col {
             Style::new().add_modifier(Modifier::REVERSED)
         } else if region.contains(&i) {
@@ -433,7 +514,10 @@ pub(super) fn compose_line(
         x += widths[i];
         i += 1;
     }
-    if cursor && col >= chars.len() && x < width {
+    if cut {
+        spans.push(Span::raw(" ".repeat(room.saturating_sub(x))));
+        spans.push(Span::styled("$", cut_style));
+    } else if cursor && col >= chars.len() && x < width {
         spans.push(Span::styled(
             " ",
             Style::new().add_modifier(Modifier::REVERSED),
