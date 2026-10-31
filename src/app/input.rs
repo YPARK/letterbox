@@ -207,10 +207,12 @@ impl App {
         }
     }
 
-    /// A key pressed, or a click: what it moves is remembered anew.
+    /// A key pressed, or a click: what it moves is remembered anew, and
+    /// the message it was pressed on, before anything goes.
     fn began_input(&mut self) {
         self.moves_begun = false;
         self.input_at = jiff::Timestamp::now().as_second();
+        self.input_on = self.picked().map(|l| l.summary.message_id);
     }
 
     /// Quit; while mail is still being changed, ask first.

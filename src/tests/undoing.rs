@@ -209,3 +209,23 @@ fn after_many_are_put_back_the_one_the_key_was_pressed_on_is_picked() {
     let at = app.list.selected().unwrap();
     assert_eq!(app.shown[at].summary.subject, picked);
 }
+
+#[test]
+fn after_several_are_trashed_and_put_back_the_one_the_key_was_pressed_on_is_picked() {
+    let mut app = demo_map();
+    press(&mut app, &["M"]);
+    // Dragged up, the cursor on the first of them.
+    super::selecting::drag(&mut app, app::Target::Message(4), app::Target::Message(1));
+    assert_eq!(app.list.selected(), Some(1));
+    let picked = app.current().unwrap().summary.subject.clone();
+    // Inbox and all, to Trash: the one picked dropped first.
+    press(&mut app, &["d", "i", "y"]);
+    if matches!(app.dialog, app::Dialog::Applied(_)) {
+        press(&mut app, &["x"]);
+    }
+    app.settle(Duration::from_secs(5));
+    assert_ne!(app.current().unwrap().summary.subject, picked);
+    undo(&mut app);
+    let at = app.list.selected().unwrap();
+    assert_eq!(app.shown[at].summary.subject, picked, "{}", app.status);
+}

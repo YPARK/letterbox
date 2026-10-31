@@ -202,7 +202,7 @@ impl App {
         if !std::mem::replace(&mut self.moves_begun, true) {
             self.undoable = Moves {
                 at: self.input_at,
-                on: self.picked().map(|l| l.summary.message_id),
+                on: self.input_on.clone(),
                 ..Moves::default()
             };
             self.last = Some(Last::Moves);

@@ -419,8 +419,10 @@ pub struct App {
     /// A server's answer is taken: what it asks follows it, not a key, and
     /// is not remembered for C-x u.
     replying: bool,
-    /// When the key pressed last was, in seconds since 1970.
+    /// When the key pressed last was, in seconds since 1970, and the
+    /// `Message-ID` of the message picked as it was pressed.
     input_at: i64,
+    input_on: Option<String>,
     /// How long a message sent is held, to be taken back.
     pub send_hold: Duration,
     /// Asks that change mail, not yet answered: quitting while there are
@@ -754,6 +756,7 @@ impl App {
             quiet_moves: false,
             replying: false,
             input_at: 0,
+            input_on: None,
             changing: 0,
             quitting: false,
             mark_big: MARK_BIG,
