@@ -178,3 +178,41 @@ fn the_inbox_looked_through_says_its_hint_in_whole_words() {
         "{hint}"
     );
 }
+
+#[test]
+fn the_foot_asks_whether_the_map_is_down_at_a_message_without_changing_it() {
+    let mut app = demo_map();
+    let now = jiff::Timestamp::now().as_second();
+    assert!(!app.map_down(), "on the clusters");
+    press(&mut app, &["<enter>"]);
+    // Gone into a cluster but not yet grown: asked, it is grown for the
+    // asking alone, and nothing is kept.
+    if let Some(t) = &mut app.map.tree {
+        t.grown = None;
+    }
+    let (cursor, depth) = (
+        app.map.cursor.clone(),
+        app.map.tree.as_ref().map(|t| t.depth),
+    );
+    let down = app.map_down();
+    assert!(app.map.tree.as_ref().is_some_and(|t| t.grown.is_none()));
+    assert_eq!(app.map.cursor, cursor);
+    assert_eq!(app.map.tree.as_ref().map(|t| t.depth), depth);
+    assert_eq!(down, app.map.at_message(now), "as the keys find it");
+    // Down at a message, and the message picked in another cluster.
+    let now = jiff::Timestamp::now().as_second();
+    while app.map.tree_in(now) {}
+    assert!(app.map_down() && app.map.at_message(now));
+    let s = app.map.snapshot.clone().unwrap();
+    let here = app.map.tree.as_ref().unwrap().id;
+    let other = s.dots.iter().find(|d| {
+        s.group_of(s.find(&d.key).unwrap())
+            .is_some_and(|g| g.id != here)
+    });
+    if let Some(d) = other {
+        app.map.cursor = Some(d.key.clone());
+        let down = app.map_down();
+        assert_eq!(app.map.tree.as_ref().unwrap().id, here, "nothing opened");
+        assert_eq!(down, app.map.at_message(now));
+    }
+}

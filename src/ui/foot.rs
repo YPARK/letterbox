@@ -4,7 +4,7 @@ use super::*;
 /// The foot: what happened, at the right of the keys where there is room,
 /// else on a line of its own above them; the keys; and where each key's
 /// hint is, by its line, how far along and how wide, to be clicked.
-pub(super) fn foot(app: &mut App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
+pub(super) fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
     let t = app.theme;
     let mut lines = Vec::new();
     let mut spots = Vec::new();
@@ -110,7 +110,7 @@ pub(super) fn keys(
 /// The keys of the pane with the focus, as many lines of them as the
 /// foot takes on a screen `width` wide: those refused where it is left
 /// out, and more to fit, but help and quit.
-pub(super) fn hints(app: &mut App, width: u16) -> Vec<Vec<(String, String)>> {
+pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
         _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
@@ -147,7 +147,7 @@ pub(super) fn hints(app: &mut App, width: u16) -> Vec<Vec<(String, String)>> {
 /// nothing, d's said as it puts back in Trash, ⏎'s as the search goes
 /// on the map or to the server; esc, the way back from the message read,
 /// kept with help and quit.
-fn in_context(app: &mut App, pane: Pane, list: &mut Vec<keymap::Hint>) {
+fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     let map = app.map.mode == crate::map::Mode::Map;
     let trash = app.picked_in_trash();
     list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());

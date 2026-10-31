@@ -82,7 +82,7 @@ pub struct Tree {
     /// The first row of it drawn.
     pub top: usize,
     /// It as last grown, of which snapshot and how many messages shown.
-    pub(super) grown: Option<(usize, usize, Arc<Branch>)>,
+    pub(crate) grown: Option<(usize, usize, Arc<Branch>)>,
 }
 
 /// The messages of a snapshot that hold every word searched for.
@@ -153,27 +153,73 @@ impl Map {
         {
             return Some(b.clone());
         }
+        let (branch, parts) = self.grow(&s, id, &shown)?;
+        if let Some(parts) = parts {
+            self.parts.insert(id, parts);
+        }
+        let branch = Arc::new(branch);
+        self.tree.as_mut()?.grown = Some((of, shown.len(), branch.clone()));
+        Some(branch)
+    }
+
+    /// Cluster `id`'s tree, of the messages `shown`, its parts as they were
+    /// while it holds about as many; and, where they were not, its parts
+    /// now with how many it holds, to be kept.
+    #[allow(clippy::type_complexity)]
+    fn grow(
+        &self,
+        s: &Snapshot,
+        id: u32,
+        shown: &[usize],
+    ) -> Option<(Branch, Option<(usize, Vec<Vector>)>)> {
         let held = s
             .group(id)?
             .members
             .iter()
             .filter(|i| shown.binary_search(i).is_ok())
             .count();
-        let kept: Option<Vec<Vector>> = self
+        let kept: Option<&Vec<Vector>> = self
             .parts
             .get(&id)
             .filter(|(then, _)| {
                 let (then, held) = (*then as f32, held as f32);
                 held >= then * 0.8 && held <= then * 1.25
             })
-            .map(|(_, c)| c.clone());
-        let (branch, centres) = forest::grow(&s, id, &shown, kept.as_deref())?;
-        if kept.is_none() {
-            self.parts.insert(id, (held, centres));
-        }
-        let branch = Arc::new(branch);
-        self.tree.as_mut()?.grown = Some((of, shown.len(), branch.clone()));
-        Some(branch)
+            .map(|(_, c)| c);
+        let (branch, centres) = forest::grow(s, id, shown, kept.map(Vec::as_slice))?;
+        Some((branch, kept.is_none().then_some((held, centres))))
+    }
+
+    /// Whether a cluster's tree is gone down to a message, as `at_message`
+    /// finds it, without opening, growing or picking anything.
+    pub fn is_at_message(&self, now: i64) -> bool {
+        let (Some(s), Some(t)) = (&self.snapshot, &self.tree) else {
+            return false;
+        };
+        // The message picked elsewhere: its cluster as it would be gone into.
+        let (id, depth) = match self.picked().and_then(|i| s.group_of(i)) {
+            Some(g) if g.id != t.id => (g.id, 1),
+            _ => (t.id, t.depth),
+        };
+        let shown = self.shown(now);
+        let of = Arc::as_ptr(s) as usize;
+        let root = match &t.grown {
+            Some((o, n, b)) if id == t.id && *o == of && *n == shown.len() => b.clone(),
+            _ => match self.grow(s, id, &shown) {
+                Some((b, _)) => Arc::new(b),
+                None => return false,
+            },
+        };
+        let path = match self.picked().and_then(|i| root.path_to(i)) {
+            Some(path) => path,
+            None => match root.newest().and_then(|i| root.path_to(i)) {
+                Some(path) => path,
+                None => return false,
+            },
+        };
+        let depth = depth.clamp(1, path.len().max(1));
+        root.at(&path[..depth.min(path.len())])
+            .is_some_and(|b| b.is_leaf())
     }
 
     /// The tree, and the way to the branch picked in it: the one the

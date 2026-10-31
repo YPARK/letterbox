@@ -208,15 +208,17 @@ impl App {
     /// through; never on the clusters, where a key is so easily pressed on
     /// the wrong one.
     pub fn map_refuses(&mut self, act: Act) -> bool {
-        let down = self.map_down();
+        let now = jiff::Timestamp::now().as_second();
+        let down = self.map.at_message(now);
         map_refuses(act, self.map.moving.is_some(), down)
     }
 
     /// Whether the map is down at a message in a cluster's tree, where
-    /// mail may be moved: asked once, for every key the foot offers.
-    pub fn map_down(&mut self) -> bool {
+    /// mail may be moved, nothing of it changed to say so: asked once, for
+    /// every key the foot offers.
+    pub fn map_down(&self) -> bool {
         let now = jiff::Timestamp::now().as_second();
-        self.map.at_message(now)
+        self.map.is_at_message(now)
     }
 }
 
