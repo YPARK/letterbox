@@ -175,8 +175,27 @@ impl App {
         self.looked_for_new();
     }
 
+    /// U: look for new mail, what each Inbox holds kept to say how many
+    /// came; nothing asked, said so at once.
+    pub(super) fn look_for_new(&mut self) {
+        self.looking_new = Some(self.inbox_totals());
+        let was = self.pending;
+        self.refresh();
+        if self.pending == was {
+            self.looking_new = None;
+            self.status = if self.live().next().is_none() {
+                "no account to look in".to_string()
+            } else {
+                "no account could be asked for new mail".to_string()
+            };
+            return;
+        }
+        self.say_passing(Transient::LookingNew, "looking for new mail…".to_string());
+    }
+
     /// Once all U asked is answered, what it found, said in place of its
-    /// looking, unless something else was said since.
+    /// looking, unless something else was said since: of each Inbox counted
+    /// before, never one first counted since.
     fn looked_for_new(&mut self) {
         if self.pending > 0 {
             return;
@@ -187,17 +206,26 @@ impl App {
         if !self.passing(Transient::LookingNew) {
             return;
         }
-        self.status = match self.inbox_total().saturating_sub(before) {
+        let now = self.inbox_totals();
+        let n: u32 = before
+            .iter()
+            .filter_map(|&(a, was)| {
+                let (_, total) = now.iter().find(|&&(b, _)| b == a)?;
+                Some(total.saturating_sub(was))
+            })
+            .sum();
+        self.status = match n {
             0 => "no new mail".to_string(),
             n => format!("{n} new in the Inbox"),
         };
     }
 
-    /// How many messages the accounts' Inboxes hold, as last counted.
-    pub(super) fn inbox_total(&self) -> u32 {
+    /// How many messages each account's Inbox holds, as last counted: those
+    /// counted.
+    fn inbox_totals(&self) -> Vec<(usize, u32)> {
         self.live()
-            .filter_map(|a| self.role_folder(a, Role::Inbox)?.total)
-            .sum()
+            .filter_map(|a| Some((a, self.role_folder(a, Role::Inbox)?.total?)))
+            .collect()
     }
 
     fn answer_reply(&mut self, reply: Reply) {

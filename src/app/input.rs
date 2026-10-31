@@ -452,11 +452,7 @@ impl App {
             Act::ReplyAll => self.respond(Respond::All),
             Act::Reply => self.respond(Respond::Reply),
             Act::Forward => self.respond(Respond::Forward),
-            Act::NewMail => {
-                self.looking_new = Some(self.inbox_total());
-                self.refresh();
-                self.say_passing(Transient::LookingNew, "looking for new mail…".to_string());
-            }
+            Act::NewMail => self.look_for_new(),
             Act::NextMessage => self.next(1),
             Act::PreviousMessage => self.next(-1),
             Act::Seen => self.toggle(Flag::Seen),

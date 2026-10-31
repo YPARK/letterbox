@@ -184,8 +184,10 @@ impl App {
         self.sizing().is_some()
     }
 
-    /// The message just read shown, alone if it is not with the list.
+    /// The message just read shown, alone if it is not with the list: what
+    /// \ said, hidden until one is read, is not so once one is.
     pub(super) fn show_read(&mut self) {
+        self.clear_passing(Transient::Hidden);
         if !self.side_by_side {
             self.focus = Focus::Reader;
         }
@@ -412,8 +414,9 @@ pub struct App {
     moves_begun: bool,
     /// The message C-x u put back, to be picked once it is listed again.
     pick_back: Option<undoing::PickBack>,
-    /// How many the Inboxes held as U looked for new mail, till it is done.
-    looking_new: Option<u32>,
+    /// How many each account's Inbox held as U looked for new mail, those
+    /// counted, till it is done.
+    looking_new: Option<Vec<(usize, u32)>>,
     /// Moves not to remember: those that put back.
     quiet_moves: bool,
     /// A server's answer is taken: what it asks follows it, not a key, and

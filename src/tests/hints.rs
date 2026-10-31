@@ -93,11 +93,46 @@ fn looking_for_new_mail_is_said_done() {
 }
 
 #[test]
+fn new_mail_is_not_claimed_of_an_inbox_not_counted_before() {
+    let mut app = demo();
+    let inbox = app.accounts[0]
+        .folders
+        .iter()
+        .position(|f| f.role == mail::Role::Inbox)
+        .expect("an Inbox");
+    app.accounts[0].folders[inbox].total = None;
+    press(&mut app, &["U"]);
+    app.settle(Duration::from_secs(5));
+    assert!(app.accounts[0].folders[inbox].total.is_some(), "counted");
+    assert_eq!(app.status, "no new mail");
+}
+
+#[test]
+fn looking_for_new_mail_with_no_account_says_so_at_once() {
+    let mut app = App::new(Vec::new(), PathBuf::from("/nowhere/accounts.toml"));
+    press(&mut app, &["U"]);
+    assert_eq!(app.status, "no account to look in");
+}
+
+#[test]
 fn hidden_until_enter_is_not_said_once_one_is_read() {
     let (app, _) = at(120, 30, &["\\", "\\"]);
     assert!(app.status.contains("hidden until"), "{}", app.status);
     let (app, _) = at(120, 30, &["\\", "\\", "<enter>"]);
     assert!(!app.status.contains("hidden until"), "{}", app.status);
+    // The one read already, read again; or one read from the map.
+    for keys in [
+        &["<enter>", "<esc>", "\\", "\\", "<enter>"][..],
+        &["M", "\\", "\\", "<enter>", "<enter>"],
+    ] {
+        let (app, _) = at(120, 30, keys);
+        assert!(app.reading.is_some(), "{keys:?}");
+        assert!(
+            !app.status.contains("hidden until"),
+            "{keys:?}: {}",
+            app.status
+        );
+    }
 }
 
 #[test]

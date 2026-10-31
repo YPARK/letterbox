@@ -719,7 +719,8 @@ impl App {
             .select((!self.shown.is_empty()).then(|| at.min(self.shown.len() - 1)));
     }
 
-    /// Read the message picked in the list: at once, if it was read before.
+    /// Read the message picked in the list, and show it: at once, if it
+    /// was read before.
     pub(super) fn read_picked(&mut self) {
         let Some(s) = self.current() else { return };
         let (a, folder, uid, seen) = (s.account, s.folder.clone(), s.uid, s.flags.seen);
@@ -728,11 +729,9 @@ impl App {
             .as_ref()
             .is_some_and(|r| r.account == a && r.folder == folder && r.uid == uid)
         {
-            return;
+            return self.show_read();
         }
         self.scroll = 0;
-        // What \ said, hidden until one is read, is not so once one is.
-        self.clear_passing(Transient::Hidden);
         let mark = self.mark_read && !seen;
         let body = match self.read.get(&(a, folder.clone(), uid)) {
             Some(m) => {
@@ -760,6 +759,7 @@ impl App {
             body,
             on_map: false,
         });
+        self.show_read();
     }
 
     /// Mark the message picked, or not, here and on its server.
@@ -944,7 +944,6 @@ impl App {
             .select(Some(at.saturating_add_signed(by).min(self.shown.len() - 1)));
         self.due = None;
         self.read_picked();
-        self.show_read();
         self.more();
     }
 
