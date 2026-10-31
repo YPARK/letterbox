@@ -5,6 +5,8 @@ use super::*;
 /// How long ago new mail is taken to have come, the first time the map
 /// is looked at.
 pub(super) const FIRST_LOOK: i64 = 24 * 60 * 60;
+/// How much more faithful the map laid out again is to be, to be nearer.
+pub const NEARER: f32 = 0.01;
 
 /// The map as it is looked at.
 #[derive(Default)]
@@ -37,6 +39,9 @@ pub struct Map {
     pub preview: Option<Vec<Point>>,
     /// Whether it is being laid out again.
     pub relaying: bool,
+    /// How faithful the map was when laying it out again came out no
+    /// nearer: M-r is not offered again while it is so.
+    pub tried: Option<f32>,
     /// The messages that hold what is searched for, as last found.
     pub hits: Option<Hits>,
     /// The blocks drawn: a cluster's number, or a part's place, their

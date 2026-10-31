@@ -131,6 +131,8 @@ pub enum Pane {
     Review,
     /// The search, being typed.
     Searching,
+    /// A message of the Inbox looked through, read in its place.
+    Looked,
 }
 
 pub struct Binding {
@@ -151,8 +153,8 @@ pub struct Binding {
 
 use Act::*;
 use Pane::{
-    Attaching, List, Map, Naming, Picking, Reader, Review as Reviewing, Saving, Searching, Side,
-    Viewing, Writing,
+    Attaching, List, Looked, Map, Naming, Picking, Reader, Review as Reviewing, Saving, Searching,
+    Side, Viewing, Writing,
 };
 
 /// What the map's view menu changes, by the key that changes it there.
@@ -230,8 +232,8 @@ pub const KEYS: &[Binding] = &[
         ],
         name: "space b C-v M-v",
         hint: "␣",
-        foot: &[(Reader, "page"), (Reviewing, "keep")],
-        help: "a page down, or up, in the message; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
+        foot: &[(Reader, "page"), (Reviewing, "keep"), (Looked, "page")],
+        help: "a page down, or up, in the message, from the map beside it too; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
         keys: &[("n", NextMessage), ("p", PreviousMessage)],
@@ -263,6 +265,7 @@ pub const KEYS: &[Binding] = &[
             (Reader, "trash"),
             (Map, "trash"),
             (Reviewing, "discard"),
+            (Looked, "discard"),
         ],
         help: "move to Trash; in Trash, put it back. Several: asked first, the Inbox's and yours sent left out unless i or s takes them. Never removed for good",
     },
@@ -277,21 +280,25 @@ pub const KEYS: &[Binding] = &[
         keys: &[("r", Reply), ("C-r", Reply)],
         name: "r C-r",
         hint: "r",
-        foot: &[(List, "reply"), (Reader, "reply")],
+        foot: &[(List, "reply"), (Reader, "reply"), (Looked, "reply")],
         help: "reply to the sender",
     },
     Binding {
         keys: &[("a", ReplyAll)],
         name: "a",
         hint: "a",
-        foot: &[(List, "reply all"), (Reader, "reply all")],
+        foot: &[
+            (List, "reply all"),
+            (Reader, "reply all"),
+            (Looked, "reply all"),
+        ],
         help: "reply to all: the sender, and the others it went to, copied",
     },
     Binding {
         keys: &[("f", Forward)],
         name: "f",
         hint: "f",
-        foot: &[(List, "forward"), (Reader, "forward")],
+        foot: &[(List, "forward"), (Reader, "forward"), (Looked, "forward")],
         help: "forward it, its files with it",
     },
     Binding {
@@ -309,6 +316,7 @@ pub const KEYS: &[Binding] = &[
             (List, "read/unread"),
             (Reader, "unread"),
             (Map, "read/unread"),
+            (Looked, "unread"),
         ],
         help: "mark read, or unread",
     },
@@ -316,21 +324,26 @@ pub const KEYS: &[Binding] = &[
         keys: &[("!", Flag)],
         name: "!",
         hint: "!",
-        foot: &[(List, "flag"), (Reader, "flag"), (Map, "flag")],
+        foot: &[
+            (List, "flag"),
+            (Reader, "flag"),
+            (Map, "flag"),
+            (Looked, "flag"),
+        ],
         help: "flag, or unflag",
     },
     Binding {
         keys: &[("o", Files)],
         name: "o",
         hint: "o",
-        foot: &[(Reader, "open")],
+        foot: &[(Reader, "open"), (Looked, "open")],
         help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as they do from the message; a PDF signed in ohp, S there, is offered to reply with",
     },
     Binding {
         keys: &[("s", Save), ("S", SaveAll)],
         name: "s S",
         hint: "s",
-        foot: &[(Reader, "save")],
+        foot: &[(Reader, "save"), (Looked, "save")],
         help: "save the message read's attachments: s lists them, ⏎ saving the one picked, a all of them; S saves them all at once. Then the folder, begun where you last saved, else in Downloads: ⏎ goes into a folder, and on . saves there; a name typed that no folder has is made. Then, for one, its name, all but the extension picked to type over: ← → edit it, ⏎ keeps it, esc goes back",
     },
     Binding {
@@ -374,6 +387,7 @@ pub const KEYS: &[Binding] = &[
         hint: "esc",
         foot: &[
             (Reader, "back"),
+            (Looked, "back"),
             (Picking, "cancel"),
             (Attaching, "cancel"),
             (Saving, "cancel"),
@@ -452,7 +466,11 @@ pub const KEYS: &[Binding] = &[
         keys: &[("m", Move)],
         name: "m",
         hint: "m",
-        foot: &[(Map, "move to"), (Reviewing, "move to")],
+        foot: &[
+            (Map, "move to"),
+            (Reviewing, "move to"),
+            (Looked, "move to"),
+        ],
         help: "move it onto a cluster or a label: ⏎ on one, or a click on its anchor; given the label, out of the Inbox. Several, asked first",
     },
     Binding {
@@ -466,8 +484,8 @@ pub const KEYS: &[Binding] = &[
         keys: &[("y", FileFirst), ("Y", FileAll), ("-", NotIt)],
         name: "y Y -",
         hint: "y/Y",
-        foot: &[(Reviewing, "as suggested")],
-        help: "a message not yet filed, filed where it would go, or, Y, all like it, asked first; once filed, the label's first suggestion too, or all; - says it is not one, and the map learns it",
+        foot: &[(Reviewing, "as suggested"), (Looked, "as suggested")],
+        help: "a message not yet filed, filed where it would go, or, Y, all like it, asked first; in the Inbox looked through, Y chooses it for every one suggested alike; once filed, the label's first suggestion too, or all; - says it is not one, and the map learns it",
     },
     Binding {
         keys: &[("M-r", Relayout)],
@@ -628,6 +646,7 @@ pub const KEYS: &[Binding] = &[
             (List, "all keys"),
             (Reader, "all keys"),
             (Map, "all keys"),
+            (Looked, "all keys"),
         ],
         help: "all the keys",
     },
@@ -642,9 +661,10 @@ pub const KEYS: &[Binding] = &[
             (Reader, "undo"),
             (Map, "undo"),
             (Reviewing, "undo"),
+            (Looked, "undo"),
             (Writing, "undo"),
         ],
-        help: "undo, as C-_ and C-x u do too, as in Emacs: put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed. In the message being written, what was last changed in it, a step at a time, up to twenty characters typed in a row each",
+        help: "undo, as C-_ and C-x u do too, as in Emacs: put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed. In the Inbox looked through, the last choice not yet done first. In the message being written, what was last changed in it, a step at a time, up to twenty characters typed in a row each",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too
@@ -657,6 +677,7 @@ pub const KEYS: &[Binding] = &[
             (List, "quit"),
             (Reader, "quit"),
             (Map, "quit"),
+            (Looked, "quit"),
         ],
         help: "quit",
     },
@@ -682,8 +703,16 @@ pub fn act(key: KeyEvent) -> Option<Act> {
 pub struct Hint {
     pub key: &'static str,
     pub what: &'static str,
-    pub act: Option<Act>,
     pub kept: bool,
+    /// The keys it names, and what each does.
+    pub keys: &'static [(&'static str, Act)],
+}
+
+impl Hint {
+    /// What its first key does.
+    pub fn act(&self) -> Option<Act> {
+        self.keys.first().map(|&(_, a)| a)
+    }
 }
 
 /// The foot's hints in `pane`.
@@ -695,8 +724,8 @@ pub fn foot(pane: Pane) -> Vec<Hint> {
             Some(Hint {
                 key: b.hint,
                 what,
-                act: b.keys.first().map(|&(_, a)| a),
                 kept,
+                keys: b.keys,
             })
         })
         .collect()

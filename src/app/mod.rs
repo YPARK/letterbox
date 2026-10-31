@@ -5,6 +5,7 @@
 mod bringing;
 mod bulk;
 mod checking;
+mod choosing;
 mod dialog;
 mod files;
 mod filing;

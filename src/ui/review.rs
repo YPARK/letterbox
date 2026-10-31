@@ -63,11 +63,25 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) -> Option<u1
         }
     }
     // Only those chosen are done; the rest are left as they are.
-    let counts = if filed + discarded + kept == 0 {
-        " none chosen: look through as many as you like; C-c C-c does only those".to_string()
+    // The longest that fits whole, else the shortest, cut.
+    let said: Vec<String> = if filed + discarded + kept == 0 {
+        vec![
+            " none chosen: look through as many as you like; C-c C-c does only those".to_string(),
+            " none chosen: C-c C-c does only those chosen".to_string(),
+            " none chosen".to_string(),
+        ]
     } else {
-        format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left")
+        vec![
+            format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left"),
+            format!(" {filed} to file · {discarded} to discard · {kept} to keep"),
+        ]
     };
+    let counts = said
+        .iter()
+        .find(|c| c.width() <= usize::from(width))
+        .or(said.last())
+        .cloned()
+        .unwrap_or_default();
     buf.set_stringn(
         x,
         area.y + 1,

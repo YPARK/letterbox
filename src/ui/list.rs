@@ -62,6 +62,8 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
         field,
     );
     let count = match &app.listing {
+        // The map says its own count; the list's is not on screen.
+        _ if app.map.mode == crate::map::Mode::Map => String::new(),
         Some(l) if l.fetching() => "fetching… ".to_string(),
         Some(l) => {
             let unseen = match l.view {

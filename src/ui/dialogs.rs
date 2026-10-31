@@ -391,7 +391,7 @@ pub(super) fn renaming(f: &mut Frame, t: &Theme, name: &str, typed: &str) -> (Re
         f,
         t,
         "Rename account",
-        "⏎ renames · esc keeps it",
+        "⏎ renames · C-u clears · esc keeps it",
         &format!("What is {name} to be called? Only letterbox's name for it changes."),
         |room| {
             let value = tail(typed, room.saturating_sub(1));

@@ -4,7 +4,7 @@ use super::*;
 /// The foot: what happened, at the right of the keys where there is room,
 /// else on a line of its own above them; the keys; and where each key's
 /// hint is, by its line, how far along and how wide, to be clicked.
-pub(super) fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
+pub(super) fn foot(app: &mut App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
     let t = app.theme;
     let mut lines = Vec::new();
     let mut spots = Vec::new();
@@ -108,9 +108,9 @@ pub(super) fn keys(
 }
 
 /// The keys of the pane with the focus, as many lines of them as the
-/// foot takes on a screen `width` wide: hints left out to fit, but help and
-/// quit.
-pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
+/// foot takes on a screen `width` wide: those refused where it is left
+/// out, and more to fit, but help and quit.
+pub(super) fn hints(app: &mut App, width: u16) -> Vec<Vec<(String, String)>> {
     let pane = match app.focus {
         _ if matches!(app.dialog, Dialog::Trash(_)) => Pane::Picking,
         _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
@@ -122,11 +122,11 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if app.searching => Pane::Searching,
         Focus::Side => Pane::Side,
         Focus::List if app.map.mode == crate::map::Mode::Map => Pane::Map,
-        Focus::Reader
-            if app.map.mode == crate::map::Mode::Map
-                && app.review.as_ref().is_some_and(|r| !r.reading) =>
-        {
-            Pane::Review
+        Focus::Reader if app.map.mode == crate::map::Mode::Map && app.review.is_some() => {
+            match app.review.as_ref().is_some_and(|r| r.reading) {
+                true => Pane::Looked,
+                false => Pane::Review,
+            }
         }
         Focus::List => Pane::List,
         Focus::Reader => Pane::Reader,
@@ -147,12 +147,16 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
 /// nothing, d's said as it puts back in Trash, ⏎'s as the search goes
 /// on the map or to the server; esc, the way back from the message read,
 /// kept with help and quit.
-fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
+fn in_context(app: &mut App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     let map = app.map.mode == crate::map::Mode::Map;
     let trash = app.picked_in_trash();
-    list.retain(|h| !matches!(h.act, Some(keymap::Act::Wider)) || app.resizable());
+    list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());
+    // A hint whose keys are all refused there offers nothing.
+    if pane == Pane::Map {
+        list.retain(|h| h.keys.is_empty() || h.keys.iter().any(|&(_, a)| !app.map_refuses(a)));
+    }
     for h in list {
-        match (h.act, pane) {
+        match (h.act(), pane) {
             (Some(keymap::Act::Trash), Pane::List | Pane::Reader) if trash => h.what = "put back",
             (Some(keymap::Act::Open), Pane::Searching) if map => h.what = "light it on the map",
             (Some(keymap::Act::Open), Pane::Searching) if !app.searches_everywhere() => {

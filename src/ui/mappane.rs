@@ -63,6 +63,16 @@ pub(super) fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         };
         head.push(Span::styled(said, Style::new().fg(t.title).bold()));
     }
+    // What it is narrowed to, next, before what is cut off first.
+    let narrowed = match app.map.focused {
+        Focused::Cluster(_) if app.map.tree.is_some() => None,
+        Focused::Cluster(id) => s.group(id).map(|g| format!(" · in {}", g.name())),
+        Focused::Loners => Some(" · fitting nowhere".to_string()),
+        Focused::All => None,
+    };
+    if let Some(n) = narrowed {
+        head.push(Span::styled(n, Style::new().fg(t.title).bold()));
+    }
     let mut what = format!(
         " · {} · {} · {} {}",
         s.lens.name(),
@@ -87,16 +97,6 @@ pub(super) fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
     if new > 0 {
         what.push_str(&format!(", {new} new"));
     }
-    match app.map.focused {
-        Focused::Cluster(_) if app.map.tree.is_some() => {}
-        Focused::Cluster(id) => {
-            if let Some(g) = s.group(id) {
-                what.push_str(&format!(" · in {}", g.name()));
-            }
-        }
-        Focused::Loners => what.push_str(" · fitting nowhere"),
-        Focused::All => {}
-    }
     head.push(Span::styled(what, dim));
     let key = if let Some((_, _, crate::forest::Level::Mosaic(_))) = &level {
         "   ⏎ in  esc out  ▀ unread"
@@ -116,6 +116,19 @@ pub(super) fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
         _ if heading.is_some() => heading_said(heading.as_ref().unwrap(), &s),
         Some(_) if app.map.preview.is_some() => {
             " laid out again, the blocks where they would be: ⏎ keeps it, esc drops it".to_string()
+        }
+        // Laid out again to no better, it is as faithful as it gets.
+        Some(faith)
+            if faith < 0.7
+                && app
+                    .map
+                    .tried
+                    .is_some_and(|t| faith <= t + crate::map::NEARER) =>
+        {
+            format!(
+                " {:.0}% faithful: laid out again, no nearer; the blocks lie by those alike",
+                faith * 100.0
+            )
         }
         Some(faith) if faith < 0.7 => format!(
             " {:.0}% faithful: M-r lays it out again, so the blocks lie by those alike",
