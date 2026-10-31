@@ -5,7 +5,7 @@
 
 mod blocks;
 mod dialogs;
-mod files;
+pub(crate) mod files;
 mod foot;
 mod form;
 mod list;

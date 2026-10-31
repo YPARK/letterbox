@@ -31,6 +31,38 @@ fn a_link_is_named_by_its_text_else_by_where_a_redirect_goes() {
 }
 
 #[test]
+fn only_scholar_and_google_themselves_are_followed_through() {
+    let to = "https://bank.example/login";
+    for href in [
+        "https://scholar.google.com/scholar_url?url=https://bank.example/login&hl=en",
+        "https://www.google.co.uk/url?q=https%3A%2F%2Fbank.example%2Flogin&sa=D",
+        "https://google.com/url?url=https://bank.example/login",
+    ] {
+        assert_eq!(crate::papers::unwrapped(href), to, "{href}");
+    }
+    for href in [
+        "https://evil.example/www.google.com/url?q=https://bank.example/login",
+        "https://evil.example/?scholar.google.com/scholar_url?url=https://bank.example/login",
+        "https://scholar.google.com.evil.example/scholar_url?url=https://bank.example/login",
+        "https://www.google.com@evil.example/url?q=https://bank.example/login",
+        "https://www.google.com/search?q=https://bank.example/login",
+    ] {
+        assert_eq!(crate::papers::unwrapped(href), href, "{href}");
+    }
+}
+
+#[test]
+fn a_link_named_as_another_address_shows_where_it_truly_goes() {
+    let (said, kind) = crate::ui::files::link_label(
+        "https://login.evil.example/x",
+        Some("https://bank.example/login"),
+        "browser",
+    );
+    assert_eq!(said, "https://bank.example/login");
+    assert_eq!(kind, "login.evil.example · browser");
+}
+
+#[test]
 fn o_shows_each_link_by_its_name_and_where_it_goes() {
     let mut app = reading_the_alert();
     press(&mut app, &["o"]);

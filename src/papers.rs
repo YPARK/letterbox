@@ -265,16 +265,42 @@ pub(crate) fn decode(s: &str) -> String {
     out
 }
 
-/// Where `href` sends one on to, through Scholar's and Google's redirects.
+/// Where `href` sends one on to, through Scholar's and Google's redirects:
+/// only those, by their own host and path, never an address that names
+/// them elsewhere in it.
 pub(crate) fn unwrapped(href: &str) -> String {
-    for (host, key) in [
-        ("scholar.google.", "url="),
-        ("www.google.", "q="),
-        ("www.google.", "url="),
-    ] {
-        if href.contains(host)
-            && let Some(q) = href.split_once('?').map(|(_, q)| q)
-            && let Some(v) = q.split('&').find_map(|kv| kv.strip_prefix(key))
+    let Some((scheme, rest)) = href.split_once("://") else {
+        return href.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(end);
+    // Past who it says it is, and before its port.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let google = |h: &str| {
+        h.strip_prefix("google.").is_some_and(|tld| {
+            let parts: Vec<&str> = tld.split('.').collect();
+            parts.len() <= 2
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphabetic()))
+        })
+    };
+    let keys: &[&str] = match (host.strip_prefix("scholar."), host.strip_prefix("www.")) {
+        (Some(h), _) if google(h) && path == "/scholar_url" => &["url="],
+        (_, Some(h)) if google(h) && path == "/url" => &["q=", "url="],
+        _ if google(&host) && path == "/url" => &["q=", "url="],
+        _ => &[],
+    };
+    if !scheme.starts_with("http") {
+        return href.to_string();
+    }
+    let query = href
+        .split_once('?')
+        .map(|(_, q)| q.split('#').next().unwrap_or(q));
+    for key in keys {
+        if let Some(v) = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix(key)))
             && v.starts_with("http")
         {
             return percent_decoded(v);

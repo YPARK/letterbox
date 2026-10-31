@@ -31,17 +31,8 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
                     Some(_) => "PDF · ohp",
                     None => "browser",
                 };
-                match name {
-                    // Named by its text: where it goes, beside it.
-                    Some(name) if !name.starts_with("http") => {
-                        let to = crate::papers::unwrapped(url);
-                        let host = to.split("://").nth(1).unwrap_or(&to);
-                        let host = host.split(['/', '?', '#']).next().unwrap_or(host);
-                        let host = host.trim_start_matches("www.");
-                        ("↗", name.clone(), format!("{host} · {what}"))
-                    }
-                    _ => ("↗", name.clone().unwrap_or(url.clone()), what.to_string()),
-                }
+                let (said, kind) = link_label(url, name.as_deref(), what);
+                ("↗", said, kind)
             }
         };
         let here = i == files.at;
@@ -282,5 +273,21 @@ pub(super) fn folder(dir: &std::path::Path) -> String {
         named
     } else {
         format!("{named}/")
+    }
+}
+
+/// A link as the dialog shows it: its name, else its address; and beside
+/// it, named, the host it truly goes to, as a text may name another
+/// address than its own; then what opens it.
+pub(crate) fn link_label(url: &str, name: Option<&str>, what: &str) -> (String, String) {
+    match name {
+        Some(name) => {
+            let to = crate::papers::unwrapped(url);
+            let host = to.split("://").nth(1).unwrap_or(&to);
+            let host = host.split(['/', '?', '#']).next().unwrap_or(host);
+            let host = host.trim_start_matches("www.");
+            (name.to_string(), format!("{host} · {what}"))
+        }
+        None => (url.to_string(), what.to_string()),
     }
 }
