@@ -399,12 +399,24 @@ impl App {
         };
     }
 
-    /// Ask what to call the label of the message picked: its cluster's, or
-    /// the last it was given.
+    /// What may be done with the label of the message picked: down at it,
+    /// its cluster's renamed, split or removed; else, and on the clusters,
+    /// where a key is so easily pressed on the wrong one, only renamed:
+    /// its cluster's, or the last it was given.
     pub(super) fn ask_rename_label(&mut self) {
         let Some(s) = self.map.snapshot.clone() else {
             return;
         };
+        let now = jiff::Timestamp::now().as_second();
+        if self.map.at_message(now)
+            && let Some(g) = self
+                .map
+                .picked()
+                .and_then(|i| s.group_of(i))
+                .filter(|g| g.label.is_some())
+        {
+            return self.cluster_menu(g.id);
+        }
         let label = self.map.picked().and_then(|i| {
             s.group_of(i)
                 .and_then(|g| g.label.clone())

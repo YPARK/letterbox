@@ -191,6 +191,8 @@ impl App {
 
     pub fn key(&mut self, key: KeyEvent) {
         self.began_input();
+        // What is picked is the key's now, not what C-x u put back.
+        self.pick_back = None;
         let key = capital(key);
         if self.compose.is_some() {
             if matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {
@@ -505,6 +507,11 @@ impl App {
     pub fn mouse(&mut self, m: MouseEvent) {
         if matches!(m.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_)) {
             self.began_input();
+        }
+        // Clicked or turned, what is picked is the mouse's; not on the
+        // button let go, after a click on C-x u in the foot.
+        if !matches!(m.kind, MouseEventKind::Up(_) | MouseEventKind::Moved) {
+            self.pick_back = None;
         }
         let at = self
             .targets

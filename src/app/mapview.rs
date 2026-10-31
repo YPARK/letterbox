@@ -623,6 +623,7 @@ impl App {
                 on,
             },
         );
+        self.status = format!("marked {}", flag.said(on));
     }
 
     /// Move the message picked on the map to Trash.

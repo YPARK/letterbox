@@ -978,6 +978,26 @@ fn filing_suggests_its_like_and_y_and_minus_take_them_or_not() {
 }
 
 #[test]
+fn r_down_at_a_message_offers_to_rename_split_or_remove_its_label() {
+    let mut app = demo_map();
+    down_subject(&mut app, "Letter of support, signed");
+    press(&mut app, &["R"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::ClusterMenu { at: 0, .. }),
+        "{}",
+        app.status
+    );
+    let screen = app::screen(&mut app, 150, 45);
+    assert!(screen.contains("Split into subfolders"), "{screen}");
+    press(&mut app, &["<enter>"]);
+    assert!(
+        matches!(&app.dialog, app::Dialog::RenameLabel(old, _) if old == "Grant"),
+        "{}",
+        app.status
+    );
+}
+
+#[test]
 fn r_renames_the_label_picked_on_its_server() {
     let mut app = demo_map();
     pick_subject(&mut app, "Letter of support, signed");

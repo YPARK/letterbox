@@ -56,13 +56,7 @@ impl App {
                 },
             );
         }
-        let what = match (flag, on) {
-            (Flag::Seen, true) => "read",
-            (Flag::Seen, false) => "unread",
-            (Flag::Flagged, true) => "flagged",
-            (Flag::Flagged, false) => "unflagged",
-            (Flag::Answered, _) => "answered",
-        };
+        let what = flag.said(on);
         self.status = format!("{} marked {what}", dots.len());
         true
     }

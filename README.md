@@ -179,7 +179,7 @@ letterbox search grant report --account Work
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, and the list closes, saying so below; `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
-| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: asked first, how many carry it and where, and never onto a label there is. A right-click on a label's anchor on the map offers it too, with splitting it and removing it, as [the map](#the-map) says. `C-x u` undoes each |
+| `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: down at a message, its cluster's renamed, split into subfolders or removed, as a right-click on its anchor offers too and [the map](#the-map) says; on the clusters, only renamed. Asked first, how many carry it and where, and never renamed onto a label there is. `C-x u` undoes each |
 | `D` | remove the account picked in the sidebar, or the one listed |
 | `M` | the map: every account's mail laid out by what it is about and who it is from; or back to the list from it, of what the sidebar picks: a folder, a label, a cluster, or every cluster. Or click Map or List at the top |
 | `z` / `Z` / `0` | in the map, into the block picked, its parts a mosaic too, or out a level; `0` all the clusters. The wheel too, up over a block and down |
@@ -517,10 +517,10 @@ label instead. Several are acted on together in the list, or in the
 Inbox looked through, selected with the mouse, and asked first.
 
 On the clusters, a label is changed whole, by a right-click on its
-anchor, `↑` `↓` and `⏎`; each shown first, done only on `y`, and undone
-by `C-x u`:
+anchor, or `R` down at a message of it, then `↑` `↓` and `⏎`; each
+shown first, done only on `y`, and undone by `C-x u`:
 
-- **Rename…**, as `R`: never onto a label there is.
+- **Rename…**, as `R` on the clusters: never onto a label there is.
 - **Split into subfolders…**: its mail, twelve or more, in parts by what
   each is about, as a cluster gone into is, each a subfolder named by
   the two words most its own, `⏎` typing a name over. On a server of
@@ -542,7 +542,8 @@ as `d` puts one, to be put back from there. A copy refused, or not found
 where it went, leaves the original where it was; each is followed till
 confirmed, and what fails is said, as for the rest. Once a message is filed, the message read says what would go to
 the label too: `y` files the first, `Y` all of them, and `-` says the
-first is not one, which the map learns from. `R` renames a label.
+first is not one, which the map learns from. `R` renames a label, or,
+down at a message, splits or removes it too.
 
 Labels are flat: a message may have several, and a label of one name is
 the same label on every account. Folders are labels, every level of

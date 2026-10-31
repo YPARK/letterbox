@@ -391,7 +391,7 @@ pub const KEYS: &[Binding] = &[
         name: "R",
         hint: "R",
         foot: &[(Side, "rename")],
-        help: "rename an account: the one picked in the sidebar, else the one listed; in the map, the label picked, asked first. A right-click on a label's anchor: rename, split, remove",
+        help: "rename an account: the one picked in the sidebar, else the one listed; in the map, the label picked, asked first: down at a message, its cluster's renamed, split into subfolders or removed, as a right-click on a label's anchor offers; on the clusters, renamed",
     },
     Binding {
         keys: &[("D", Remove)],

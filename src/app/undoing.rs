@@ -33,6 +33,20 @@ pub(super) struct Before {
     passes: u8,
 }
 
+/// The message C-x u put back, alone: picked in the list once it is
+/// listed again where it was, soon, and unless a key or the mouse comes
+/// first.
+#[derive(Debug)]
+pub(super) struct PickBack {
+    pub a: usize,
+    pub folder: String,
+    pub message_id: String,
+    pub at: std::time::Instant,
+}
+
+/// How long a message put back is waited for, to be picked.
+pub(super) const PICK_BACK: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What was last moved together, for C-x u: when the key that moved it
 /// was pressed, each as it was, and how many letterbox did not know.
 #[derive(Debug, Default)]
@@ -267,6 +281,7 @@ impl App {
         let mut done: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
         let mut waiting = Vec::new();
         let mut gone = 0;
+        let mut back_to = None;
         {
             let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
             for b in moves.before {
@@ -312,6 +327,12 @@ impl App {
                 }
                 asks.extend(back.into_iter().map(|ask| (b.a, ask)));
                 done.insert(b.key.clone());
+                back_to = (!b.message_id.is_empty()).then(|| PickBack {
+                    a: b.a,
+                    folder: b.folder.clone(),
+                    message_id: b.message_id.clone(),
+                    at: std::time::Instant::now(),
+                });
             }
             drop(index);
         }
@@ -342,6 +363,8 @@ impl App {
         for (a, ask) in asks {
             self.ask_quietly(a, ask);
         }
+        // One put back: picked once it is listed again.
+        self.pick_back = back_to.filter(|_| done.len() == 1);
         let mut said = match done.len() {
             1 => "1 put back as it was".to_string(),
             n => format!("{n} put back as they were"),

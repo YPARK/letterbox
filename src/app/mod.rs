@@ -393,6 +393,8 @@ pub struct App {
     /// A move remembered since the key pressed last: the rest of its are
     /// remembered with it.
     moves_begun: bool,
+    /// The message C-x u put back, to be picked once it is listed again.
+    pick_back: Option<undoing::PickBack>,
     /// Moves not to remember: those that put back.
     quiet_moves: bool,
     /// A server's answer is taken: what it asks follows it, not a key, and
@@ -727,6 +729,7 @@ impl App {
             },
             undoable: undoing::Moves::default(),
             moves_begun: false,
+            pick_back: None,
             quiet_moves: false,
             replying: false,
             input_at: 0,

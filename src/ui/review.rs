@@ -5,18 +5,16 @@ use super::*;
 /// The Inbox looked through, beside the map: each message, newest first,
 /// with what may be done with it, what will be done lit; and a button that
 /// does it all.
-pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) -> Option<u16> {
     use crate::app::Choice;
     let t = app.theme;
     let focused = app.focus == Focus::Reader;
     f.render_widget(Block::new().style(Style::new().bg(t.page)), area);
     app.targets.push((area, Target::Reader));
     if area.height < 4 || area.width < 24 {
-        return;
+        return None;
     }
-    let Some(s) = app.map.snapshot.clone() else {
-        return;
-    };
+    let s = app.map.snapshot.clone()?;
     let rows = app.review_rows();
     let picked = app
         .review
@@ -90,7 +88,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             usize::from(width),
             Style::new().fg(t.dim),
         );
-        return;
+        return None;
     }
     // Two lines a message; what is seen moves to keep the one picked in it.
     let room = usize::from(area.height.saturating_sub(3)) / 2;
@@ -246,9 +244,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
         }
         y += 2;
     }
-    if let Some(under) = menu_at {
-        label_menu(f, app, area, under);
-    }
+    menu_at
 }
 
 /// The labels a message may be moved to, dropped down under it in the

@@ -171,3 +171,23 @@ fn what_was_brought_to_another_account_is_not_left_in_both_by_c_x_u() {
         app.status
     );
 }
+
+#[test]
+fn one_archived_from_the_list_is_picked_again_once_put_back() {
+    let mut app = demo();
+    let subject = app.current().unwrap().summary.subject.clone();
+    press(&mut app, &["e"]);
+    app.settle(Duration::from_secs(5));
+    // The next read meanwhile: it is the one put back that is read after.
+    press(&mut app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+    assert_ne!(app.current().unwrap().summary.subject, subject);
+    undo(&mut app);
+    assert_eq!(
+        app.current().unwrap().summary.subject,
+        subject,
+        "{}",
+        app.status
+    );
+    assert_eq!(app.message().unwrap().subject, subject, "the one read");
+}

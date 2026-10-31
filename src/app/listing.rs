@@ -695,8 +695,24 @@ impl App {
                 .collect(),
             (_, None) => Vec::new(),
         };
-        let at = picked
-            .and_then(|(a, f, u)| self.shown.iter().position(|m| m.is(a, &f, u)))
+        let back = self
+            .pick_back
+            .as_ref()
+            .filter(|b| b.at.elapsed() < super::undoing::PICK_BACK)
+            .and_then(|b| {
+                self.shown.iter().position(|m| {
+                    m.account == b.a && m.folder == b.folder && m.summary.message_id == b.message_id
+                })
+            });
+        if back.is_some() {
+            self.pick_back = None;
+            // Read, as what is picked is, rather than another left read.
+            if self.side_by_side || self.reading.is_some() {
+                self.due = Some((Instant::now(), Due::Message));
+            }
+        }
+        let at = back
+            .or_else(|| picked.and_then(|(a, f, u)| self.shown.iter().position(|m| m.is(a, &f, u))))
             .or(self.list.selected())
             .unwrap_or(0);
         self.list
@@ -768,6 +784,7 @@ impl App {
             Flag::Answered => !s.flags.answered,
         };
         self.set(flag, on);
+        self.status = format!("marked {}", flag.said(on));
     }
 
     /// The message read, if it has come.

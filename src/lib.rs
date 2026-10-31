@@ -100,6 +100,8 @@ fn command(args: &Args) -> anyhow::Result<()> {
             app.grammar_model = args.grammar.clone();
             if args.demo {
                 app.fix_accounts();
+                *app.library.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(Box::new(demo::shelf()));
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
@@ -482,6 +484,8 @@ fn command(args: &Args) -> anyhow::Result<()> {
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
                 app.fix_accounts();
+                *app.library.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(Box::new(demo::shelf()));
             }
             app.settle(Duration::from_secs(30));
             for key in keys.iter().flat_map(|k| app::keys(k)) {

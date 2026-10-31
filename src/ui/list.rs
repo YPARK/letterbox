@@ -359,7 +359,9 @@ pub(super) fn folder_row(t: Theme, width: usize, row: FolderRow) -> ListItem<'st
     ]))
 }
 
-pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
+/// The list of messages; the row of the message picked, where it is in
+/// sight, for the labels to drop down under.
+pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) -> Option<u16> {
     let t = app.theme;
     let focused = app.focus == Focus::List;
     let block = Block::new()
@@ -373,7 +375,7 @@ pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
     if app.shown.is_empty() {
         f.render_widget(block, area);
         empty(f, app, inner);
-        return;
+        return None;
     }
     // A column for the mark of the message picked; four lines a message.
     let width = (inner.width as usize).saturating_sub(1);
@@ -504,12 +506,7 @@ pub(super) fn messages(f: &mut Frame, app: &mut App, area: Rect) {
         }
         app.targets.push((row, Target::Message(top + at)));
     }
-    // The labels it may be moved to, dropped down under it.
-    if app.menu.is_some()
-        && let Some(under) = picked_at
-    {
-        label_menu(f, app, area, under);
-    }
+    picked_at
 }
 
 /// What an empty list says: how to set up an account, that the account is

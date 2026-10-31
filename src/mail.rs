@@ -2,6 +2,7 @@
 //! message's summary, as listed; and a message read whole. Messages are
 //! parsed from their RFC 5322 bytes, whatever store they came from.
 
+use mail_parser::decoders::html::html_to_text;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use serde::{Deserialize, Serialize};
 
@@ -361,7 +362,7 @@ pub fn message(uid: u32, raw: Vec<u8>) -> anyhow::Result<Message> {
         .then(|| m.body_html(0).map(|h| h.into_owned()))
         .flatten();
     let attachments = m.attachments().map(attachment).collect();
-    let text = m.body_text(0).map(|t| body(&t)).unwrap_or_default();
+    let text = plain(&m).map(|t| body(&t)).unwrap_or_default();
     let links = links(&text, html.as_deref());
     let message = Message {
         uid,
@@ -506,6 +507,111 @@ fn phrase(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// A message's text: its plain text, else its HTML read in lines, a line
+/// for each heading, block and row.
+fn plain<'x>(m: &'x mail_parser::Message<'x>) -> Option<std::borrow::Cow<'x, str>> {
+    match m.text_part(0).map(|p| &p.body) {
+        Some(PartType::Html(h)) => Some(html_to_text(&blocks(h)).into()),
+        _ => m.body_text(0),
+    }
+}
+
+/// The tags of HTML that begin and end a line of it read as text:
+/// mail-parser ends one only at `<br>` and `</p>`.
+const BLOCKS: &[&str] = &[
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "tr",
+    "table",
+    "ul",
+    "ol",
+    "blockquote",
+    "pre",
+    "hr",
+    "section",
+    "article",
+    "header",
+    "footer",
+];
+
+/// What mail-parser leaves out of the text, nothing in it read.
+const UNREAD: &[&str] = &["head", "script", "style", "template"];
+
+/// `html` with a `<br>` at each tag of a block, begun or ended, but where
+/// a line has just ended, and none in what is not read.
+fn blocks(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    let mut unread: Option<&str> = None;
+    // A line just ended, or nothing written yet: no line more.
+    let mut ended = true;
+    while let Some(at) = rest.find('<') {
+        let Some(end) = tag_end(&rest[at..]).map(|e| at + e) else {
+            break;
+        };
+        let text = &rest[..at];
+        ended &= text.trim().is_empty();
+        out.push_str(text);
+        let tag = &rest[at + 1..end - 1];
+        let closing = tag.starts_with('/');
+        let name = tag
+            .trim_start_matches('/')
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("");
+        match unread {
+            Some(u) => {
+                if closing && name.eq_ignore_ascii_case(u) {
+                    unread = None;
+                }
+            }
+            None => {
+                if !closing && let Some(u) = UNREAD.iter().find(|u| u.eq_ignore_ascii_case(name)) {
+                    unread = Some(u);
+                } else if BLOCKS.iter().any(|b| b.eq_ignore_ascii_case(name)) && !ended {
+                    out.push_str("<br>");
+                    ended = true;
+                } else if name.eq_ignore_ascii_case("br")
+                    || closing && name.eq_ignore_ascii_case("p")
+                {
+                    ended = true;
+                }
+            }
+        }
+        out.push_str(&rest[at..end]);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Where the tag `s` begins with ends, past its `>`: a comment at its
+/// `-->`, else at the first `>` outside an attribute's quotes.
+fn tag_end(s: &str) -> Option<usize> {
+    if s.starts_with("<!--") {
+        return s.find("-->").map(|e| e + 3);
+    }
+    let (mut quote, mut last) = (None, ' ');
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') if last == '=' => quote = Some(c),
+            (None, '>') => return Some(i + 1),
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = c;
+        }
+    }
+    None
 }
 
 /// A message's text, its lines ended alike, without the blank lines it ends

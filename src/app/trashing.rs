@@ -365,6 +365,7 @@ impl App {
     /// Take each of `gone`, by account, folder and UID, out of what is
     /// listed, and out of the reader; what is shown narrowed once, after.
     pub(super) fn drop_all_listed(&mut self, gone: &[(usize, String, u32)]) {
+        let mut read_gone = false;
         for (account, folder, uid) in gone {
             let (account, uid) = (*account, *uid);
             if let Some(listing) = self
@@ -392,10 +393,16 @@ impl App {
             {
                 self.reading = None;
                 self.drawn = None;
+                read_gone = true;
             }
         }
         if !gone.is_empty() {
             self.narrow();
+        }
+        // The message read gone, the next is read in its place: what is
+        // on screen is what the next key acts on, never one unseen.
+        if read_gone && self.focus == Focus::Reader && self.map.mode == Mode::List {
+            self.read_picked();
         }
     }
 

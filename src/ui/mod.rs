@@ -164,11 +164,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if side_w > 0 {
         sidebar(f, app, side);
     }
+    // Where the labels drop down: under the message's row, where it is in
+    // sight; else over the message read, at its top.
+    let mut menu_under = None;
     if list_w > 0 {
         if app.map.mode == crate::map::Mode::Map {
             map_pane(f, app, list);
         } else {
-            messages(f, app, list);
+            menu_under = messages(f, app, list).map(|y| (list, y));
         }
     }
     let edge = if popup {
@@ -184,13 +187,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         Borders::LEFT
     };
-    if read.width > 0 && read.height > 0 {
+    let reading = !read.is_empty();
+    if reading {
         if app.map.mode == crate::map::Mode::Map && app.review.as_ref().is_some_and(|r| !r.reading)
         {
-            review_pane(f, app, read);
+            menu_under = review_pane(f, app, read).map(|y| (read, y));
         } else {
             reader(f, app, read, edge);
         }
+    }
+    if app.menu.is_some() {
+        let over = if reading { read } else { main };
+        let (area, under) = menu_under.unwrap_or((over, over.y));
+        label_menu(f, app, area, under);
     }
     // The line before the message, to drag: it and a column either side,
     // as one alone is hard to hit; below the list, its line alone.

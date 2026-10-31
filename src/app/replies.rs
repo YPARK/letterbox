@@ -372,6 +372,10 @@ impl App {
                 let result: Result<(), String> = filed.as_ref().map(|_| ()).map_err(Clone::clone);
                 let landed = filed.as_ref().map(|f| f.moved.clone()).map_err(|_| ());
                 self.move_answered(a, &folder, uid, landed);
+                if result.is_ok() {
+                    // Out of it: what it holds, and holds unread, counted again.
+                    self.ask(a, Ask::Count(folder.clone()));
+                }
                 self.filed(a, key, label, filed);
                 self.took(
                     a,
@@ -393,6 +397,7 @@ impl App {
                 self.move_answered(a, &folder, uid, landed);
                 match &result {
                     Ok(()) => {
+                        self.ask(a, Ask::Count(folder.clone()));
                         self.reload(a);
                         self.map_pass(a);
                     }

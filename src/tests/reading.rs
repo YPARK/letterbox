@@ -185,6 +185,47 @@ fn html_only_mail_is_read_as_text() {
 }
 
 #[test]
+fn html_only_mail_has_a_line_for_each_heading_and_block() {
+    let m = mail::message(
+        1,
+        raw(
+            "a@b.c",
+            "Alert",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "<h3><a href=\"x\">A title</a></h3><DIV style=\"c\">Who - Nature</DIV>\
+             <div>What it found</div><ul><li>one</li><li>two</li></ul>",
+        ),
+    )
+    .unwrap();
+    let lines: Vec<&str> = m.text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        lines,
+        ["A title", "Who - Nature", "What it found", "one", "two"],
+        "{:?}",
+        m.text
+    );
+    // Before a block begun too, and none in what is not read.
+    let m = mail::message(
+        1,
+        raw(
+            "a@b.c",
+            "More",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "<head><style>p{}</style></head><script>x='</div>'</script>Intro<h3>Title</h3>\
+             <ul><li>one<li>two</ul><div>Body</div><!-- </div> -->End",
+        ),
+    )
+    .unwrap();
+    let lines: Vec<&str> = m.text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        lines,
+        ["Intro", "Title", "one", "two", "Body", "End"],
+        "{:?}",
+        m.text
+    );
+}
+
+#[test]
 fn text_is_wrapped_to_the_width() {
     assert_eq!(
         ui::wrap("one two three four", 9),

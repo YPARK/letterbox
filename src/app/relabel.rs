@@ -18,7 +18,7 @@ pub enum Last {
 }
 
 impl App {
-    /// A right-click on a cluster's anchor: what may be done with it.
+    /// A right-click on a cluster's anchor, or R: what may be done with it.
     pub(super) fn cluster_menu(&mut self, id: u32) {
         let label = self
             .map
