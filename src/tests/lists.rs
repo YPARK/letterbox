@@ -198,7 +198,7 @@ fn an_arxiv_listing_in_text_gives_its_papers() {
     );
 }
 
-pub(super) use crate::demo::Shelf;
+pub(super) use crate::demo::shelf::Shelf;
 
 #[test]
 fn a_paper_is_in_your_library_like_what_you_starred_or_new() {
