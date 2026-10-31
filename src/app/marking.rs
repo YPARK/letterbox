@@ -253,7 +253,7 @@ impl App {
         let was = s.faithfulness.unwrap_or(0.0);
         let nearer = map::nearer(faith, was);
         if !nearer {
-            self.map.tried = Some(was);
+            self.map.tried = Some(map::Tried::new(&s, was));
         }
         self.status = format!(
             "laid out again, {moved} moved, {:.0}% faithful{}: ⏎ keeps it, esc drops it",

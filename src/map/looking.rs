@@ -44,9 +44,9 @@ pub struct Map {
     pub preview: Option<Vec<Point>>,
     /// Whether it is being laid out again.
     pub relaying: bool,
-    /// How faithful the map was when laying it out again came out no
-    /// nearer: M-r is not offered again while it is so.
-    pub tried: Option<f32>,
+    /// The map laid out again that came out no nearer: M-r is not offered
+    /// again while it is so, nor for it, kept, drawn again.
+    pub tried: Option<Tried>,
     /// The messages that hold what is searched for, as last found.
     pub hits: Option<Hits>,
     /// The blocks drawn: a cluster's number, or a part's place, their
@@ -77,6 +77,31 @@ pub type Tiled = (
     Option<(u32, Vec<usize>)>,
     Option<usize>,
 );
+
+/// A map laid out again that came out no nearer: how faithful it was, by
+/// which lens, and of which messages.
+#[derive(Clone, Debug)]
+pub struct Tried {
+    pub faith: f32,
+    pub lens: Lens,
+    pub keys: Vec<Key>,
+}
+
+impl Tried {
+    pub fn new(s: &Snapshot, faith: f32) -> Self {
+        Self {
+            faith,
+            lens: s.lens,
+            keys: s.model.keys.clone(),
+        }
+    }
+
+    /// Whether `s` is the map tried: by the same lens, of the same
+    /// messages.
+    pub fn of(&self, s: &Snapshot) -> bool {
+        self.lens == s.lens && self.keys == s.model.keys
+    }
+}
 
 /// A cluster looked at as its tree.
 #[derive(Clone, Debug)]
@@ -109,7 +134,7 @@ impl Map {
     /// Whether the map, `faith` faithful, is no nearer than it was when
     /// laying it out again came out no nearer.
     pub fn no_nearer(&self, faith: f32) -> bool {
-        self.tried.is_some_and(|t| !nearer(faith, t))
+        self.tried.as_ref().is_some_and(|t| !nearer(faith, t.faith))
     }
 
     /// All of the map: every cluster, out of any gone into.

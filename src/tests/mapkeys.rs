@@ -146,6 +146,19 @@ fn m_r_is_not_offered_again_when_it_came_out_no_nearer() {
 }
 
 #[test]
+fn no_nearer_is_not_said_of_the_map_turned_after() {
+    let mut app = demo_map();
+    press(&mut app, &["<m-r>"]);
+    assert!(app.status.contains("no nearer"), "{}", app.status);
+    press(&mut app, &["<esc>"]);
+    // Turned to another lens and back: not the map laid out again.
+    press(&mut app, &[",", "w", "w", "w", "<esc>"]);
+    assert!(app.map.tried.is_none());
+    let screen = app::screen(&mut app, 170, 45);
+    assert!(!screen.contains("laid out again, no nearer"), "{screen}");
+}
+
+#[test]
 fn a_word_is_cut_from_what_is_typed_in_a_prompt() {
     let mut app = demo_map();
     press(&mut app, &["k", "k", "R"]);

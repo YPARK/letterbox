@@ -273,6 +273,7 @@ impl App {
                     crate::index::Lens::Words => crate::index::Lens::People,
                     crate::index::Lens::People => crate::index::Lens::Both,
                 };
+                self.map.tried = None;
                 format!("the map laid out by {}", self.map.lens.name())
             }
             Act::Since => {
@@ -774,6 +775,11 @@ impl App {
             self.map.preview = (old.lens == snapshot.lens)
                 .then(|| map::onto(&snapshot, &old.model.keys, &p))
                 .flatten();
+        }
+        // Laid out again no nearer, it was of other messages, or another
+        // lens: this map is not the one tried.
+        if self.map.tried.as_ref().is_some_and(|t| !t.of(&snapshot)) {
+            self.map.tried = None;
         }
         self.map.snapshot = Some(Arc::new(snapshot));
         if self.map.mode == Mode::Map {
