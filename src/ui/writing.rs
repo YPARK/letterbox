@@ -59,22 +59,18 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     ];
     // Each with its keys where there is room, else its name alone.
     let title_end = area.x + 2 + format!(" From {from} ").width() as u16;
-    let fits = |said: &[String]| {
-        let width: u16 = said.iter().map(|s| s.width() as u16 + 1).sum();
-        (area.right() >= title_end + width + 3).then_some(width)
-    };
-    let mut said: Vec<String> = buttons
+    let row_width = |said: &Vec<String>| said.iter().map(|s| s.width() + 1).sum::<usize>();
+    let with_keys: Vec<String> = buttons
         .iter()
         .map(|(what, key, ..)| format!(" {what}  {key} "))
         .collect();
-    if fits(&said).is_none() {
-        said = buttons
-            .iter()
-            .map(|(what, ..)| format!(" {what} "))
-            .collect();
-    }
-    if let Some(width) = fits(&said) {
-        let mut x = area.right() - 2 - width;
+    let by_name: Vec<String> = buttons
+        .iter()
+        .map(|(what, ..)| format!(" {what} "))
+        .collect();
+    let room = usize::from(area.right().saturating_sub(title_end + 3));
+    if let Some(said) = first_fitting([with_keys, by_name], room, row_width) {
+        let mut x = area.right() - 2 - row_width(&said) as u16;
         let buf = f.buffer_mut();
         for ((_, key, bg, fg), said) in buttons.iter().zip(&said) {
             let w = said.width() as u16;
@@ -271,15 +267,19 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
     if guide_h > 0 {
         let say = Style::new().fg(t.dim);
         let room = usize::from(guide.width).saturating_sub(2);
-        let mut hints = vec![
+        let keys = [
             ("C-c C-c", "send"),
             ("C-c C-a", "attach"),
             ("C-c C-k", "discard"),
-            ("C-g", "stops, never losing it"),
         ];
-        if fitting(&hints, room, false).len() < hints.len() {
-            hints[3].1 = "stops";
-        }
+        // C-g's said in full where all of them fit so.
+        let hints = first_fitting(
+            [("C-g", "stops, never losing it"), ("C-g", "stops")]
+                .map(|g| [&keys[..], &[g]].concat()),
+            room,
+            |h| keyed_width(h),
+        )
+        .unwrap_or_else(|| [&keys[..], &[("C-g", "stops")]].concat());
         let mut first = vec![Span::raw("  ")];
         first.extend(keyed(
             &t,
@@ -288,21 +288,18 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
             guide.y,
             &mut spots,
         ));
-        // Whole sentences, those said least left out to fit; F1 always.
-        let mut told = vec![
-            "C-c is Ctrl+c, so C-c C-c is Ctrl+c twice.",
-            "The arrows move.",
-            "F1: every key.",
-        ];
-        for least in [
-            "The arrows move.",
-            "C-c is Ctrl+c, so C-c C-c is Ctrl+c twice.",
-        ] {
-            if told.join(" ").width() <= room {
-                break;
-            }
-            told.retain(|s| *s != least);
-        }
+        // Whole sentences, those said least, last, left out to fit; F1
+        // always.
+        let f1 = "F1: every key.";
+        let told = drop_to_fit(
+            vec![
+                "C-c is Ctrl+c, so C-c C-c is Ctrl+c twice.",
+                "The arrows move.",
+                f1,
+            ],
+            |s| *s == f1,
+            |told| told.join(" ").width() <= room,
+        );
         let second = format!("  {}", told.join(" "));
         if let (Some(at), Some(f1)) = (second.find("F1"), keymap::key_named("F1")) {
             let x = guide.x + second[..at].width() as u16;
@@ -426,25 +423,21 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Of `items`, those that fit in `room` columns as `keyed` lays them out:
-/// those at the end left out first, but the last if `keep_last`.
+/// those at the end left out first, but the last if `keep_last`, while
+/// it fits alone.
 fn fitting<'a>(
     items: &[(&'a str, &'a str)],
     room: usize,
     keep_last: bool,
 ) -> Vec<(&'a str, &'a str)> {
-    let wide = |v: &[(&str, &str)]| -> usize {
-        let w: usize = v.iter().map(|(k, what)| k.width() + what.width() + 5).sum();
-        // The spaces after the last are not needed.
-        w.saturating_sub(3)
-    };
-    let mut out = items.to_vec();
-    while !out.is_empty() && wide(&out) > room {
-        let at = if keep_last && out.len() > 1 {
-            out.len() - 2
-        } else {
-            out.len() - 1
-        };
-        out.remove(at);
+    let last = items.last().map(|(k, _)| *k).filter(|_| keep_last);
+    let out = drop_to_fit(
+        items.to_vec(),
+        |(k, _)| Some(*k) == last,
+        |v| keyed_width(v) <= room,
+    );
+    if keyed_width(&out) > room {
+        return Vec::new();
     }
     out
 }

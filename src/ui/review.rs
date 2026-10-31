@@ -76,9 +76,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) -> Option<u1
             format!(" {filed} to file · {discarded} to discard · {kept} to keep"),
         ]
     };
-    let counts = said
-        .iter()
-        .find(|c| c.width() <= usize::from(width))
+    let counts = first_fitting(&said, usize::from(width), |c| c.width())
         .or(said.last())
         .cloned()
         .unwrap_or_default();

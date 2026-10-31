@@ -133,14 +133,8 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
     };
     let mut list = keymap::foot(pane);
     in_context(app, pane, &mut list);
-    let mut lines = lay(&list, width);
-    while lines.len() > FOOT
-        && let Some(last) = list.iter().rposition(|h| !h.kept)
-    {
-        list.remove(last);
-        lines = lay(&list, width);
-    }
-    lines
+    let list = drop_to_fit(list, |h| h.kept, |l| lay(l, width).len() <= FOOT);
+    lay(&list, width)
 }
 
 /// The hints as each key does here: < and > left out where they size

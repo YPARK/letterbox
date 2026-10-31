@@ -24,21 +24,15 @@ pub(super) fn fit_foot(foot: &str, room: usize) -> String {
     if foot.width() <= room {
         return foot.to_string();
     }
-    let hints: Vec<&str> = foot.split(" · ").collect();
-    let esc = hints.iter().rposition(|h| h.starts_with("esc"));
-    let mut used = esc.map_or(0, |e| hints[e].width() + 3);
-    let mut kept = Vec::new();
-    for (i, hint) in hints.iter().enumerate() {
-        if Some(i) == esc {
-            continue;
-        }
-        if used + hint.width() + 3 > room + 3 {
-            break;
-        }
-        used += hint.width() + 3;
-        kept.push(*hint);
-    }
-    kept.extend(esc.map(|e| hints[e]));
+    let mut hints: Vec<&str> = foot.split(" · ").collect();
+    let esc = hints
+        .iter()
+        .rposition(|h| h.starts_with("esc"))
+        .map(|e| hints.remove(e));
+    hints.extend(esc);
+    // That one esc, by where it is in `foot`, not another like it.
+    let stays = |h: &&str| esc.is_some_and(|e| std::ptr::eq(*h, e));
+    let kept = drop_to_fit(hints, stays, |h| h.join(" · ").width() <= room);
     match kept.as_slice() {
         [] => clip(foot, room),
         _ => clip(&kept.join(" · "), room),

@@ -594,6 +594,41 @@ fn clip(s: &str, width: usize) -> String {
     out
 }
 
+/// Of `candidates`, longest first, the first that fits whole in `room`
+/// columns, as `width` measures each.
+fn first_fitting<T>(
+    candidates: impl IntoIterator<Item = T>,
+    room: usize,
+    width: impl Fn(&T) -> usize,
+) -> Option<T> {
+    candidates.into_iter().find(|c| width(c) <= room)
+}
+
+/// `items`, those at the end left out till they `fit`, but those that
+/// `stay`, never left out.
+fn drop_to_fit<T>(
+    mut items: Vec<T>,
+    stays: impl Fn(&T) -> bool,
+    fit: impl Fn(&[T]) -> bool,
+) -> Vec<T> {
+    while !fit(&items)
+        && let Some(at) = items.iter().rposition(|i| !stays(i))
+    {
+        items.remove(at);
+    }
+    items
+}
+
+/// How wide `items`, each a key and what it does, are as `keyed` lays
+/// them out, without the spaces after the last.
+fn keyed_width(items: &[(&str, &str)]) -> usize {
+    let w: usize = items
+        .iter()
+        .map(|(k, what)| k.width() + what.width() + 5)
+        .sum();
+    w.saturating_sub(3)
+}
+
 /// The end of `s`, as much as `width` columns show, `…` before it if it is
 /// cut: what is typed, its end in sight.
 fn tail(s: &str, width: usize) -> String {
