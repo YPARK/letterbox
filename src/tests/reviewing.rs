@@ -276,6 +276,10 @@ fn v_built_without_pages_says_how_to_have_them() {
 #[cfg(feature = "pages")]
 #[test]
 fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
+    // Its pages are written in the cache: none moves it meanwhile.
+    let _held = super::accounts::CACHE_AT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut app = demo();
     let noether = app
         .shown
@@ -310,6 +314,10 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
 #[cfg(feature = "pages")]
 #[test]
 fn i_shows_the_pages_with_the_pictures_from_elsewhere() {
+    // Its pages are written in the cache: none moves it meanwhile.
+    let _held = super::accounts::CACHE_AT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut app = demo();
     let noether = app
         .shown
@@ -356,6 +364,10 @@ fn pages_turn_as_far_as_there_are() {
 #[cfg(feature = "pages")]
 #[test]
 fn pages_are_made_to_fit_the_pane_whole() {
+    // Its pages are written in the cache: none moves it meanwhile.
+    let _held = super::accounts::CACHE_AT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let tall = image::RgbaImage::new(100, 200);
     let wide = image::RgbaImage::new(100, 50);
     let fitted = crate::pages::fit(vec![tall, wide], 100, 100);
@@ -385,6 +397,10 @@ pub(super) fn noether_paged() -> App {
 #[cfg(feature = "pages")]
 #[test]
 fn pages_are_of_the_message_read_and_let_go_once_another_is() {
+    // Its pages are written in the cache: none moves it meanwhile.
+    let _held = super::accounts::CACHE_AT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut app = noether_paged();
     // Of the same number in another folder: not its pages.
     app.paged.as_mut().unwrap().place.1 = "Archive".to_string();
@@ -418,6 +434,10 @@ fn pages_are_of_the_message_read_and_let_go_once_another_is() {
 #[cfg(feature = "pages")]
 #[test]
 fn v_while_its_pages_are_typeset_lets_them_go() {
+    // Its pages are written in the cache: none moves it meanwhile.
+    let _held = super::accounts::CACHE_AT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut app = demo();
     let noether = app
         .shown
