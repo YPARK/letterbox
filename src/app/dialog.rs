@@ -68,14 +68,9 @@ pub enum Item {
         size: usize,
     },
     /// A web address, and what it is called: the text it is linked from,
-    /// or where a redirect goes on to; and, as `link_label` says, what the
-    /// list shows of it and beside it.
-    Link {
-        url: String,
-        name: Option<String>,
-        shown: String,
-        beside: String,
-    },
+    /// or where a redirect goes on to. What is shown of it, `link_label`
+    /// says.
+    Link { url: String, name: Option<String> },
 }
 
 #[derive(Default)]

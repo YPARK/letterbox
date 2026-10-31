@@ -20,18 +20,22 @@ pub fn ohp_reads(name: &str) -> bool {
         .any(|e| name.ends_with(e))
 }
 
-/// A link as the files listed show it: its name, else its address; and
-/// beside it, named, the host it truly goes to, as a text may name another
-/// address than its own; then what opens it.
-pub(crate) fn link_label(url: &str, name: Option<&str>, what: &str) -> (String, String) {
+/// A link as the files listed show it: its name, else its address; beside
+/// it, named, the host it truly goes to, as a text may name another
+/// address than its own; and what opens it.
+pub(crate) fn link_label(url: &str, name: Option<&str>) -> (String, Option<String>, &'static str) {
+    let what = match crate::net::pdf_of(url) {
+        Some(_) => "PDF · ohp",
+        None => "browser",
+    };
     match name {
         Some(name) => {
             let to = crate::papers::unwrapped(url);
             let host = crate::papers::host_of(&to).unwrap_or(to);
-            let host = host.trim_start_matches("www.");
-            (name.to_string(), format!("{host} · {what}"))
+            let host = host.trim_start_matches("www.").to_string();
+            (name.to_string(), Some(host), what)
         }
-        None => (url.to_string(), what.to_string()),
+        None => (url.to_string(), None, what),
     }
 }
 
@@ -346,18 +350,9 @@ impl App {
             size: a.size,
         }));
         let names = mail::link_names(&m.links, m.html.as_deref());
-        items.extend(m.links.iter().zip(names).map(|(url, name)| {
-            let what = match crate::net::pdf_of(url) {
-                Some(_) => "PDF · ohp",
-                None => "browser",
-            };
-            let (shown, beside) = link_label(url, name.as_deref(), what);
-            Item::Link {
-                url: url.clone(),
-                name,
-                shown,
-                beside,
-            }
+        items.extend(m.links.iter().zip(names).map(|(url, name)| Item::Link {
+            url: url.clone(),
+            name,
         }));
         // On its first file, if it has one; else on the message itself.
         let at = if items.len() > 2 { 2 } else { 0 };

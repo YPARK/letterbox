@@ -390,8 +390,8 @@ const LINKS: usize = 200;
 /// around it.
 pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
-    let mut add = |url: &str| {
-        if let Some(url) = web_address(url)
+    let mut add = |url: Option<String>| {
+        if let Some(url) = url
             && !found.contains(&url)
             && found.len() < LINKS
         {
@@ -416,7 +416,7 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
         out
     };
     for w in words(text) {
-        add(&w);
+        add(web_address(&w));
     }
     if let Some(h) = html {
         let mut rest = h;
@@ -430,7 +430,7 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
                     .next()
                     .unwrap_or_default(),
             };
-            add(value.trim());
+            add(href_address(value));
             rest = from;
         }
     }
@@ -451,13 +451,20 @@ fn web_address(url: &str) -> Option<String> {
     (is_web(&url) && url.len() > 10).then(|| clean(&url))
 }
 
+/// The address an HTML link's `href` gives, its entities read, as `links`
+/// keeps it: one way for both `links` and `link_names`, so each finds the
+/// other's.
+fn href_address(href: &str) -> Option<String> {
+    web_address(&crate::papers::decode(href.trim()))
+}
+
 /// What each of `links` is called: the text of the first link to it in
 /// `html` that has any; else, behind a redirect, where it goes; else none.
 pub fn link_names(links: &[String], html: Option<&str>) -> Vec<Option<String>> {
     let anchors = html.map(crate::papers::anchors).unwrap_or_default();
     let mut named: std::collections::HashMap<String, String> = Default::default();
     for (href, inner, _) in &anchors {
-        let Some(url) = web_address(href.trim()) else {
+        let Some(url) = href_address(href) else {
             continue;
         };
         if named.contains_key(&url) {

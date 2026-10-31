@@ -98,7 +98,7 @@ pub fn in_message(from: &str, html: Option<&str>, text: &str) -> Vec<Paper> {
             if !titled(&title) {
                 continue;
             }
-            let link = unwrapped(&href);
+            let link = unwrapped(&decode(&href));
             let what = doi_of(&link)
                 .or_else(|| arxiv_of(&link).map(|id| format!("arXiv:{id}")))
                 .or_else(|| paper_host(&link).then(|| link.clone()))
@@ -140,8 +140,8 @@ pub fn fold(title: &str) -> String {
         .collect()
 }
 
-/// Each link of `html`: where it goes, what is inside it, and what follows
-/// it, up to the next link.
+/// Each link of `html`: where it goes, as its `href` is written, entities
+/// and all; what is inside it; and what follows it, up to the next link.
 pub(crate) fn anchors(html: &str) -> Vec<(String, String, String)> {
     let lower = html.to_ascii_lowercase();
     let mut out = Vec::new();
@@ -156,7 +156,7 @@ pub(crate) fn anchors(html: &str) -> Vec<(String, String, String)> {
         let href = attribute(&html[start..open_end], "href").unwrap_or_default();
         let inner = html[open_end + 1..close].to_string();
         let next = lower[close..].find("<a ").map_or(html.len(), |i| close + i);
-        out.push((decode(&href), inner, html[close + 4..next].to_string()));
+        out.push((href, inner, html[close + 4..next].to_string()));
         at = close + 4;
     }
     out
@@ -265,39 +265,20 @@ pub(crate) fn decode(s: &str) -> String {
     out
 }
 
-/// Google's own domains, whose redirects are followed: no other, however
-/// it is named.
-const GOOGLE: &[&str] = &[
-    "google.com",
-    "google.co.uk",
-    "google.ca",
-    "google.com.au",
-    "google.co.nz",
-    "google.ie",
-    "google.de",
-    "google.fr",
-    "google.es",
-    "google.it",
-    "google.nl",
-    "google.be",
-    "google.ch",
-    "google.at",
-    "google.se",
-    "google.no",
-    "google.dk",
-    "google.fi",
-    "google.pl",
-    "google.pt",
-    "google.co.jp",
-    "google.co.kr",
-    "google.co.in",
-    "google.com.sg",
-    "google.com.hk",
-    "google.com.tw",
-    "google.cn",
-    "google.com.br",
-    "google.com.mx",
-];
+/// Whether `host` is Google's own, whose redirects are followed: no other,
+/// however it is named. `google.com`, or a country's: `google.<cc>`,
+/// `google.com.<cc>` or `google.co.<cc>`, `<cc>` two letters.
+fn google(host: &str) -> bool {
+    let cc = |c: &str| c.len() == 2 && c.bytes().all(|b| b.is_ascii_alphabetic());
+    let Some(rest) = host.strip_prefix("google.") else {
+        return false;
+    };
+    match rest.split_once('.') {
+        None => rest == "com" || cc(rest),
+        Some(("com" | "co", c)) => cc(c),
+        _ => false,
+    }
+}
 
 /// The host `href` goes to, as a browser reads it: past any name and
 /// password before an `@`, without its port; none if it is not an address.
@@ -313,7 +294,7 @@ pub(crate) fn unwrapped(href: &str) -> String {
         return href.to_string();
     };
     let host = u.host_str().unwrap_or("");
-    let ours = |h: Option<&str>| h.is_some_and(|h| GOOGLE.contains(&h));
+    let ours = |h: Option<&str>| h.is_some_and(google);
     let keys: &[&str] = match (u.scheme(), u.path()) {
         ("http" | "https", "/scholar_url") if ours(host.strip_prefix("scholar.")) => &["url"],
         ("http" | "https", "/url") if ours(host.strip_prefix("www.")) || ours(Some(host)) => {
@@ -366,28 +347,32 @@ fn id_like(id: &str) -> bool {
         && (a.to_owned() + b).chars().all(|c| c.is_ascii_digit())
 }
 
-/// Whether `link` goes to where papers are kept.
-fn paper_host(link: &str) -> bool {
-    let rest = link
-        .strip_prefix("https://")
-        .or_else(|| link.strip_prefix("http://"))
-        .unwrap_or(link);
-    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+/// Whether `link` goes to where papers are kept: by its host as a browser
+/// reads it, the domain itself or one under it, and the path a host's
+/// entry names, if it names one.
+pub(crate) fn paper_host(link: &str) -> bool {
+    let Ok(u) = url::Url::parse(link) else {
+        return false;
+    };
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    let host = host.strip_prefix("www.").unwrap_or(host);
     // A journal's mail is sent through trackers of its own: they tell
     // nothing of where the paper is.
     if [
         "click.", "links.", "link.", "email.", "e.", "t.", "mail.", "track",
     ]
     .iter()
-    .any(|t| rest.starts_with(t))
+    .any(|t| host.starts_with(t))
     {
         return false;
     }
+    let path = u.path().trim_start_matches('/');
     PAPER_HOSTS.iter().any(|h| {
-        rest.starts_with(h)
-            || rest
-                .split_once('/')
-                .is_some_and(|(host, _)| host.ends_with(&format!(".{h}")))
+        let (domain, under) = h.split_once('/').unwrap_or((h, ""));
+        let on = host == domain || host.ends_with(&format!(".{domain}"));
+        on && (under.is_empty() || path == under || path.starts_with(&format!("{under}/")))
     })
 }
 

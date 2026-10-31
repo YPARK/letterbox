@@ -37,6 +37,10 @@ fn only_scholar_and_google_themselves_are_followed_through() {
         "https://scholar.google.com/scholar_url?url=https://bank.example/login&hl=en",
         "https://www.google.co.uk/url?q=https%3A%2F%2Fbank.example%2Flogin&sa=D",
         "https://google.com/url?url=https://bank.example/login",
+        "https://scholar.google.com.tr/scholar_url?url=https://bank.example/login",
+        "https://www.google.co.za/url?q=https://bank.example/login",
+        "https://www.google.ru/url?q=https://bank.example/login",
+        "https://google.ru/url?q=https://bank.example/login",
     ] {
         assert_eq!(crate::papers::unwrapped(href), to, "{href}");
     }
@@ -55,20 +59,39 @@ fn only_scholar_and_google_themselves_are_followed_through() {
 
 #[test]
 fn a_link_named_as_another_address_shows_where_it_truly_goes() {
-    let (said, kind) = crate::app::link_label(
+    let (said, host, what) = crate::app::link_label(
         "https://login.evil.example/x",
         Some("https://bank.example/login"),
-        "browser",
     );
     assert_eq!(said, "https://bank.example/login");
-    assert_eq!(kind, "login.evil.example · browser");
-    // Who it says it is, before an @, is not where it goes.
-    let (_, kind) = crate::app::link_label(
-        "https://bank.example@evil.example/x",
-        Some("Your bank"),
-        "browser",
+    assert_eq!(
+        (host.as_deref(), what),
+        (Some("login.evil.example"), "browser")
     );
-    assert_eq!(kind, "evil.example · browser");
+    // Who it says it is, before an @, is not where it goes.
+    let (_, host, _) =
+        crate::app::link_label("https://bank.example@evil.example/x", Some("Your bank"));
+    assert_eq!(host.as_deref(), Some("evil.example"));
+}
+
+#[test]
+fn a_long_host_beside_a_link_keeps_its_end_and_what_opens_it() {
+    let mut app = demo();
+    app.dialog = app::Dialog::Files(app::Files {
+        items: vec![app::Item::Link {
+            url: "https://www.paypal.com.cgi-bin.webscr.login-verify.example.ru/".to_string(),
+            name: Some("Your PayPal account".to_string()),
+        }],
+        at: 0,
+        note: None,
+        saving: false,
+    });
+    let screen = app::screen(&mut app, 80, 24);
+    let line = screen.lines().find(|l| l.contains('↗')).expect("listed");
+    assert!(
+        line.contains("login-verify.example.ru · browser") && line.contains("Your PayPal"),
+        "{line}"
+    );
 }
 
 #[test]
@@ -163,5 +186,37 @@ fn googles_redirect_is_gone_through_by_its_host_as_parsed() {
     assert_eq!(
         crate::papers::unwrapped("https://%67oogle.com/url?q=https://example.org/x"),
         "https://example.org/x"
+    );
+}
+
+#[test]
+fn a_paper_host_is_known_by_its_host_as_parsed() {
+    for link in [
+        "https://arxiv.org/abs/2410.01234",
+        "https://www.nature.com/articles/s41586-024-00001-x",
+        "https://ncbi.nlm.nih.gov/pmc/articles/PMC123456/",
+        "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123456/",
+    ] {
+        assert!(crate::papers::paper_host(link), "{link}");
+    }
+    for link in [
+        "https://arxiv.org.evil.example/abs/1",
+        "https://user@arxiv.org-x.com/abs/1",
+        "https://ncbi.nlm.nih.gov/pmcx/articles/1",
+        "https://ncbi.nlm.nih.gov/gene/1",
+        "https://notarxiv.org/abs/1",
+    ] {
+        assert!(!crate::papers::paper_host(link), "{link}");
+    }
+}
+
+#[test]
+fn a_link_written_with_any_entity_is_found_by_its_name() {
+    let html = "<a href=\"https://x.org/p?a&#61;1&amp;b=2\">Read the paper</a>";
+    let links = mail::links("", Some(html));
+    assert_eq!(links, ["https://x.org/p?a=1&b=2"]);
+    assert_eq!(
+        mail::link_names(&links, Some(html)),
+        [Some("Read the paper".to_string())]
     );
 }

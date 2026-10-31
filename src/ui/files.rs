@@ -9,6 +9,9 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
     let room = (width as usize).saturating_sub(4);
     let mut lines = vec![Line::raw("")];
     for (i, item) in files.items.iter().enumerate() {
+        // A link's host, cut from the left, keeps its end: the domain it
+        // truly goes to.
+        let mut host = None;
         let (icon, name, what) = match item {
             Item::Page => ("◳", "this message".to_string(), "browser".to_string()),
             Item::Present => ("◳", "this message".to_string(), "ohp".to_string()),
@@ -26,11 +29,24 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
                 };
                 ("▤", name.clone(), what)
             }
-            Item::Link { shown, beside, .. } => ("↗", shown.clone(), beside.clone()),
+            Item::Link { url, name } => {
+                let (shown, to, what) = crate::app::link_label(url, name.as_deref());
+                host = to;
+                ("↗", shown, what.to_string())
+            }
         };
         let here = i == files.at;
-        // The name has what the kind leaves.
-        let what = clip(&what, room / 2);
+        // The name has what the kind leaves. A host takes what it needs,
+        // the name given way to first, down to a little of it.
+        let what = match host {
+            Some(host) => {
+                let what = format!(" · {what}");
+                let least = name.width().min(room / 4);
+                let host_room = room.saturating_sub(what.width() + 4 + least);
+                format!("{}{what}", tail(&host, host_room))
+            }
+            None => clip(&what, room / 2),
+        };
         let name_room = room.saturating_sub(what.width() + 4);
         let name = clip(&name, name_room);
         let pad = name_room.saturating_sub(name.width());
