@@ -32,6 +32,7 @@ mod lists;
 mod mapsafety;
 mod mapscreen;
 mod moving;
+mod opening;
 mod passwords;
 mod placing;
 mod quitting;

@@ -142,7 +142,7 @@ pub fn fold(title: &str) -> String {
 
 /// Each link of `html`: where it goes, what is inside it, and what follows
 /// it, up to the next link.
-fn anchors(html: &str) -> Vec<(String, String, String)> {
+pub(crate) fn anchors(html: &str) -> Vec<(String, String, String)> {
     let lower = html.to_ascii_lowercase();
     let mut out = Vec::new();
     let mut at = 0;
@@ -188,7 +188,7 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
 }
 
 /// What `html` says, its tags taken out and its entities read.
-fn text_of(html: &str) -> String {
+pub(crate) fn text_of(html: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
     for c in html.chars() {
@@ -266,7 +266,7 @@ pub(crate) fn decode(s: &str) -> String {
 }
 
 /// Where `href` sends one on to, through Scholar's and Google's redirects.
-fn unwrapped(href: &str) -> String {
+pub(crate) fn unwrapped(href: &str) -> String {
     for (host, key) in [
         ("scholar.google.", "url="),
         ("www.google.", "q="),

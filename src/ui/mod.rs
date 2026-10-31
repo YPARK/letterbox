@@ -5,6 +5,7 @@
 
 mod blocks;
 mod dialogs;
+mod files;
 mod foot;
 mod form;
 mod list;
@@ -14,6 +15,7 @@ mod review;
 mod writing;
 use self::blocks::*;
 use self::dialogs::*;
+use self::files::*;
 use self::foot::*;
 use self::form::*;
 use self::list::*;
