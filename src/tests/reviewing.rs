@@ -749,7 +749,7 @@ fn what_is_asked_of_a_server_is_confirmed_once_the_mail_is_seen_so() {
     let mut batch = Batch::default();
     batch.ask(job(5, Goal::Archived));
     batch.answered(0, "INBOX", 5, Ok(()));
-    batch.trust(0);
+    batch.trust(0, false);
     assert_eq!(batch.jobs[0].state, State::Confirmed);
 }
 

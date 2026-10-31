@@ -85,11 +85,8 @@ impl App {
         {
             self.status = format!("✗ {} {}: {why}", j.subject, j.goal.said());
         }
-        if self.syncs.get(account).and_then(Option::as_ref).is_none() {
-            self.batch.trust(account);
-        } else {
-            self.batch.trust_unseen(account);
-        }
+        let looked_at = self.syncs.get(account).and_then(Option::as_ref).is_some();
+        self.batch.trust(account, looked_at);
         self.choose_again();
         self.say_settled();
     }
