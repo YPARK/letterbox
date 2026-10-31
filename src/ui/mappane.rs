@@ -118,13 +118,7 @@ pub(super) fn map_pane(f: &mut Frame, app: &mut App, area: Rect) {
             " laid out again, the blocks where they would be: ⏎ keeps it, esc drops it".to_string()
         }
         // Laid out again to no better, it is as faithful as it gets.
-        Some(faith)
-            if faith < 0.7
-                && app
-                    .map
-                    .tried
-                    .is_some_and(|t| faith <= t + crate::map::NEARER) =>
-        {
+        Some(faith) if faith < 0.7 && app.map.no_nearer(faith) => {
             format!(
                 " {:.0}% faithful: laid out again, no nearer; the blocks lie by those alike",
                 faith * 100.0

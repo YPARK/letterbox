@@ -6,7 +6,12 @@ use super::*;
 /// is looked at.
 pub(super) const FIRST_LOOK: i64 = 24 * 60 * 60;
 /// How much more faithful the map laid out again is to be, to be nearer.
-pub const NEARER: f32 = 0.01;
+const NEARER: f32 = 0.01;
+
+/// Whether a map `faith` faithful is nearer than one `was`.
+pub fn nearer(faith: f32, was: f32) -> bool {
+    faith > was + NEARER
+}
 
 /// The map as it is looked at.
 #[derive(Default)]
@@ -101,6 +106,12 @@ pub struct Region {
 }
 
 impl Map {
+    /// Whether the map, `faith` faithful, is no nearer than it was when
+    /// laying it out again came out no nearer.
+    pub fn no_nearer(&self, faith: f32) -> bool {
+        self.tried.is_some_and(|t| !nearer(faith, t))
+    }
+
     /// All of the map: every cluster, out of any gone into.
     pub fn zoom_all(&mut self) {
         self.tree = None;

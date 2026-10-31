@@ -251,7 +251,7 @@ impl App {
         let faith = crate::model::faithfulness(&s.model, &at);
         // No nearer than it was: said, and M-r not offered again for it.
         let was = s.faithfulness.unwrap_or(0.0);
-        let nearer = faith > was + map::NEARER;
+        let nearer = map::nearer(faith, was);
         if !nearer {
             self.map.tried = Some(was);
         }
