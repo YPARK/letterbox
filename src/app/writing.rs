@@ -83,7 +83,7 @@ pub(super) struct Pending {
     pub(super) folder: String,
     pub(super) uid: u32,
     pub(super) how: Respond,
-    /// A file to attach to it, as a copy signed in ohp.
+    /// A file to attach to it, once it is opened.
     pub(super) attach: Option<PathBuf>,
 }
 
@@ -105,10 +105,26 @@ impl App {
             return;
         };
         let (account, folder, uid) = (summary.account, summary.folder, summary.summary.uid);
+        self.respond_to(account, folder, uid, how, None);
+    }
+
+    /// Answer the message `uid` in `folder` of `account`, as `how` says,
+    /// `attach` attached; read first, if it is no longer.
+    pub(super) fn respond_to(
+        &mut self,
+        account: usize,
+        folder: String,
+        uid: u32,
+        how: Respond,
+        attach: Option<PathBuf>,
+    ) {
         // Answered, it is kept: learnt as not thrown away.
         self.teach_at(account, &folder, uid, false);
         if let Some(message) = self.cached(account, &folder, uid) {
             self.open_reply(account, &folder, &message, how);
+            if let Some(path) = attach {
+                self.attach(&[path]);
+            }
             return;
         }
         self.reply_when = Some(Pending {
@@ -116,7 +132,7 @@ impl App {
             folder: folder.clone(),
             uid,
             how,
-            attach: None,
+            attach,
         });
         self.status = "reading it first".to_string();
         self.ask(

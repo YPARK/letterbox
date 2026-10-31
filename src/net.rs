@@ -55,13 +55,13 @@ pub fn image(agent: &ureq::Agent, url: &str) -> Option<(String, Vec<u8>)> {
     Some((mime, bytes))
 }
 
-/// The address of the PDF a link stands for, where it is plain which: an
-/// arXiv paper's page, as its PDF; an address ending `.pdf`; else none.
 /// Whether `name` is a PDF's, by its extension.
 pub fn is_pdf(name: &str) -> bool {
     name.trim().to_lowercase().ends_with(".pdf")
 }
 
+/// The address of the PDF a link stands for, where it is plain which: an
+/// arXiv paper's page, as its PDF; an address ending `.pdf`; else none.
 pub fn pdf_of(url: &str) -> Option<String> {
     let bare = url.split(['?', '#']).next().unwrap_or(url);
     for page in ["arxiv.org/abs/", "arxiv.org/pdf/"] {

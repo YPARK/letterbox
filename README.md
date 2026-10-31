@@ -287,8 +287,9 @@ terminal. `o` lists the message's files, and `⏎` on the PDF presents it in
 [ohp](https://github.com/YPARK/ohp), one that signs; there `S` signs it:
 each click puts your signature, your name, the date, or a ✓ ✕ ● where it
 goes, on any page, and `esc` asks what to call the signed copy,
-`form-signed.pdf`, the `signed` picked to type over. ohp is told the
-file's own name, not the one letterbox keeps it under.
+`form-signed.pdf`, the `signed` picked to type over. letterbox keeps a
+message's files under their own names, in a folder of its own, so the
+copy is kept there beside it.
 
 Quit ohp, and letterbox asks whether to reply with it: `⏎` or `r` to the
 sender, `a` to all, the copy attached, under the name you gave it, the

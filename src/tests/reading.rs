@@ -386,9 +386,16 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         panic!("not for the system: {:?}", app.launch);
     };
     let uid = app.message().unwrap().uid;
-    assert_eq!(
-        text.file_name().unwrap().to_string_lossy(),
-        format!("{uid}-states.txt")
+    assert_eq!(text.file_name().unwrap(), "states.txt");
+    let place = text
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
+    assert!(
+        place.ends_with(&format!("-{uid}")),
+        "its message's own: {place}"
     );
     #[cfg(unix)]
     {
@@ -425,9 +432,10 @@ fn present_again(app: &mut App) -> (std::path::PathBuf, app::Presenting) {
 
 /// ohp, as it signs: the copy written at `copy`, and said to be.
 fn ohp_signs(presenting: &app::Presenting, copy: &std::path::Path) {
-    let env: std::collections::HashMap<_, _> = presenting.env().into_iter().collect();
     std::fs::write(copy, b"%PDF signed").unwrap();
-    let report = std::path::Path::new(&env["OHP_SIGNED"]);
+    let [(name, report)] = presenting.env();
+    assert_eq!(name, "OHP_SIGNED");
+    let report = std::path::Path::new(report);
     std::fs::create_dir_all(report.parent().unwrap()).unwrap();
     std::fs::write(report, format!("{}\n", copy.display())).unwrap();
 }
@@ -446,18 +454,14 @@ fn a_pdf_signed_in_ohp_is_replied_with_under_its_own_name() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     let mut app = demo();
     let (pdf, presenting) = turing_s_paper_in_ohp(&mut app);
-    // ohp is told the file's own name, not the one letterbox keeps it by.
-    let env: std::collections::HashMap<_, _> = presenting.env().into_iter().collect();
-    assert_eq!(env["OHP_AS"], "computable-numbers.pdf");
-    // ohp signs it, beside letterbox's own copy, as it names it.
+    // Kept under its own name, in its message's own folder.
+    assert_eq!(pdf.file_name().unwrap(), "computable-numbers.pdf");
+    // ohp signs it beside it, as it names it.
     let copy = pdf.with_file_name("computable-numbers-YP.pdf");
     ohp_signs(&presenting, &copy);
-    app.presented(presenting.clone());
+    app.presented(&presenting);
     assert!(!presenting.report.exists(), "read once");
-    let kept = signed(&app).path.clone();
-    assert!(!copy.exists(), "letterbox's own copy let go");
-    assert!(kept.is_file() && kept.starts_with(cache.path()));
-    assert_eq!(kept.file_name().unwrap(), "computable-numbers-YP.pdf");
+    assert_eq!(signed(&app).path, copy, "where ohp kept it");
     let shown = app::screen(&mut app, 120, 30);
     assert!(
         shown.contains("Reply all") && shown.contains("Save"),
@@ -467,9 +471,9 @@ fn a_pdf_signed_in_ohp_is_replied_with_under_its_own_name() {
     let compose = app.compose.as_ref().expect("a reply");
     let text = compose.buffer.text();
     assert!(text.starts_with("To: "), "{text}");
-    let attach = format!("Attach: {}", crate::compose::named(&kept));
+    let attach = format!("Attach: {}", crate::compose::named(&copy));
     assert!(text.lines().any(|l| l == attach), "{text}");
-    let file = crate::compose::read_file(&kept).unwrap();
+    let file = crate::compose::read_file(&copy).unwrap();
     assert_eq!(file.name, "computable-numbers-YP.pdf");
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }
@@ -482,7 +486,7 @@ fn signed_again_a_reply_is_offered_again_from_the_files_listed() {
     let mut app = demo();
     let (pdf, first) = turing_s_paper_in_ohp(&mut app);
     ohp_signs(&first, &pdf.with_file_name("computable-numbers-signed.pdf"));
-    app.presented(first.clone());
+    app.presented(&first);
     signed(&app);
     // Not now: back to the files it was opened from.
     press(&mut app, &["x"]);
@@ -496,32 +500,20 @@ fn signed_again_a_reply_is_offered_again_from_the_files_listed() {
         &second,
         &pdf.with_file_name("computable-numbers-signed.pdf"),
     );
-    app.presented(second);
+    app.presented(&second);
     assert!(signed(&app).path.is_file());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }
 
 #[test]
-fn copies_signed_are_kept_by_message_and_ohp_s_own_left_where_it_is() {
+fn a_message_s_files_are_kept_apart_from_another_folder_s_with_its_uid() {
     let cache = tempfile::tempdir().unwrap();
-    let elsewhere = tempfile::tempdir().unwrap();
     let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
-    let mut app = demo();
-    // The same uid in two folders: two messages, two copies.
-    let mut kept = Vec::new();
-    for folder in ["INBOX", "Projects/Grant"] {
-        let presenting = app::Presenting::new(0, folder, 7, "form.pdf");
-        let copy = elsewhere.path().join("form-signed.pdf");
-        ohp_signs(&presenting, &copy);
-        app.presented(presenting);
-        kept.push(signed(&app).path.clone());
-        // Kept where ohp said, outside letterbox's own.
-        assert!(copy.is_file());
-        app.dialog = app::Dialog::Closed;
-    }
-    assert_ne!(kept[0], kept[1]);
-    assert!(kept.iter().all(|k| k.is_file()));
+    let inbox = app::files_of(0, "INBOX", 7);
+    let grant = app::files_of(0, "Projects/Grant", 7);
+    assert_ne!(inbox, grant);
+    assert!(inbox.starts_with(cache.path()) && grant.parent() == inbox.parent());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }
 
@@ -533,14 +525,15 @@ fn a_signed_copy_is_saved_in_a_folder_picked() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     let mut app = demo();
     app.save_dir = Some(into.path().to_path_buf());
-    let presenting = app::Presenting::new(0, "INBOX", 7, "form.pdf");
+    let presenting = app::Presenting::new(0, "INBOX".into(), 7);
     ohp_signs(&presenting, &cache.path().join("form-YP.pdf"));
-    app.presented(presenting);
+    app.presented(&presenting);
     press(&mut app, &["s"]);
     assert!(signed(&app).saving.is_some(), "picking the folder");
-    // ⏎ on `.`: saved where the picker begins.
-    press(&mut app, &["<enter>"]);
+    // ⏎ on `.`: saved where the picker begins, twice under two names.
+    press(&mut app, &["<enter>", "s", "<enter>"]);
     assert!(into.path().join("form-YP.pdf").is_file());
+    assert!(into.path().join("form-YP (2).pdf").is_file());
     let note = signed(&app).note.clone().unwrap();
     assert!(note.starts_with("saved "), "{note}");
     // Still asked: replied with, or kept.
@@ -554,9 +547,9 @@ fn a_message_no_longer_read_is_read_first_to_reply_with_it_signed() {
     let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     let mut app = demo();
-    let presenting = app::Presenting::new(0, "INBOX", 4_000_000, "form.pdf");
+    let presenting = app::Presenting::new(0, "INBOX".into(), 4_000_000);
     ohp_signs(&presenting, &cache.path().join("form-signed.pdf"));
-    app.presented(presenting);
+    app.presented(&presenting);
     press(&mut app, &["r"]);
     assert_eq!(app.status, "reading it first");
     assert!(app.compose.is_none(), "not until it is read");
@@ -569,7 +562,7 @@ fn nothing_signed_in_ohp_offers_nothing() {
     let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     let mut app = demo();
-    app.presented(app::Presenting::new(0, "INBOX", 1, "form.pdf"));
+    app.presented(&app::Presenting::new(0, "INBOX".into(), 1));
     assert!(matches!(app.dialog, app::Dialog::Closed));
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }

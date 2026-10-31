@@ -433,12 +433,8 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 terminal.draw(|f| ui::draw(f, app))?;
             }
             if let Some(launch) = app.launch.take() {
-                let presenting = match &launch {
-                    Launch::Ohp(_, presenting) => presenting.clone(),
-                    _ => None,
-                };
-                app.status = carry_out(launch, &mut terminal);
-                if let Some(presented) = presenting {
+                app.status = carry_out(&launch, &mut terminal);
+                if let Launch::Ohp(_, Some(presented)) = &launch {
                     app.presented(presented);
                 }
                 terminal.clear()?;
@@ -482,7 +478,7 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
 }
 
 /// Do what `launch` asks, outside the screen; what to say of it.
-fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
+fn carry_out(launch: &Launch, terminal: &mut DefaultTerminal) -> String {
     match launch {
         Launch::Ohp(path, presenting) => {
             give_back();
@@ -490,14 +486,14 @@ fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
                 let _ = private_dir(dir);
             }
             let ran = std::process::Command::new("ohp")
-                .arg(&path)
+                .arg(path)
                 .envs(presenting.iter().flat_map(Presenting::env))
                 .status();
             *terminal = take();
             match ran {
                 Ok(s) if s.success() => String::new(),
                 Ok(s) => format!("ohp: {s}"),
-                Err(_) => match open(&path) {
+                Err(_) => match open(path) {
                     Ok(()) => {
                         "ohp is not installed (cargo install ohp): opened by the system".to_string()
                     }
@@ -505,18 +501,18 @@ fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
                 },
             }
         }
-        Launch::Open(path) => match open(&path) {
-            Ok(()) => format!("opened {}", tilde(&path)),
+        Launch::Open(path) => match open(path) {
+            Ok(()) => format!("opened {}", tilde(path)),
             Err(e) => format!("cannot open {}: {e:#}", path.display()),
         },
         Launch::Browse(url) => {
-            oauth::browse(&url);
+            oauth::browse(url);
             "opened in the browser".to_string()
         }
         Launch::Copy(text) => {
             // OSC 52: the terminal puts it on the clipboard, here or over ssh.
             use base64::Engine;
-            let code = base64::engine::general_purpose::STANDARD.encode(&text);
+            let code = base64::engine::general_purpose::STANDARD.encode(text);
             let _ = std::io::Write::write_all(
                 &mut std::io::stdout(),
                 format!("\x1b]52;c;{code}\x07").as_bytes(),
