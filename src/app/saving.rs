@@ -183,6 +183,12 @@ impl App {
     /// Pick the folder to save in, the files listed put by till it is:
     /// begun where the last was saved, else in the downloads folder.
     pub(super) fn pick_save_dir(&mut self, all: bool) {
+        self.save_dir_of_listed(all, true);
+    }
+
+    /// Pick the folder to save in, the files listed put by, and shown
+    /// again after if they were `listed`.
+    fn save_dir_of_listed(&mut self, all: bool, listed: bool) {
         let Dialog::Files(files) = std::mem::take(&mut self.dialog) else {
             return;
         };
@@ -191,7 +197,7 @@ impl App {
             picker: crate::pick::Picker::folder(dir),
             files,
             all,
-            listed: true,
+            listed,
             naming: None,
         }));
     }
@@ -200,10 +206,7 @@ impl App {
     /// from the message: let go, back to it.
     pub(super) fn save_all(&mut self) {
         self.list_to_save();
-        self.pick_save_dir(true);
-        if let Dialog::SaveTo(s) = &mut self.dialog {
-            s.listed = false;
-        }
+        self.save_dir_of_listed(true, false);
     }
 
     /// A key while the folder to save in is picked, or the name to save
