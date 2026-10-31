@@ -52,6 +52,8 @@ fn only_scholar_and_google_themselves_are_followed_through() {
         "https://www.google.com/search?q=https://bank.example/login",
         "https://www.google.com\\@evil.example/url?q=https://bank.example/login",
         "https://www.google.co.evil/url?q=https://bank.example/login",
+        "https://www.google.co.zz/url?q=https://bank.example/login",
+        "https://scholar.google.com.zz/scholar_url?url=https://bank.example/login",
     ] {
         assert_eq!(crate::papers::unwrapped(href), href, "{href}");
     }
@@ -219,4 +221,10 @@ fn a_link_written_with_any_entity_is_found_by_its_name() {
         mail::link_names(&links, Some(html)),
         [Some("Read the paper".to_string())]
     );
+}
+
+#[test]
+fn googles_domains_are_kept_sorted_to_be_searched() {
+    assert!(crate::papers::GOOGLE.is_sorted());
+    assert!(crate::papers::GOOGLE.len() > 180);
 }
