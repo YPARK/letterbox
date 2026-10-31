@@ -26,14 +26,7 @@ pub(super) fn files_dialog(f: &mut Frame, t: &Theme, files: &Files) -> (Rect, Ta
                 };
                 ("▤", name.clone(), what)
             }
-            Item::Link { url, name } => {
-                let what = match crate::net::pdf_of(url) {
-                    Some(_) => "PDF · ohp",
-                    None => "browser",
-                };
-                let (said, kind) = link_label(url, name.as_deref(), what);
-                ("↗", said, kind)
-            }
+            Item::Link { shown, beside, .. } => ("↗", shown.clone(), beside.clone()),
         };
         let here = i == files.at;
         // The name has what the kind leaves.
@@ -273,20 +266,5 @@ pub(super) fn folder(dir: &std::path::Path) -> String {
         named
     } else {
         format!("{named}/")
-    }
-}
-
-/// A link as the dialog shows it: its name, else its address; and beside
-/// it, named, the host it truly goes to, as a text may name another
-/// address than its own; then what opens it.
-pub(crate) fn link_label(url: &str, name: Option<&str>, what: &str) -> (String, String) {
-    match name {
-        Some(name) => {
-            let to = crate::papers::unwrapped(url);
-            let host = crate::papers::host_of(&to).unwrap_or(to);
-            let host = host.trim_start_matches("www.");
-            (name.to_string(), format!("{host} · {what}"))
-        }
-        None => (url.to_string(), what.to_string()),
     }
 }

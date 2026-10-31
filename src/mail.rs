@@ -451,17 +451,25 @@ fn web_address(url: &str) -> Option<String> {
 /// `html` that has any; else, behind a redirect, where it goes; else none.
 pub fn link_names(links: &[String], html: Option<&str>) -> Vec<Option<String>> {
     let anchors = html.map(crate::papers::anchors).unwrap_or_default();
+    let mut named: std::collections::HashMap<String, String> = Default::default();
+    for (href, inner, _) in &anchors {
+        let Some(url) = web_address(href.trim()) else {
+            continue;
+        };
+        if named.contains_key(&url) {
+            continue;
+        }
+        let text = clean(&crate::papers::clean(&crate::papers::text_of(inner)));
+        if !text.is_empty() && text != url {
+            named.insert(url, text);
+        }
+    }
     links
         .iter()
         .map(|url| {
-            anchors
-                .iter()
-                .filter(|(href, _, _)| web_address(href.trim()).as_ref() == Some(url))
-                .map(|(_, inner, _)| {
-                    let text = crate::papers::text_of(inner);
-                    clean(&text.split_whitespace().collect::<Vec<_>>().join(" "))
-                })
-                .find(|text| !text.is_empty() && text != url)
+            named
+                .get(url)
+                .cloned()
                 .or_else(|| Some(crate::papers::unwrapped(url)).filter(|to| to != url))
         })
         .collect()

@@ -55,7 +55,7 @@ fn only_scholar_and_google_themselves_are_followed_through() {
 
 #[test]
 fn a_link_named_as_another_address_shows_where_it_truly_goes() {
-    let (said, kind) = crate::ui::files::link_label(
+    let (said, kind) = crate::app::link_label(
         "https://login.evil.example/x",
         Some("https://bank.example/login"),
         "browser",
@@ -63,7 +63,7 @@ fn a_link_named_as_another_address_shows_where_it_truly_goes() {
     assert_eq!(said, "https://bank.example/login");
     assert_eq!(kind, "login.evil.example · browser");
     // Who it says it is, before an @, is not where it goes.
-    let (_, kind) = crate::ui::files::link_label(
+    let (_, kind) = crate::app::link_label(
         "https://bank.example@evil.example/x",
         Some("Your bank"),
         "browser",
@@ -144,4 +144,16 @@ fn keys_that_do_not_fit_are_dropped_whole_esc_kept() {
     let screen = app::screen(&mut app, 50, 20);
     let foot = screen.lines().find(|l| l.starts_with('╰')).unwrap();
     assert!(foot.contains("· esc close "), "{foot}");
+}
+
+#[test]
+fn googles_redirect_is_gone_through_however_its_host_is_written() {
+    assert_eq!(
+        crate::papers::unwrapped("https://WWW.Google.COM/url?q=https://example.org/x"),
+        "https://example.org/x"
+    );
+    assert_eq!(
+        crate::papers::unwrapped("https://example.org/plain"),
+        "https://example.org/plain"
+    );
 }

@@ -207,7 +207,7 @@ pub(crate) fn text_of(html: &str) -> String {
 
 /// Whitespace made single spaces, and a space before punctuation that
 /// a tag left taken out.
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -309,6 +309,14 @@ pub(crate) fn host_of(href: &str) -> Option<String> {
 /// only those, by their own host and path, as a browser reads them; never
 /// an address that names them elsewhere in it.
 pub(crate) fn unwrapped(href: &str) -> String {
+    // None of Google's in it, there is nothing to go through.
+    if !href
+        .as_bytes()
+        .windows(7)
+        .any(|w| w.eq_ignore_ascii_case(b"google."))
+    {
+        return href.to_string();
+    }
     let Ok(u) = url::Url::parse(href) else {
         return href.to_string();
     };
