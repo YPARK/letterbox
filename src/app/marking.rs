@@ -139,6 +139,8 @@ impl App {
                 }
             },
         };
+        // Onto a cluster: out to the clusters, where each is to be picked.
+        self.map.close_tree();
         self.status = format!(
             "moving {}: ⏎ on a cluster, or a click on its anchor; N a new label; esc stops",
             if keys.len() == 1 {
@@ -247,9 +249,16 @@ impl App {
         };
         let moved = map::moved(&s, &at);
         let faith = crate::model::faithfulness(&s.model, &at);
+        // No nearer than it was: said, and M-r not offered again for it.
+        let was = s.faithfulness.unwrap_or(0.0);
+        let nearer = faith > was + map::NEARER;
+        if !nearer {
+            self.map.tried = Some(was);
+        }
         self.status = format!(
-            "laid out again, {moved} moved, {:.0}% faithful: ⏎ keeps it, esc drops it",
-            faith * 100.0
+            "laid out again, {moved} moved, {:.0}% faithful{}: ⏎ keeps it, esc drops it",
+            faith * 100.0,
+            if nearer { "" } else { ", no nearer" }
         );
         self.map.preview = Some(at);
     }

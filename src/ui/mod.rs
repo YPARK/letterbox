@@ -336,7 +336,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             f,
             &t,
             "Rename label",
-            "⏎ renames · esc keeps it",
+            "⏎ renames · C-u clears · esc keeps it",
             &format!(
                 "What is {old} to be called? On every account, and on its server; called as another label is, the two are one."
             ),

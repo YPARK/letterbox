@@ -17,10 +17,16 @@ pub(super) fn capitalised(word: &str) -> String {
 }
 
 /// Edit a line typed in, a field's or the search's, by `key`: a character
-/// typed, `⌫` the last taken back, `C-u` all of it. Whether it changed.
+/// typed, `⌫` the last taken back, `C-w` or `M-⌫` the last word, `C-u` all
+/// of it. Whether it changed.
 pub(super) fn edit_line(line: &mut String, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
+        // The word before the cursor, always at the end, cut, as Emacs's
+        // C-w and M-DEL cut it there.
+        KeyCode::Backspace if alt => cut_word(line),
+        KeyCode::Char('w') if ctrl => cut_word(line),
         KeyCode::Backspace => line.pop().is_some(),
         KeyCode::Char('u') if ctrl => {
             let had = !line.is_empty();
@@ -33,6 +39,18 @@ pub(super) fn edit_line(line: &mut String, key: KeyEvent) -> bool {
         }
         _ => false,
     }
+}
+
+/// The last word of `line` cut, and the spaces after it; whether there
+/// was one.
+fn cut_word(line: &mut String) -> bool {
+    let had = !line.is_empty();
+    let start = line
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_whitespace())
+        .len();
+    line.truncate(start);
+    had
 }
 
 /// `key` as the table reads it: a letter said in lower case with Shift
@@ -447,7 +465,12 @@ impl App {
             | Act::ZoomOut
             | Act::ZoomAll
             | Act::Relayout => {
-                self.status = "that is the map's: M shows it".to_string();
+                // The map shown, it is a pane away; else M shows it.
+                self.status = match self.map.mode {
+                    Mode::Map => "that is the map's: tab goes to it",
+                    Mode::List => "that is the map's: M shows it",
+                }
+                .to_string();
             }
             Act::Wider | Act::Narrower if self.stacked() => {
                 let by: i16 = if act == Act::Wider { 2 } else { -2 };
@@ -479,8 +502,15 @@ impl App {
                 }
                 self.remember_look();
             }
-            Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
-            Act::SwitchView => self.show_map(),
+            // What was said of the view left is not said of the other.
+            Act::SwitchView if self.map.mode == Mode::Map => {
+                self.status.clear();
+                self.show_list();
+            }
+            Act::SwitchView => {
+                self.status.clear();
+                self.show_map();
+            }
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),

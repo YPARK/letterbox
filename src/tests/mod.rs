@@ -29,6 +29,7 @@ mod junk;
 mod keys_index;
 mod labels_model;
 mod lists;
+mod mapkeys;
 mod mapsafety;
 mod mapscreen;
 mod moving;

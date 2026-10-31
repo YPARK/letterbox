@@ -34,23 +34,7 @@ impl App {
             self.relayout();
             return true;
         }
-        // The map is looked at: what moves mail, or marks it to, is done
-        // down at a message in a cluster's tree, reading it, or in the
-        // Inbox looked through; never on the clusters, where a key is so
-        // easily pressed on the wrong one.
-        let moves = matches!(
-            act,
-            Act::Trash
-                | Act::Archive
-                | Act::Move
-                | Act::NewLabel
-                | Act::FileFirst
-                | Act::FileAll
-                | Act::NotIt
-                | Act::Mark
-        );
-        let now = jiff::Timestamp::now().as_second();
-        if moves && self.map.moving.is_none() && (act == Act::Mark || !self.map.at_message(now)) {
+        if self.map_refuses(act) {
             self.status = "the map is looked at: ⏎ goes down to a message, or i looks through the Inbox, to act on mail".to_string();
             return true;
         }
@@ -197,6 +181,13 @@ impl App {
                 }
             }
             Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,
+            // The message read beside the map is paged from it, as from
+            // the list.
+            Act::PageDown | Act::PageUp | Act::ScreenDown | Act::ScreenUp
+                if self.reading.is_some() =>
+            {
+                return false;
+            }
             Act::Back
             | Act::Top
             | Act::End
@@ -209,6 +200,27 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Whether the map, with the focus on it, refuses `act` where it is.
+    /// The map is looked at: what moves mail, or marks it to, is done down
+    /// at a message in a cluster's tree, reading it, or in the Inbox looked
+    /// through; never on the clusters, where a key is so easily pressed on
+    /// the wrong one.
+    pub fn map_refuses(&mut self, act: Act) -> bool {
+        let moves = matches!(
+            act,
+            Act::Trash
+                | Act::Archive
+                | Act::Move
+                | Act::NewLabel
+                | Act::FileFirst
+                | Act::FileAll
+                | Act::NotIt
+                | Act::Mark
+        );
+        let now = jiff::Timestamp::now().as_second();
+        moves && self.map.moving.is_none() && (act == Act::Mark || !self.map.at_message(now))
     }
 
     /// A key in the map's view menu: what it shows changed, the menu kept

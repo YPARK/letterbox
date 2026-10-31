@@ -353,11 +353,12 @@ message picked is named: what the keys act on, its block's name lit. The
 line below says how faithful the map is: of each message's ten nearest
 by what they say, how many are near it on the map too. Below 70%, `M-r`
 (or `,` `l`) lays it out again from where it is, the blocks shown where
-they would be, to keep with `⏎` or drop with `esc`.
+they would be, to keep with `⏎` or drop with `esc`. Laid out again no
+nearer, it says so, and `M-r` is not offered again for it.
 
 The arrows and `h` `j` `k` `l` go from block to block, and the message
 read beside the map follows, with its labels, the cluster it is in, and
-the five messages nearest it. `⏎`, `z`, a click or the wheel up over a
+the five messages nearest it; `space` and `b` page it. `⏎`, `z`, a click or the wheel up over a
 block goes into it: a mosaic of its parts, by what they are about, each
 a block, its messages each a tile; the way in said over the map, as
 `Grant › budget aims`. A part of twelve messages or more is gone into
@@ -411,6 +412,9 @@ named as a label shown, or holding what is typed. `↑` `↓` pick one and `⏎`
 takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
+`Y` takes it for every one suggested to go where it would. `C-/` takes
+back the last choice not yet done, one made for several at once
+together.
 `←` and `→` go round them, and back to none chosen; and `C-f` and `C-b`, as Emacs's keys move everywhere; `C-v` and `M-v` a page; a click picks one, and
 again leaves it. Nothing is done until `C-c C-c`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and

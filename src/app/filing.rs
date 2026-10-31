@@ -26,7 +26,7 @@ impl App {
             && keys == [k.clone()]
             && !label.is_empty()
         {
-            r.chosen.insert(k, Choice::Move(label.clone()));
+            r.set(k, Some(Choice::Move(label.clone())));
             self.status = format!("to go to {label} · C-c C-c does it, with the rest");
             self.focus = Focus::Reader;
             return;
