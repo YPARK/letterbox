@@ -321,7 +321,7 @@ pub const KEYS: &[Binding] = &[
         name: "o",
         hint: "o",
         foot: &[(Reader, "open")],
-        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as they do from the message",
+        help: "open the message in the browser, as its HTML, or one of its files and links: PDFs and markdown in ohp, a linked PDF downloaded first; s and S there save as they do from the message; a PDF signed in ohp, S there, is offered to reply with",
     },
     Binding {
         keys: &[("s", Save), ("S", SaveAll)],

@@ -115,6 +115,7 @@ pub(super) fn hints(app: &App, width: u16) -> Vec<Vec<(String, String)>> {
         _ if matches!(app.dialog, Dialog::Attach(_)) => Pane::Attaching,
         _ if matches!(&app.dialog, Dialog::SaveTo(s) if s.naming.is_some()) => Pane::Naming,
         _ if matches!(app.dialog, Dialog::SaveTo(_)) => Pane::Saving,
+        _ if matches!(&app.dialog, Dialog::Signed(s) if s.saving.is_some()) => Pane::Saving,
         _ if matches!(app.dialog, Dialog::View) => Pane::Viewing,
         _ if app.compose.is_some() => Pane::Writing,
         Focus::Side => Pane::Side,

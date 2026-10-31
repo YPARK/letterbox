@@ -170,12 +170,25 @@ pub(super) fn write_html(uid: u32, html: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Keep `bytes`, an attachment or a document downloaded, of the message
-/// `uid`, in a private folder of the cache, to be opened from there.
-pub(super) fn keep_file(uid: u32, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
-    let dir = cache().join("files");
-    private_dir(&dir)?;
-    let path = dir.join(format!("{uid}-{}", safe_name(name)));
+/// The private folder of the cache the files of the message `uid` in
+/// `folder` of `account` are kept in, apart from every other message's: a
+/// uid is its folder's alone.
+pub fn files_of(account: usize, folder: &str, uid: u32) -> PathBuf {
+    let folder = folder.replace(['/', '\\', ':'], "_");
+    cache()
+        .join("files")
+        .join(format!("{account}-{folder}-{uid}"))
+}
+
+/// Keep `bytes`, an attachment or a document downloaded, under its own
+/// name, in `dir`, a message's private folder, to be opened from there.
+pub(super) fn keep_file(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+) -> anyhow::Result<PathBuf> {
+    private_dir(dir)?;
+    let path = dir.join(safe_name(name));
     vault::replace_private(&path, bytes)?;
     Ok(path)
 }
@@ -299,7 +312,7 @@ impl App {
             return;
         };
         match write_page(&m) {
-            Ok(path) => self.launch = Some(Launch::Ohp(path)),
+            Ok(path) => self.launch = Some(Launch::Ohp(path, None)),
             Err(e) => self.status = format!("cannot present it: {e:#}"),
         }
     }
@@ -366,9 +379,12 @@ impl App {
     /// linked PDF downloaded first; else by the system, or in the browser.
     pub(super) fn open_item(&mut self) {
         let m = self.message().cloned();
-        let (Some(files), Some(m)) = (self.dialog.files_mut(), m) else {
+        let (Some(files), Some(m), Some(r)) = (self.dialog.files_mut(), m, self.reading.as_ref())
+        else {
             return;
         };
+        let (account, folder) = (r.account, r.folder.clone());
+        let dir = files_of(account, &folder, m.uid);
         match files.items.get(files.at).cloned() {
             Some(Item::Page) => {
                 self.dialog = Dialog::Closed;
@@ -382,8 +398,13 @@ impl App {
                 let Some((_, bytes)) = mail::attachments(&m.raw).into_iter().nth(at) else {
                     return;
                 };
-                match keep_file(m.uid, &name, &bytes) {
-                    Ok(path) if ohp_reads(&name) => self.launch = Some(Launch::Ohp(path)),
+                match keep_file(&dir, &name, &bytes) {
+                    Ok(path) if ohp_reads(&name) => {
+                        // A PDF may be signed there, beside it, and answered with.
+                        let presenting = crate::net::is_pdf(&name)
+                            .then(|| Presenting::new(account, folder, m.uid));
+                        self.launch = Some(Launch::Ohp(path, presenting))
+                    }
                     Ok(path) => self.launch = Some(Launch::Open(path)),
                     Err(e) => files.note = Some(format!("cannot keep {name}: {e:#}")),
                 }
@@ -391,11 +412,11 @@ impl App {
             Some(Item::Link(url)) => match crate::net::pdf_of(&url) {
                 Some(pdf) => {
                     files.note = Some(format!("downloading {pdf}…"));
-                    let (replies, uid) = (self.replies_to.clone(), m.uid);
+                    let replies = self.replies_to.clone();
                     self.pending += 1;
                     std::thread::spawn(move || {
                         let got = crate::net::pdf(&pdf)
-                            .and_then(|(name, bytes)| keep_file(uid, &name, &bytes))
+                            .and_then(|(name, bytes)| keep_file(&dir, &name, &bytes))
                             .map_err(worker::text);
                         let _ = replies.send(Reply {
                             account: usize::MAX,

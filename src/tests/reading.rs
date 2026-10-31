@@ -376,7 +376,7 @@ fn attachments_are_saved_under_a_name_of_their_own() {
 
     // ⏎ hands a PDF to ohp, and another file to the system; the mouse too.
     press(&mut app, &["<enter>"]);
-    let Some(app::Launch::Ohp(pdf)) = app.launch.take() else {
+    let Some(app::Launch::Ohp(pdf, _)) = app.launch.take() else {
         panic!("not for ohp: {:?}", app.launch);
     };
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
@@ -386,9 +386,16 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         panic!("not for the system: {:?}", app.launch);
     };
     let uid = app.message().unwrap().uid;
-    assert_eq!(
-        text.file_name().unwrap().to_string_lossy(),
-        format!("{uid}-states.txt")
+    assert_eq!(text.file_name().unwrap(), "states.txt");
+    let place = text
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
+    assert!(
+        place.ends_with(&format!("-{uid}")),
+        "its message's own: {place}"
     );
     #[cfg(unix)]
     {
@@ -398,6 +405,165 @@ fn attachments_are_saved_under_a_name_of_their_own() {
     }
     press(&mut app, &["<esc>"]);
     assert!(app.dialog.files().is_none());
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+/// Turing's paper, read, its files listed, and handed to ohp: where
+/// letterbox kept it, and what ohp is told of it.
+fn turing_s_paper_in_ohp(app: &mut App) -> (std::path::PathBuf, app::Presenting) {
+    let turing = app
+        .shown
+        .iter()
+        .position(|m| m.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(turing));
+    // The paper, its second file.
+    press(app, &["<enter>", "o", "j", "<enter>"]);
+    present_again(app)
+}
+
+/// What was last handed to ohp, as a PDF attached it may sign.
+fn present_again(app: &mut App) -> (std::path::PathBuf, app::Presenting) {
+    match app.launch.take() {
+        Some(app::Launch::Ohp(pdf, Some(presenting))) => (pdf, presenting),
+        other => panic!("not for ohp to sign: {other:?}"),
+    }
+}
+
+/// ohp, as it signs: the copy written at `copy`, and said to be.
+fn ohp_signs(presenting: &app::Presenting, copy: &std::path::Path) {
+    std::fs::write(copy, b"%PDF signed").unwrap();
+    let [(name, report)] = presenting.env();
+    assert_eq!(name, "OHP_SIGNED");
+    let report = std::path::Path::new(report);
+    std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+    std::fs::write(report, format!("{}\n", copy.display())).unwrap();
+}
+
+fn signed(app: &App) -> &app::Signed {
+    match &app.dialog {
+        app::Dialog::Signed(signed) => signed,
+        _ => panic!("no reply offered"),
+    }
+}
+
+#[test]
+fn a_pdf_signed_in_ohp_is_replied_with_under_its_own_name() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    let (pdf, presenting) = turing_s_paper_in_ohp(&mut app);
+    // Kept under its own name, in its message's own folder.
+    assert_eq!(pdf.file_name().unwrap(), "computable-numbers.pdf");
+    // ohp signs it beside it, as it names it.
+    let copy = pdf.with_file_name("computable-numbers-YP.pdf");
+    ohp_signs(&presenting, &copy);
+    app.presented(&presenting);
+    assert!(!presenting.report.exists(), "read once");
+    assert_eq!(signed(&app).path, copy, "where ohp kept it");
+    let shown = app::screen(&mut app, 120, 30);
+    assert!(
+        shown.contains("Reply all") && shown.contains("Save"),
+        "{shown}"
+    );
+    press(&mut app, &["<enter>"]);
+    let compose = app.compose.as_ref().expect("a reply");
+    let text = compose.buffer.text();
+    assert!(text.starts_with("To: "), "{text}");
+    let attach = format!("Attach: {}", crate::compose::named(&copy));
+    assert!(text.lines().any(|l| l == attach), "{text}");
+    let file = crate::compose::read_file(&copy).unwrap();
+    assert_eq!(file.name, "computable-numbers-YP.pdf");
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn signed_again_a_reply_is_offered_again_from_the_files_listed() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    let (pdf, first) = turing_s_paper_in_ohp(&mut app);
+    ohp_signs(&first, &pdf.with_file_name("computable-numbers-signed.pdf"));
+    app.presented(&first);
+    signed(&app);
+    // Not now: back to the files it was opened from.
+    press(&mut app, &["x"]);
+    assert!(app.dialog.files().is_some(), "the files listed again");
+    assert!(app.status.contains("C-c C-a"), "{}", app.status);
+    // And again, each time with a report of its own.
+    press(&mut app, &["<enter>"]);
+    let (_, second) = present_again(&mut app);
+    assert_ne!(second.report, first.report);
+    ohp_signs(
+        &second,
+        &pdf.with_file_name("computable-numbers-signed.pdf"),
+    );
+    app.presented(&second);
+    assert!(signed(&app).path.is_file());
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn a_message_s_files_are_kept_apart_from_another_folder_s_with_its_uid() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let inbox = app::files_of(0, "INBOX", 7);
+    let grant = app::files_of(0, "Projects/Grant", 7);
+    assert_ne!(inbox, grant);
+    assert!(inbox.starts_with(cache.path()) && grant.parent() == inbox.parent());
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn a_signed_copy_is_saved_in_a_folder_picked() {
+    let cache = tempfile::tempdir().unwrap();
+    let into = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    app.save_dir = Some(into.path().to_path_buf());
+    let presenting = app::Presenting::new(0, "INBOX".into(), 7);
+    ohp_signs(&presenting, &cache.path().join("form-YP.pdf"));
+    app.presented(&presenting);
+    press(&mut app, &["s"]);
+    assert!(signed(&app).saving.is_some(), "picking the folder");
+    // ⏎ on `.`: saved where the picker begins, twice under two names.
+    press(&mut app, &["<enter>", "s", "<enter>"]);
+    assert!(into.path().join("form-YP.pdf").is_file());
+    assert!(into.path().join("form-YP (2).pdf").is_file());
+    let note = signed(&app).note.clone().unwrap();
+    assert!(note.starts_with("saved "), "{note}");
+    // Still asked: replied with, or kept.
+    assert!(signed(&app).saving.is_none());
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn a_message_no_longer_read_is_read_first_to_reply_with_it_signed() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    let presenting = app::Presenting::new(0, "INBOX".into(), 4_000_000);
+    ohp_signs(&presenting, &cache.path().join("form-signed.pdf"));
+    app.presented(&presenting);
+    press(&mut app, &["r"]);
+    assert_eq!(app.status, "reading it first");
+    assert!(app.compose.is_none(), "not until it is read");
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+}
+
+#[test]
+fn nothing_signed_in_ohp_offers_nothing() {
+    let cache = tempfile::tempdir().unwrap();
+    let _held = CACHE_AT.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let mut app = demo();
+    app.presented(&app::Presenting::new(0, "INBOX".into(), 1));
+    assert!(matches!(app.dialog, app::Dialog::Closed));
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 }
 
@@ -411,7 +577,7 @@ fn the_message_read_is_presented_by_ohp_with_the_images_it_carries() {
     press(&mut app, &["O"]);
     assert!(app.launch.is_none());
     press(&mut app, &["<enter>", "O"]);
-    let Some(app::Launch::Ohp(page)) = app.launch.take() else {
+    let Some(app::Launch::Ohp(page, None)) = app.launch.take() else {
         panic!("not for ohp: {:?}", app.launch);
     };
     assert!(page.starts_with(cache.path()));
@@ -429,7 +595,7 @@ fn the_message_read_is_presented_by_ohp_with_the_images_it_carries() {
         .position(|i| *i == app::Item::Present)
         .unwrap();
     click_at(&mut app, app::Target::Item(at));
-    assert!(matches!(app.launch.take(), Some(app::Launch::Ohp(_))));
+    assert!(matches!(app.launch.take(), Some(app::Launch::Ohp(_, None))));
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
     // An image the HTML shows by cid: is found by its Content-ID.
     let raw = b"From: a@b.c\r\nSubject: logo\r\nMIME-Version: 1.0\r\n\

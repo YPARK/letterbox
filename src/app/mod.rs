@@ -22,6 +22,7 @@ mod replies;
 mod review;
 mod saving;
 mod screen;
+mod signing;
 mod trashing;
 mod undoing;
 mod writing;
@@ -41,6 +42,7 @@ pub use self::relabel::*;
 pub use self::review::*;
 pub use self::saving::*;
 pub use self::screen::*;
+pub use self::signing::*;
 pub use self::trashing::*;
 pub use self::writing::*;
 
@@ -165,7 +167,9 @@ pub struct Reading {
 /// browser; an address put on the clipboard, by the terminal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Launch {
-    Ohp(PathBuf),
+    /// A file presented by ohp; a PDF attached, which it may sign, with
+    /// the message it came with.
+    Ohp(PathBuf, Option<Presenting>),
     Open(PathBuf),
     Browse(String),
     Copy(String),
@@ -429,7 +433,10 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 terminal.draw(|f| ui::draw(f, app))?;
             }
             if let Some(launch) = app.launch.take() {
-                app.status = carry_out(launch, &mut terminal);
+                app.status = carry_out(&launch, &mut terminal);
+                if let Launch::Ohp(_, Some(presented)) = &launch {
+                    app.presented(presented);
+                }
                 terminal.clear()?;
                 stale = true;
                 continue;
@@ -471,16 +478,22 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
 }
 
 /// Do what `launch` asks, outside the screen; what to say of it.
-fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
+fn carry_out(launch: &Launch, terminal: &mut DefaultTerminal) -> String {
     match launch {
-        Launch::Ohp(path) => {
+        Launch::Ohp(path, presenting) => {
             give_back();
-            let ran = std::process::Command::new("ohp").arg(&path).status();
+            if let Some(dir) = presenting.as_ref().and_then(|p| p.report.parent()) {
+                let _ = private_dir(dir);
+            }
+            let ran = std::process::Command::new("ohp")
+                .arg(path)
+                .envs(presenting.iter().flat_map(Presenting::env))
+                .status();
             *terminal = take();
             match ran {
                 Ok(s) if s.success() => String::new(),
                 Ok(s) => format!("ohp: {s}"),
-                Err(_) => match open(&path) {
+                Err(_) => match open(path) {
                     Ok(()) => {
                         "ohp is not installed (cargo install ohp): opened by the system".to_string()
                     }
@@ -488,18 +501,18 @@ fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
                 },
             }
         }
-        Launch::Open(path) => match open(&path) {
-            Ok(()) => format!("opened {}", tilde(&path)),
+        Launch::Open(path) => match open(path) {
+            Ok(()) => format!("opened {}", tilde(path)),
             Err(e) => format!("cannot open {}: {e:#}", path.display()),
         },
         Launch::Browse(url) => {
-            oauth::browse(&url);
+            oauth::browse(url);
             "opened in the browser".to_string()
         }
         Launch::Copy(text) => {
             // OSC 52: the terminal puts it on the clipboard, here or over ssh.
             use base64::Engine;
-            let code = base64::engine::general_purpose::STANDARD.encode(&text);
+            let code = base64::engine::general_purpose::STANDARD.encode(text);
             let _ = std::io::Write::write_all(
                 &mut std::io::stdout(),
                 format!("\x1b]52;c;{code}\x07").as_bytes(),

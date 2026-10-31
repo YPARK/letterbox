@@ -126,7 +126,11 @@ impl Name {
 
 /// Save `bytes`, an attachment named `name`, in `dir`, made if it is not
 /// there, under a name not yet taken there; and where it was saved.
-fn save_one(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+pub(super) fn save_one(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
     let path = unused(dir, &safe_name(name));
     std::fs::create_dir_all(dir).and_then(|_| write_new(&path, bytes))?;
     Ok(path)
