@@ -630,8 +630,9 @@ pub const KEYS: &[Binding] = &[
             (Reader, "undo"),
             (Map, "undo"),
             (Reviewing, "undo"),
+            (Writing, "undo"),
         ],
-        help: "undo, as C-_ and C-x u do too, as in Emacs: put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed",
+        help: "undo, as C-_ and C-x u do too, as in Emacs: put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed. In the message being written, what was last changed in it, a step at a time, up to twenty characters typed in a row each",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too

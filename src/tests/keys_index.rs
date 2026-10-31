@@ -892,3 +892,13 @@ fn c_c_is_the_inbox_looked_throughs_only_on_the_map_and_lets_another_key_be() {
     press(&mut app, &["M", "<c-c>"]);
     assert!(app.status.contains("C-x C-c quits"), "{}", app.status);
 }
+
+#[test]
+fn the_prefixes_the_app_reads_itself_are_no_key_of_the_table() {
+    // C-x and C-c begin chords, read before the table: bound there too,
+    // one would never be reached.
+    for name in ["C-x", "C-c"] {
+        let key = crate::keymap::key_named(name).unwrap();
+        assert_eq!(crate::keymap::act(key), None, "{name}");
+    }
+}

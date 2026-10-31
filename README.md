@@ -201,7 +201,11 @@ No key holds Ctrl and Shift together, as kitty keeps those for itself.
 `c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
 by character and line, `C-k` kills to the end of the line and `C-y` puts it
-back, `M-f` `M-b` `M-d` by word. `tab` goes from field to field, To, Cc,
+back, `M-f` `M-b` `M-d` by word. `C-/`, `C-_` or `C-x u` undoes what
+was last changed, a step at a time, as Emacs does: a kill, a yank, a
+grammar fix put in (all of them, if all were taken), or up to twenty
+characters typed in a row; after any other key, undo again takes the
+undoing back. The last hundred steps are kept. `tab` goes from field to field, To, Cc,
 Subject, then what is written, and round, `S-tab` back. `C-SPC` sets the mark: `C-w` kills the
 region from it to the cursor, `M-w` copies it. `C-s` and `C-r` search
 forward and back as you type, case let go unless a capital is typed; `C-s`
@@ -237,6 +241,7 @@ If Emacs is new to you, this is all you need:
 | To | Press |
 |---|---|
 | move, and go to a line's ends | the arrows, `Home`, `End` |
+| undo what you last changed | `C-/` |
 | send it | `C-c C-c`: Ctrl and c, twice |
 | attach a file | `C-c C-a`, then type part of its name and `⏎` |
 | stop writing, unsent | `C-c C-k`, then `y` if it asks |
