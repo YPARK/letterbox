@@ -57,6 +57,11 @@ pub fn image(agent: &ureq::Agent, url: &str) -> Option<(String, Vec<u8>)> {
 
 /// The address of the PDF a link stands for, where it is plain which: an
 /// arXiv paper's page, as its PDF; an address ending `.pdf`; else none.
+/// Whether `name` is a PDF's, by its extension.
+pub fn is_pdf(name: &str) -> bool {
+    name.trim().to_lowercase().ends_with(".pdf")
+}
+
 pub fn pdf_of(url: &str) -> Option<String> {
     let bare = url.split(['?', '#']).next().unwrap_or(url);
     for page in ["arxiv.org/abs/", "arxiv.org/pdf/"] {
@@ -65,9 +70,7 @@ pub fn pdf_of(url: &str) -> Option<String> {
             return (!id.is_empty()).then(|| format!("https://arxiv.org/pdf/{id}"));
         }
     }
-    bare.to_lowercase()
-        .ends_with(".pdf")
-        .then(|| url.to_string())
+    is_pdf(bare).then(|| url.to_string())
 }
 
 /// The PDF at `url`, and a name for it, from its address; anything else, as
@@ -100,7 +103,7 @@ pub fn pdf(url: &str) -> anyhow::Result<(String, Vec<u8>)> {
         .and_then(|u| u.trim_end_matches('/').rsplit('/').next())
         .filter(|n| !n.is_empty())
         .unwrap_or("document");
-    let name = if name.to_lowercase().ends_with(".pdf") {
+    let name = if is_pdf(name) {
         name.to_string()
     } else {
         format!("{name}.pdf")

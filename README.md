@@ -291,8 +291,11 @@ goes, on any page, and `esc` asks what to call the signed copy,
 file's own name, not the one letterbox keeps it under.
 
 Quit ohp, and letterbox asks whether to reply with it: `⏎` or `r` to the
-sender, `a` to all, the copy attached, under the name you gave it; any
-other key keeps it, with the message, to attach later with `C-c C-a`.
+sender, `a` to all, the copy attached, under the name you gave it, the
+message read again first if it is no longer; `s` saves a copy of it in a
+folder picked, as `S` saves a message's files, and asks again; any other
+key keeps it, with the message, to attach later with `C-c C-a`, and lists
+the message's files again.
 Signing itself, what is drawn into the copy, and how Acrobat shows it, is
 ohp's: its README's Signing says.
 

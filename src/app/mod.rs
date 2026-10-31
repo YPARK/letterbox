@@ -167,7 +167,9 @@ pub struct Reading {
 /// browser; an address put on the clipboard, by the terminal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Launch {
-    Ohp(PathBuf),
+    /// A file presented by ohp; a PDF attached, which it may sign, with
+    /// the message it came with.
+    Ohp(PathBuf, Option<Presenting>),
     Open(PathBuf),
     Browse(String),
     Copy(String),
@@ -420,8 +422,6 @@ pub struct App {
     typesetting: Option<crate::pages::Place>,
     /// How many lists of papers paperstack has been asked of.
     papers_asked: u64,
-    /// The PDF attached that ohp is to present, which it may sign.
-    pub presenting: Option<Presenting>,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -433,12 +433,11 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                 terminal.draw(|f| ui::draw(f, app))?;
             }
             if let Some(launch) = app.launch.take() {
-                let presenting = app
-                    .presenting
-                    .take()
-                    .filter(|_| matches!(launch, Launch::Ohp(_)));
-                let env = presenting.as_ref().map(Presenting::env).unwrap_or_default();
-                app.status = carry_out(launch, &mut terminal, &env);
+                let presenting = match &launch {
+                    Launch::Ohp(_, presenting) => presenting.clone(),
+                    _ => None,
+                };
+                app.status = carry_out(launch, &mut terminal);
                 if let Some(presented) = presenting {
                     app.presented(presented);
                 }
@@ -482,19 +481,17 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
     result.and(written)
 }
 
-/// Do what `launch` asks, outside the screen, ohp given `env`; what to
-/// say of it.
-fn carry_out(
-    launch: Launch,
-    terminal: &mut DefaultTerminal,
-    env: &[(&str, std::ffi::OsString)],
-) -> String {
+/// Do what `launch` asks, outside the screen; what to say of it.
+fn carry_out(launch: Launch, terminal: &mut DefaultTerminal) -> String {
     match launch {
-        Launch::Ohp(path) => {
+        Launch::Ohp(path, presenting) => {
             give_back();
+            if let Some(dir) = presenting.as_ref().and_then(|p| p.report.parent()) {
+                let _ = private_dir(dir);
+            }
             let ran = std::process::Command::new("ohp")
                 .arg(&path)
-                .envs(env.iter().map(|(k, v)| (k, v)))
+                .envs(presenting.iter().flat_map(Presenting::env))
                 .status();
             *terminal = take();
             match ran {
@@ -692,7 +689,6 @@ impl App {
             #[cfg(feature = "pages")]
             typesetting: None,
             papers_asked: 0,
-            presenting: None,
         };
         for (name, store) in stores {
             let a = app.join(name, store);

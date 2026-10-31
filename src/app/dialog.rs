@@ -49,6 +49,7 @@ pub enum Button {
     /// Reply with a signed copy, to the sender or to all, or not now.
     Reply,
     ReplyAll,
+    SaveCopy,
     NotNow,
 }
 
@@ -429,10 +430,11 @@ impl App {
                 self.dialog_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             }
             (Dialog::Apply(_), _) => {}
-            (Dialog::Signed(_), Some(Target::Button(b))) => {
+            (Dialog::Signed(s), Some(Target::Button(b))) if s.saving.is_none() => {
                 let code = match b {
                     Button::Reply => KeyCode::Char('r'),
                     Button::ReplyAll => KeyCode::Char('a'),
+                    Button::SaveCopy => KeyCode::Char('s'),
                     _ => KeyCode::Esc,
                 };
                 self.dialog_key(KeyEvent::new(code, KeyModifiers::NONE))

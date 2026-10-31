@@ -83,6 +83,8 @@ pub(super) struct Pending {
     pub(super) folder: String,
     pub(super) uid: u32,
     pub(super) how: Respond,
+    /// A file to attach to it, as a copy signed in ohp.
+    pub(super) attach: Option<PathBuf>,
 }
 
 impl App {
@@ -114,6 +116,7 @@ impl App {
             folder: folder.clone(),
             uid,
             how,
+            attach: None,
         });
         self.status = "reading it first".to_string();
         self.ask(
