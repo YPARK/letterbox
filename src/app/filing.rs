@@ -27,7 +27,7 @@ impl App {
             && !label.is_empty()
         {
             r.chosen.insert(k, Choice::Move(label.clone()));
-            self.status = format!("to go to {label} · $ does it, with the rest");
+            self.status = format!("to go to {label} · C-c C-c does it, with the rest");
             self.focus = Focus::Reader;
             return;
         }
@@ -278,7 +278,7 @@ impl App {
     pub(super) fn list_file(&mut self, act: Act) {
         let Some(i) = self.listed_on_map() else {
             self.status = if self.map_off.is_some() || self.map_later {
-                "filing is by the map: M or M-g begins it".to_string()
+                "filing is by the map: M begins it".to_string()
             } else {
                 "not on the map yet: it is filed once the map has read it".to_string()
             };

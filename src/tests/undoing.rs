@@ -23,6 +23,19 @@ fn undo(app: &mut App) {
 }
 
 #[test]
+fn c_slash_and_c_underscore_undo_as_c_x_u_does() {
+    for key in ["<c-/>", "<c-_>"] {
+        let mut app = demo_map();
+        down_subject(&mut app, AIMS);
+        press(&mut app, &["e"]);
+        assert!(!in_inbox(&app, AIMS), "archived: {}", app.status);
+        press(&mut app, &[key]);
+        app.settle(Duration::from_secs(5));
+        assert!(in_inbox(&app, AIMS), "{key}: {}", app.status);
+    }
+}
+
+#[test]
 fn one_archived_is_put_back_by_c_x_u() {
     let mut app = demo_map();
     assert!(in_inbox(&app, AIMS));
@@ -78,7 +91,7 @@ fn what_the_inbox_looked_through_did_is_put_back_together() {
     // The first discarded, the second filed under the label first
     // offered: each chosen alone.
     press(&mut app, &["d", "m", "<enter>"]);
-    press(&mut app, &["$", "y"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     app.settle(Duration::from_secs(5));
     if matches!(app.dialog, app::Dialog::Applied(_)) {
         press(&mut app, &["x"]);

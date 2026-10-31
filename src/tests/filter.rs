@@ -204,7 +204,7 @@ fn only_those_chosen_are_done_and_those_kept_come_last_next_time() {
     let s = app.map.snapshot.clone().unwrap();
     let first = s.dots[rows[0]].key.clone();
     // Kept, the first; the rest not looked at.
-    press(&mut app, &["<space>", "$", "y"]);
+    press(&mut app, &["<space>", "<c-c>", "<c-c>", "y"]);
     assert!(app.status.contains("1 kept"), "{}", app.status);
     assert_eq!(app.index.lock().unwrap().filter.kept, 1);
     app.settle(Duration::from_secs(5));

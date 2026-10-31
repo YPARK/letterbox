@@ -423,10 +423,15 @@ pub struct App {
     junk_asked: std::collections::HashSet<crate::index::Key>,
     /// What looked like junk, held for J to show.
     junk: Vec<Junk>,
+    /// What was thrown away, as last told of beside it, while tab goes
+    /// between the two.
+    parked: Option<Box<crate::filter::Debrief>>,
     /// When the wheel last went in or out a level on the map, and which way.
     wheeled: Option<(Instant, isize)>,
-    /// Whether C-x was pressed, the key after it waited for: C-c quits.
-    c_x: bool,
+    /// The prefix pressed, `x` or `c`, the key after it waited for: C-x
+    /// C-c quits, C-x u undoes; in the Inbox looked through, C-c C-c does
+    /// what was chosen.
+    prefix: Option<char>,
     /// The index the map reads, shared with each account's sync.
     pub index: Arc<Mutex<Index>>,
     /// Why there is no map, if there is none: as its key could not be had.
@@ -734,8 +739,9 @@ impl App {
             untaught: Default::default(),
             junk_asked: Default::default(),
             junk: Vec::new(),
+            parked: None,
             wheeled: None,
-            c_x: false,
+            prefix: None,
             index: Arc::new(Mutex::new(index)),
             map_off,
             map_later,

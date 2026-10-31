@@ -346,14 +346,14 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     assert_eq!(rows.len(), INBOX);
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("Inbox · 33 to look through"), "{screen}");
-    assert!(screen.contains("Apply  $"), "{screen}");
+    assert!(screen.contains("Apply  C-c C-c"), "{screen}");
     // Nothing chosen until it is: what is suggested only hinted at, and $
     // has nothing to do.
     assert!(!screen.contains('✓'), "{screen}");
     assert!(screen.contains("[?] "), "{screen}");
     assert!(screen.contains("none chosen"), "{screen}");
     assert!(rows.iter().all(|&i| app.chosen(i).is_none()));
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     assert!(app.status.contains("nothing chosen"), "{}", app.status);
     assert!(!app.dialog.is_open());
     let s = app.map.snapshot.clone().unwrap();
@@ -416,7 +416,7 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
     // $ asks, saying how many are left; n leaves it; $ and y do those
     // chosen, and only those.
     app.focus = app::Focus::Reader;
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("left as they are"), "{screen}");
     press(&mut app, &["n"]);
@@ -427,7 +427,7 @@ fn the_inbox_is_looked_through_beside_the_map_and_done_at_once() {
         .map(|&i| s.dots[i].subject.clone())
         .collect();
     assert!(!untouched.is_empty());
-    press(&mut app, &["$", "y"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     for subject in &untouched {
         assert!(dot_labels(&app, subject).1, "{subject} left in the Inbox");
     }
@@ -461,7 +461,7 @@ fn what_is_chosen_in_the_inbox_is_asked_in_a_pop_up_before_it_is_done() {
     let rows = app.review_rows();
     // The first discarded, the second kept.
     press(&mut app, &["d", "<space>"]);
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     assert!(matches!(app.dialog, app::Dialog::Apply(_)));
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("Do what was chosen?"), "{screen}");
@@ -479,12 +479,12 @@ fn what_is_chosen_in_the_inbox_is_asked_in_a_pop_up_before_it_is_done() {
     assert_eq!(app.chosen(rows[0]), Some(app::Choice::Discard));
     assert!(app.status.contains("nothing done"), "{}", app.status);
     // Not yet, clicked: the same.
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     click_at(&mut app, app::Target::Button(app::Button::NotYet));
     assert!(!app.dialog.is_open());
     assert_eq!(app.chosen(rows[1]), Some(app::Choice::Keep));
     // Do it, clicked: done.
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     click_at(&mut app, app::Target::Button(app::Button::Apply));
     assert!(!app.dialog.is_open());
     assert!(app.review.as_ref().unwrap().chosen.is_empty());
@@ -497,7 +497,7 @@ fn only_what_the_pop_up_said_is_done() {
     press(&mut app, &["i"]);
     let rows = app.review_rows();
     let s = app.map.snapshot.clone().unwrap();
-    press(&mut app, &["<space>", "$"]);
+    press(&mut app, &["<space>", "<c-c>", "<c-c>"]);
     // Chosen after it was asked, as a pass of the map might change what is
     // there: not done, as it was not said.
     let later = s.dots[rows[1]].key.clone();
@@ -529,7 +529,7 @@ fn the_pop_up_names_the_labels_filed_under() {
     for _ in 0..going {
         press(&mut app, &["j"]);
     }
-    press(&mut app, &["y", "$"]);
+    press(&mut app, &["y", "<c-c>", "<c-c>"]);
     let screen = app::screen(&mut app, 170, 40);
     assert!(
         screen.contains(&format!("File 1 under {label}")),
@@ -651,7 +651,7 @@ fn a_message_looked_through_goes_under_a_new_label_named_for_it() {
     assert!(screen.contains("→ Engines"), "{screen}");
     // $ and y: made, and filed under it.
     app.focus = app::Focus::Reader;
-    press(&mut app, &["$", "y"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     let (labels, inbox) = dot_labels(&app, &subject);
     assert!(
         labels.contains(&"Engines".to_string()) && !inbox,

@@ -280,7 +280,11 @@ pub(super) fn debrief_dialog(
     let area = centered(f.area(), width, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
-        Paragraph::new(lines).block(dialog(t, &d.title, "⏎ put back · u put all back · esc ok")),
+        Paragraph::new(lines).block(dialog(
+            t,
+            &d.title,
+            "⏎ put back · u put all back · tab looks like junk · esc ok",
+        )),
         area,
     );
     let targets = (0..d.thrown.len())
@@ -855,7 +859,7 @@ pub(super) fn junk_dialog(
         Paragraph::new(lines).block(dialog(
             t,
             &format!("{} new look like junk", pick.items.len()),
-            "␣ choose · d throw away chosen · n not junk · i look through · esc leave",
+            "␣ choose · d throw away chosen · n not junk · i look through · tab thrown away · esc leave",
         )),
         area,
     );

@@ -11,9 +11,6 @@ pub enum Done {
     Stay,
     Send,
     Cancel,
-    /// `C-g`, with nothing to let go: as Emacs says, quit; the message
-    /// stays.
-    Quit,
     /// `C-c C-a`: a file to be attached is asked for.
     Attach,
     /// `M-$`, Emacs's key to check spelling: the grammar of what is written
@@ -674,10 +671,11 @@ pub fn handle(buf: &mut Buffer, prefix: &mut bool, key: KeyEvent) -> Done {
         return Done::Stay;
     }
     // C-g lets the search go, else the mark, as Emacs's keyboard-quit
-    // does; it never leaves the message.
-    if ctrl && matches!(key.code, KeyCode::Char('g' | 'G')) {
+    // does; with nothing to let go, the message. esc as C-g, as it goes
+    // back everywhere else.
+    if ctrl && matches!(key.code, KeyCode::Char('g' | 'G')) || key.code == KeyCode::Esc {
         buf.killing = false;
-        return if buf.quit() { Done::Stay } else { Done::Quit };
+        return if buf.quit() { Done::Stay } else { Done::Cancel };
     }
     if buf.search_key(key) {
         buf.killing = false;

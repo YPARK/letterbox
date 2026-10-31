@@ -11,7 +11,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// How far back what was thrown away as junk is told of, by B, in seconds.
+/// How far back what was thrown away as junk is told of, by J, in seconds.
 pub const KEPT: i64 = 7 * 24 * 60 * 60;
 /// How long a record of a message trashed is kept, in seconds: past it the
 /// record is let go, never the message.

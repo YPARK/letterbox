@@ -43,8 +43,9 @@ pub enum Act {
     SaveAll,
     /// The message read, presented by ohp.
     Present,
-    /// What was thrown away on its own, and why.
-    Debrief,
+    /// What was last done put back, as it was.
+    Undo,
+    /// What looks like junk, and what was thrown away on its own, and why.
     Junk,
     /// The papers the message read tells of, to put in paperstack.
     Papers,
@@ -69,8 +70,6 @@ pub enum Act {
     Unfiled,
     /// The Inbox, looked through beside the map, shown or closed.
     Review,
-    /// What was chosen for each message looked through, done.
-    Apply,
     /// The message read made wider, or narrower; below the list, taller
     /// or shorter.
     Wider,
@@ -78,9 +77,6 @@ pub enum Act {
     /// The message read put elsewhere: below the list, out of sight, over
     /// it, or beside it again.
     Place,
-    /// The map, or the list, in the middle pane.
-    MapView,
-    ListView,
     /// The map, from the list; the list, from the map.
     SwitchView,
     PreviousCluster,
@@ -338,7 +334,7 @@ pub const KEYS: &[Binding] = &[
         keys: &[("V", Pages), ("I", Images)],
         name: "V I",
         hint: "V",
-        foot: &[],
+        foot: &[(Reader, "pages")],
         help: "the message read as its pages, typeset by ohp, drawn where the terminal draws images (kitty, WezTerm, Ghostty, iTerm2); j k turn them, V its text; I with its pictures from the web, which tells the sender",
     },
     Binding {
@@ -349,18 +345,11 @@ pub const KEYS: &[Binding] = &[
         help: "the papers the message read tells of, a Scholar alert's or a journal's, each said to be in your paperstack, like what you starred there, or new: ⏎ puts the one picked there, starred, o opens it",
     },
     Binding {
-        keys: &[("B", Debrief)],
-        name: "B",
-        hint: "B",
-        foot: &[],
-        help: "what was thrown away as junk in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. Told of as letterbox opens too",
-    },
-    Binding {
         keys: &[("J", Junk)],
         name: "J",
         hint: "J",
-        foot: &[],
-        help: "the new mail that looks like junk, with the auto filter on, each, how sure, and why: space chooses one, d throws those chosen away, n says it is not junk, i looks through the Inbox",
+        foot: &[(List, "junk"), (Map, "junk")],
+        help: "the new mail that looks like junk, with the auto filter on, each, how sure, and why: space chooses one, d throws those chosen away, n says it is not junk, i looks through the Inbox; tab, and what was thrown away as junk in the last 7 days, and why: ⏎ puts the one picked back, u all of them, each learnt as kept. That is told of as letterbox opens too",
     },
     Binding {
         keys: &[("O", Present)],
@@ -438,21 +427,7 @@ pub const KEYS: &[Binding] = &[
         name: "M",
         hint: "M",
         foot: &[(Side, "map"), (List, "map"), (Map, "list")],
-        help: "the map, or back to the list from it, in any terminal: as M-g and M-l",
-    },
-    Binding {
-        keys: &[("M-g", MapView), ("s-g", MapView)],
-        name: "M-g s-g",
-        hint: "M-g",
-        foot: &[],
-        help: "the map: every account's mail laid out by what it is about and who it is from",
-    },
-    Binding {
-        keys: &[("M-l", ListView), ("s-l", ListView)],
-        name: "M-l s-l",
-        hint: "M-l",
-        foot: &[],
-        help: "back to the list, of what the sidebar picks: a folder, a label, a cluster, or the map's every cluster",
+        help: "the map, or back to the list from it; or click Map or List at the top",
     },
     Binding {
         keys: &[("[", PreviousCluster), ("]", NextCluster)],
@@ -504,11 +479,12 @@ pub const KEYS: &[Binding] = &[
         help: "the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; m drops down the labels nearest it to move it to, narrowed as you type, space keeps it, d discards it, y takes what is suggested; ⏎ reads it",
     },
     Binding {
-        keys: &[("$", Apply)],
-        name: "$",
-        hint: "$",
+        // A chord the app reads itself, as C-x C-c is.
+        keys: &[],
+        name: "C-c C-c",
+        hint: "C-c C-c",
         foot: &[(Reviewing, "apply")],
-        help: "in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are",
+        help: "in the Inbox looked through, do what was chosen, once asked, as C-c C-c sends a message: filed, kept, or discarded; those not chosen are left as they are",
     },
     Binding {
         keys: &[(",", View)],
@@ -544,7 +520,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-g",
         hint: "C-g",
         foot: &[],
-        help: "in the message being written, let go of a search, the mark, or C-c, as Emacs's C-g does; never the message",
+        help: "in the message being written, let go of a search, the mark, or C-c, as Emacs's C-g does; with nothing to let go, the message, asked first if it is changed or carries files. esc as C-g",
     },
     Binding {
         keys: &[],
@@ -636,20 +612,26 @@ pub const KEYS: &[Binding] = &[
         name: "? F1",
         hint: "?",
         foot: &[
-            (Side, "help"),
-            (List, "help"),
-            (Reader, "help"),
-            (Map, "help"),
+            (Side, "all keys"),
+            (List, "all keys"),
+            (Reader, "all keys"),
+            (Map, "all keys"),
         ],
         help: "all the keys",
     },
     Binding {
-        // A chord the app reads itself, as C-x C-c is.
-        keys: &[],
-        name: "C-x u",
-        hint: "C-x u",
-        foot: &[],
-        help: "put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed",
+        // C-x u too, a chord the app reads itself, as C-x C-c is; a
+        // terminal may say C-/ as C-7.
+        keys: &[("C-/", Undo), ("C-_", Undo), ("C-7", Undo)],
+        name: "C-/",
+        hint: "C-/",
+        foot: &[
+            (List, "undo"),
+            (Reader, "undo"),
+            (Map, "undo"),
+            (Reviewing, "undo"),
+        ],
+        help: "undo, as C-_ and C-x u do too, as in Emacs: put back what was last moved, however: trashed, archived, filed, or done in the Inbox looked through, each as it was, and what it taught taken back; or a label renamed, split or removed",
     },
     Binding {
         // A chord the app reads itself, as Emacs has it: q alone was too
@@ -717,7 +699,8 @@ pub fn help() -> impl Iterator<Item = (&'static str, &'static str)> {
 /// each; `C-c C-c` one, two keys pressed in turn. A part that names no
 /// key, or more than two, is left out.
 pub fn pressed(hint: &str) -> Vec<(usize, usize, Vec<KeyEvent>)> {
-    let parts: Vec<&str> = if hint.len() > 1 && hint.contains('/') {
+    // A key itself, as C-/, whole; else split at each /, as j/k.
+    let parts: Vec<&str> = if key_named(hint).is_none() && hint.len() > 1 && hint.contains('/') {
         hint.split('/').collect()
     } else {
         vec![hint]

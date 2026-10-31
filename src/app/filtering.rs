@@ -61,8 +61,22 @@ impl App {
     }
 
     /// J: what looked like junk and is still in an Inbox, unread, to
-    /// choose what to do with.
+    /// choose what to do with, none chosen; with none, what was thrown
+    /// away.
     pub(super) fn show_junk(&mut self) {
+        for j in &mut self.junk {
+            j.chosen = false;
+        }
+        self.parked = None;
+        if !self.list_junk() && !self.debrief() {
+            self.status =
+                "nothing looks like junk, nor was thrown away in the last 7 days".to_string();
+        }
+    }
+
+    /// List what looked like junk and is still in an Inbox, unread, each
+    /// chosen as it was left; whether there is any.
+    fn list_junk(&mut self) -> bool {
         {
             let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
             self.junk.retain(|j| {
@@ -71,16 +85,11 @@ impl App {
             });
         }
         if self.junk.is_empty() {
-            self.status = "nothing new looks like junk".to_string();
-            return;
+            return false;
         }
-        let items = self
-            .junk
-            .iter()
-            .cloned()
-            .map(|j| Junk { chosen: false, ..j })
-            .collect();
+        let items = self.junk.clone();
         self.dialog = Dialog::Junk(JunkPick { items, at: 0 });
+        true
     }
 
     /// A key in the list of what looks like junk: ↑ ↓ go along it, space
@@ -131,6 +140,25 @@ impl App {
                 self.dialog = Dialog::Closed;
                 self.open_review();
             }
+            // What was thrown away; those chosen kept, to come back to.
+            (_, KeyCode::Tab) => {
+                let chosen: std::collections::HashSet<_> = pick
+                    .items
+                    .iter()
+                    .filter(|j| j.chosen)
+                    .map(|j| &j.key)
+                    .collect();
+                for j in &mut self.junk {
+                    j.chosen = chosen.contains(&j.key);
+                }
+                match self.parked.take() {
+                    Some(d) => self.dialog = Dialog::Debrief(d),
+                    None if !self.debrief() => {
+                        self.status = "nothing thrown away as junk in the last 7 days".to_string();
+                    }
+                    None => {}
+                }
+            }
             _ => {
                 self.dialog = Dialog::Closed;
                 self.status =
@@ -140,7 +168,7 @@ impl App {
     }
 
     /// Throw away those `chosen`, as you chose: written down to be told of
-    /// by B and put back, never learnt. Each thrown is held no more; each
+    /// by J and put back, never learnt. Each thrown is held no more; each
     /// that could not be is said, and held still.
     fn throw_held(&mut self, chosen: Vec<Junk>) {
         let mut thrown = 0;
@@ -189,7 +217,7 @@ impl App {
             thrown += 1;
         }
         self.status = match not.first() {
-            None => format!("{thrown} thrown away: B says which, and why, to put back"),
+            None => format!("{thrown} thrown away: J says which, and why, to put back"),
             Some(first) => format!(
                 "{thrown} thrown away · {} not: {first}{}",
                 not.len(),
@@ -228,15 +256,14 @@ impl App {
     }
 
     /// Tell of what was thrown away on its own in the days it can be put
-    /// back.
-    pub(super) fn debrief(&mut self) {
+    /// back; whether there was any.
+    fn debrief(&mut self) -> bool {
         let since = jiff::Timestamp::now().as_second() - crate::trash::KEPT;
-        if !self.debrief_since(since, "Thrown away on its own, the last 7 days") {
-            self.status = "nothing thrown away as junk in the last 7 days".to_string();
-        }
+        self.debrief_since(since, "Thrown away on its own, the last 7 days")
     }
 
-    /// A key in the debrief: ⏎ puts the one picked back, u all of them.
+    /// A key in the debrief: ⏎ puts the one picked back, u all of them;
+    /// tab, what looks like junk.
     pub(super) fn debrief_key(&mut self, key: KeyEvent) {
         let Dialog::Debrief(d) = &mut self.dialog else {
             return;
@@ -250,6 +277,18 @@ impl App {
                 self.put_back_thrown(&[at]);
             }
             (_, KeyCode::Char('u')) => self.put_back_thrown(&(0..n).collect::<Vec<_>>()),
+            // What looks like junk; this kept, to come back to.
+            (_, KeyCode::Tab) => {
+                let Dialog::Debrief(d) = std::mem::take(&mut self.dialog) else {
+                    return;
+                };
+                if self.list_junk() {
+                    self.parked = Some(d);
+                } else {
+                    self.dialog = Dialog::Debrief(d);
+                    self.status = "nothing new looks like junk".to_string();
+                }
+            }
             _ => self.dialog = Dialog::Closed,
         }
     }

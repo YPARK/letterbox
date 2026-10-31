@@ -16,34 +16,38 @@ pub(super) fn read_on_map(app: &mut App) {
 /// The demo, its map shown.
 pub(super) fn demo_map() -> App {
     let mut app = demo();
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     app
 }
 
 #[test]
-fn the_map_and_the_list_are_clicked_at_the_top_or_super_g() {
+fn the_map_and_the_list_are_clicked_at_the_top() {
     let mut app = demo();
-    let map = crate::keymap::key_named("M-g").unwrap();
-    let list = crate::keymap::key_named("M-l").unwrap();
-    click_at(&mut app, app::Target::Key(map));
+    let _ = app::screen(&mut app, 120, 40);
+    // The tab not shown, clicked: M, which goes between them.
+    let m = crate::keymap::key_named("M").unwrap();
+    let tabs: Vec<_> = app
+        .targets
+        .iter()
+        .filter(|(r, t)| r.y == 0 && *t == app::Target::Key(m))
+        .collect();
+    assert_eq!(tabs.len(), 1, "the Map tab alone");
+    click_at(&mut app, app::Target::Key(m));
     assert_eq!(app.map.mode, crate::map::Mode::Map);
     let screen = app::screen(&mut app, 120, 40);
     assert!(
         screen.lines().next().unwrap().contains(" List  Map "),
         "{screen}"
     );
-    click_at(&mut app, app::Target::Key(list));
+    click_at(&mut app, app::Target::Key(m));
     assert_eq!(app.map.mode, crate::map::Mode::List);
-    // ⌘G or Super+G, as a terminal that says Super says it.
+    // Super+G is no longer the map's, nor Ctrl+Shift+G.
     app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SUPER));
-    app.settle(Duration::from_secs(5));
-    assert_eq!(app.map.mode, crate::map::Mode::Map);
-    // Ctrl+Shift+G is no longer the map's.
-    press(&mut app, &["<m-l>"]);
     app.key(KeyEvent::new(
         KeyCode::Char('G'),
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     ));
+    app.settle(Duration::from_secs(5));
     assert_eq!(app.map.mode, crate::map::Mode::List);
 }
 
@@ -129,7 +133,7 @@ fn the_map_is_narrowed_to_a_cluster_and_listed() {
         .id;
     click_at(&mut app, app::Target::Anchor(grant));
     assert_eq!(app.map.focused, crate::map::Focused::Cluster(grant));
-    press(&mut app, &["<m-l>"]);
+    press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     assert_eq!(app.folder_name(), "Grant");
     let subjects: Vec<&str> = app.shown.iter().map(|m| m.subject.as_str()).collect();
@@ -143,7 +147,7 @@ fn the_map_is_narrowed_to_a_cluster_and_listed() {
     app.list.select(Some(aims));
     press(&mut app, &["<enter>"]);
     assert_eq!(app.message().unwrap().subject, "Aims page, third pass");
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::Map);
 }
 
@@ -211,7 +215,7 @@ fn the_map_fits_any_screen_light_or_dark() {
 #[test]
 fn a_message_in_two_accounts_is_two_dots_marked_twins() {
     let mut app = two_accounts();
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     let s = app.map.snapshot.clone().unwrap();
     assert_eq!(s.dots.len(), 2 * (INBOX + ARCHIVE + 4 + 4) + 1);
     let photo: Vec<&crate::map::Dot> = s.dots.iter().filter(|d| d.subject == "Photo 51").collect();
@@ -235,7 +239,7 @@ fn the_map_says_why_it_is_not_there() {
     );
     app.ledger = scratch_ledger();
     app.settle(Duration::from_secs(5));
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     assert!(
         app.status.contains("vault, which is locked"),
         "{}",
@@ -256,7 +260,7 @@ fn the_map_is_begun_only_once_it_is_asked_for_and_agreed_to() {
     app.settle(Duration::from_secs(5));
     // Nothing is read for it until then.
     assert!(app.index.lock().unwrap().records.is_empty());
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     assert!(matches!(app.dialog, app::Dialog::StartMap));
     let screen = app::screen(&mut app, 120, 40);
     assert!(
@@ -269,7 +273,7 @@ fn the_map_is_begun_only_once_it_is_asked_for_and_agreed_to() {
     assert!(app.status.contains("asks again"), "{}", app.status);
     assert!(app.index.lock().unwrap().records.is_empty());
     // Yes, clicked: the map is begun, read and shown.
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     click_at(
         &mut app,
         app::Target::Key(crate::keymap::key_named("y").unwrap()),

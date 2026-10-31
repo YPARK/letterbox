@@ -215,11 +215,12 @@ impl App {
     /// open to change more; or the map laid out again; any other key
     /// closes it.
     pub(super) fn view_key(&mut self, key: KeyEvent) {
-        // M-l, C-n and the like are not the menu's: it closes, and they do
+        // M, C-n and the like are not the menu's: it closes, and they do
         // what they do.
         if key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            || keymap::act(key) == Some(Act::SwitchView)
         {
             self.dialog = Dialog::Closed;
             return self.key(key);

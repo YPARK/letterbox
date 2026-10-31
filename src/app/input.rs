@@ -141,7 +141,7 @@ pub(super) fn unescaped(s: &str) -> String {
 
 /// A key as `letterbox screen` is given it: `<enter>`, `<esc>`, `<tab>`,
 /// `<space>`, `<up>`, `<down>`, `<left>`, `<right>`, `<backspace>`, and
-/// with control, as `<c-u>`, Alt, as `<m-g>`, or Super, as `<s-g>`;
+/// with control, as `<c-u>`, Alt, as `<m-w>`, or Super, as `<s-w>`;
 /// anything else, each character typed.
 pub fn keys(spec: &str) -> Vec<KeyEvent> {
     // `<c-s-r>` is `C-S-r`, `<s-tab>` is `S-tab`, `<enter>` is `enter`, as
@@ -203,9 +203,10 @@ impl App {
             }
             return self.compose_key(key);
         }
-        // C-x C-c quits, as Emacs does; C-x and anything else, nothing,
-        // and C-c alone, nothing: compose's C-c C-c, pressed once more than
-        // it needed, quits no more.
+        // C-x C-c quits, as Emacs does, and C-x u undoes; C-x and anything
+        // else, nothing. C-c C-c does what was chosen in the Inbox looked
+        // through; C-c elsewhere, nothing: compose's C-c C-c, pressed once
+        // more than it needed, quits no more.
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // Asked whether to quit while mail is changed: y does; any other
         // key waits for it.
@@ -217,27 +218,27 @@ impl App {
             }
             return;
         }
-        if std::mem::take(&mut self.c_x) {
-            if ctrl && key.code == KeyCode::Char('c') {
-                self.ask_quit();
-            } else if !ctrl && key.code == KeyCode::Char('u') {
-                self.undo_last();
+        let c = ctrl && key.code == KeyCode::Char('c');
+        match (self.prefix.take(), key.code) {
+            (Some('x'), _) if c => return self.ask_quit(),
+            (Some('x'), KeyCode::Char('u')) if !ctrl => return self.act(Act::Undo),
+            (Some('x'), _) => return self.status = format!("{} quits", keymap::QUIT),
+            // C-c and another key: that key.
+            (Some('c'), _) if c => return self.ask_apply(),
+            _ => {}
+        }
+        let idle = !self.dialog.is_open() && self.menu.is_none() && !self.searching;
+        if c {
+            if self.review.is_some() && self.map.mode == Mode::Map && idle {
+                self.prefix = Some('c');
+                self.status = "C-c-".to_string();
             } else {
                 self.status = format!("{} quits", keymap::QUIT);
             }
             return;
         }
-        if ctrl && key.code == KeyCode::Char('c') {
-            self.status = format!("{} quits", keymap::QUIT);
-            return;
-        }
-        if ctrl
-            && key.code == KeyCode::Char('x')
-            && !self.dialog.is_open()
-            && self.menu.is_none()
-            && !self.searching
-        {
-            self.c_x = true;
+        if ctrl && key.code == KeyCode::Char('x') && idle {
+            self.prefix = Some('x');
             self.status = "C-x-".to_string();
             return;
         }
@@ -315,11 +316,8 @@ impl App {
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
             Act::Help => self.dialog = Dialog::Help(0),
+            Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
-            Act::Apply => {
-                self.status =
-                    "$ does what was chosen in the Inbox looked through: i opens it".to_string()
-            }
             Act::Search => {
                 self.searching = true;
                 if self.focus == Focus::Side {
@@ -447,7 +445,7 @@ impl App {
             | Act::ZoomOut
             | Act::ZoomAll
             | Act::Relayout => {
-                self.status = "that is the map's: M or M-g shows it".to_string();
+                self.status = "that is the map's: M shows it".to_string();
             }
             Act::Wider | Act::Narrower if self.stacked() => {
                 let by: i16 = if act == Act::Wider { 2 } else { -2 };
@@ -479,10 +477,8 @@ impl App {
                 }
                 self.remember_look();
             }
-            Act::MapView => self.show_map(),
             Act::SwitchView if self.map.mode == Mode::Map => self.show_list(),
             Act::SwitchView => self.show_map(),
-            Act::ListView => self.show_list(),
             Act::PreviousCluster => self.map.cycle(-1),
             Act::NextCluster => self.map.cycle(1),
             Act::Files => self.list_files(),
@@ -491,7 +487,6 @@ impl App {
                 self.list_to_save();
                 self.pick_save_dir(true);
             }
-            Act::Debrief => self.debrief(),
             Act::Junk => self.show_junk(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),

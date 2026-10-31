@@ -245,7 +245,7 @@ impl App {
                 KeyCode::Char('y' | 'Y') => self.start_map(),
                 _ => {
                     self.dialog = Dialog::Closed;
-                    self.status = "the map is not begun: M-g asks again".to_string();
+                    self.status = "the map is not begun: M asks again".to_string();
                 }
             },
             Dialog::Trash(_) => match keymap::act(key) {
@@ -322,7 +322,7 @@ impl App {
                 if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
                     self.apply_review(*plan);
                 } else {
-                    self.status = "nothing done · $ when it is as you want it".to_string();
+                    self.status = "nothing done · C-c C-c when it is as you want it".to_string();
                 }
             }
             &mut Dialog::Remove(a) => {
@@ -394,7 +394,7 @@ impl App {
             (Dialog::Papers(_), _) => self.dialog = Dialog::Closed,
             (Dialog::StartMap, _) => {
                 self.dialog = Dialog::Closed;
-                self.status = "the map is not begun: M-g asks again".to_string();
+                self.status = "the map is not begun: M asks again".to_string();
             }
             (Dialog::Form(form), Some(Target::Field(i))) if !form.checking => {
                 if i == KEEP && form.at == KEEP {

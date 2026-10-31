@@ -2,15 +2,21 @@
 //! README's pictures, and `letterbox screen`.
 use super::*;
 
-/// The screen as `app` would draw it on a terminal `width` by `height`, as
-/// text, for tests and `letterbox screen`.
-pub fn screen(app: &mut App, width: u16, height: u16) -> String {
+/// The screen as `app` would draw it on a terminal `width` by `height`,
+/// each cell with its colours.
+pub fn screen_buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("a screen in memory");
     terminal
         .draw(|f| ui::draw(f, app))
         .expect("drawn in memory");
-    let buffer = terminal.backend().buffer();
+    terminal.backend().buffer().clone()
+}
+
+/// The screen as `app` would draw it on a terminal `width` by `height`, as
+/// text, for tests and `letterbox screen`.
+pub fn screen(app: &mut App, width: u16, height: u16) -> String {
+    let buffer = screen_buffer(app, width, height);
     (0..height)
         .map(|y| {
             (0..width)
@@ -30,12 +36,7 @@ pub fn screen_svg(app: &mut App, width: u16, height: u16) -> String {
     use std::fmt::Write;
     const CW: f64 = 8.4;
     const CH: f64 = 18.0;
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
-        .expect("a screen in memory");
-    terminal
-        .draw(|f| ui::draw(f, app))
-        .expect("drawn in memory");
-    let buffer = terminal.backend().buffer();
+    let buffer = &screen_buffer(app, width, height);
     let dark = matches!(app.theme.page, Color::Reset);
     let hex = |c: Color, bg: bool| -> String {
         let (r, g, b) = match c {

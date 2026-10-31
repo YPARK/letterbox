@@ -76,9 +76,9 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
     // The two views, the one shown lit, each to be clicked as its key is
     // pressed.
     let mut x = right.x;
-    for (name, key, on) in [
-        (" List ", "M-l", app.map.mode == crate::map::Mode::List),
-        (" Map ", "M-g", app.map.mode == crate::map::Mode::Map),
+    for (name, on) in [
+        (" List ", app.map.mode == crate::map::Mode::List),
+        (" Map ", app.map.mode == crate::map::Mode::Map),
     ] {
         let width = (name.width() as u16).min(right.right().saturating_sub(x));
         let tab = Rect { x, width, ..right };
@@ -88,8 +88,10 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
             Style::new().fg(t.dim)
         };
         f.render_widget(Paragraph::new(Span::styled(name, style)), tab);
+        // The other one, M: it goes between them.
         if width > 0
-            && let Some(k) = keymap::key_named(key)
+            && !on
+            && let Some(k) = keymap::key_named("M")
         {
             app.targets.push((tab, Target::Key(k)));
         }
