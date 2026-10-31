@@ -185,6 +185,10 @@ impl Buffer {
         // Anywhere in what is written is there; the line between, the last
         // field's.
         let here = stops.iter().rposition(|&r| r <= self.row).unwrap_or(0);
+        // On a line that is no stop, as an `Attach` line, the one above is
+        // the first one back.
+        let at_stop = stops.contains(&self.row) || self.row > head + 1;
+        let by = if !at_stop && by < 0 { by + 1 } else { by };
         let next = (here as isize + by).rem_euclid(stops.len() as isize) as usize;
         self.row = stops[next];
         self.col = self.lines[self.row].chars().count();

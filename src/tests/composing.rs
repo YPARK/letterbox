@@ -97,6 +97,10 @@ fn tab_passes_over_the_attach_lines() {
     buffer.place(3, 0);
     typed(&mut buffer, &["<tab>"]);
     assert_eq!(buffer.row(), 6);
+    // And back from one, to the field just above.
+    buffer.place(4, 0);
+    typed(&mut buffer, &["<s-tab>"]);
+    assert_eq!(buffer.row(), 2, "Subject");
 }
 
 #[test]
