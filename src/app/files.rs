@@ -101,7 +101,7 @@ pub fn with_remote_images(
         };
         let raw = &html[value.0..value.1];
         let url = crate::papers::decode(raw.trim());
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
+        if !crate::mail::is_web(&url) {
             continue;
         }
         let data = fetched.entry(url).or_insert_with_key(|url| {

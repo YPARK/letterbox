@@ -403,7 +403,7 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
         let mut rest = s;
         while let Some(at) = rest.find("http") {
             let from = &rest[at..];
-            if from.starts_with("https://") || from.starts_with("http://") {
+            if is_web(from) {
                 let end = from
                     .find(|c: char| c.is_whitespace() || "<>\"'`".contains(c))
                     .unwrap_or(from.len());
@@ -437,14 +437,18 @@ pub fn links(text: &str, html: Option<&str>) -> Vec<String> {
     found
 }
 
+/// Whether `s` is a web address, by its scheme.
+pub(crate) fn is_web(s: &str) -> bool {
+    s.starts_with("https://") || s.starts_with("http://")
+}
+
 /// `url` as `links` keeps it, if it is a web address: without the
 /// punctuation that ends a sentence after one, or the brackets around it.
 fn web_address(url: &str) -> Option<String> {
     let url = url
         .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '>', '\'', '"'])
         .replace("&amp;", "&");
-    let web = url.starts_with("https://") || url.starts_with("http://");
-    (web && url.len() > 10).then(|| clean(&url))
+    (is_web(&url) && url.len() > 10).then(|| clean(&url))
 }
 
 /// What each of `links` is called: the text of the first link to it in

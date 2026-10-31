@@ -332,7 +332,7 @@ pub(crate) fn unwrapped(href: &str) -> String {
     keys.iter()
         .find_map(|key| {
             u.query_pairs()
-                .find(|(k, v)| k == key && (v.starts_with("http://") || v.starts_with("https://")))
+                .find(|(k, v)| k == key && crate::mail::is_web(v))
                 .map(|(_, v)| v.into_owned())
         })
         .unwrap_or_else(|| href.to_string())
