@@ -187,7 +187,7 @@ letterbox search grant report --account Work
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
 | `C-c C-c` | in the Inbox looked through, do what was chosen, once asked, as it sends a message: filed, kept, or discarded; those not chosen are left as they are |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `r` shows or hides read mail; `s` the mail you sent; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
-| `m` | in the map, down at a message, move it onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once, several asked first; another account's folder, as `Grant · ubc.ca`, moves it there |
+| `m` | in the map, down at a message, move it onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once, several asked first; another account's folder, as `Grant · example.org`, moves it there |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
@@ -406,7 +406,7 @@ else kept. Nothing is chosen until you choose it. `m`, or a click on `→`, drop
 may go to: where it would go first, then the four nearest it by what it
 is about; typing narrows them to those that hold what is typed, from all
 of them, and offers a new label by that name; the last picks where on the
-map. Another account's folders are offered too, as `Grant · ubc.ca`: those
+map. Another account's folders are offered too, as `Grant · example.org`: those
 named as a label shown, or holding what is typed. `↑` `↓` pick one and `⏎`
 takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
@@ -535,7 +535,7 @@ by `C-x u`:
 How far each has come is said at the foot as its servers answer.
 
 A message moves to another account's folder, picked in the labels dropped
-down as `Grant · ubc.ca`, from the list or the Inbox looked through: read
+down as `Grant · example.org`, from the list or the Inbox looked through: read
 whole from its server, copied to the other, found there by its
 Message-ID, and only then its original put in its own account's Trash,
 as `d` puts one, to be put back from there. A copy refused, or not found
