@@ -182,9 +182,6 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
         .collect()
 }
 
-/// What U says till what it asked is answered.
-pub(super) const LOOKING_NEW: &str = "looking for new mail…";
-
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
@@ -436,7 +433,7 @@ impl App {
             Act::NewMail => {
                 self.looking_new = Some(self.inbox_total());
                 self.refresh();
-                self.status = LOOKING_NEW.to_string();
+                self.say_passing(Transient::LookingNew, "looking for new mail…".to_string());
             }
             Act::NextMessage => self.next(1),
             Act::PreviousMessage => self.next(-1),
@@ -499,13 +496,19 @@ impl App {
                 // till then, nothing read as the list is moved along.
                 self.side_by_side = false;
                 self.due = None;
-                self.status = self.placement.placed_said();
+                let mut said = self.placement.placed_said();
                 if self.placed() != self.placement {
-                    self.status += if self.panes.width < ui::MEDIUM {
+                    said += if self.panes.width < ui::MEDIUM {
                         ", when the window is wider; this narrow, one pane at a time"
                     } else {
                         ", once the Inbox looked through is closed"
                     };
+                }
+                // Hidden until one is read: said until one is.
+                if self.placement == Placement::Hidden {
+                    self.say_passing(Transient::Hidden, said);
+                } else {
+                    self.status = said;
                 }
                 self.remember_look();
             }

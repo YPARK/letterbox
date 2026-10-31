@@ -36,9 +36,6 @@ pub struct Compose {
 pub const KILL_ANYWAY: &str =
     "Message modified; kill anyway? (y or n) · y discards it, n goes on writing";
 
-/// What is said while a message to answer is read first.
-const READING: &str = "reading it first";
-
 /// How much attached most servers take, in bytes.
 pub(super) const LARGE: usize = 25 * 1024 * 1024;
 
@@ -134,7 +131,7 @@ impl App {
             how,
             attach,
         });
-        self.status = READING.to_string();
+        self.say_passing(Transient::Reading, "reading it first".to_string());
         self.ask(
             account,
             Ask::Open {
@@ -191,9 +188,7 @@ impl App {
         }
         self.searching = false;
         // Read, and its answer open: no longer waited for.
-        if self.status == READING {
-            self.status.clear();
-        }
+        self.clear_passing(Transient::Reading);
         self.compose = Some(Compose {
             buffer,
             account,
@@ -254,15 +249,18 @@ impl App {
         }
         let before = compose.prefix;
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
+        let prefix = compose.prefix;
+        let changed = matches!(done, Done::Cancel)
+            && (compose.buffer.text() != compose.original || !compose.files.is_empty());
         // Sent as it is only by the C-c C-c that let its checking go.
-        if matches!(done, Done::Stay | Done::Undefined) && compose.prefix.is_none() {
+        if matches!(done, Done::Stay | Done::Undefined) && prefix.is_none() {
             self.send_as_is = false;
         }
         // C-c or C-x pressed, said until the next key, as Emacs echoes it.
-        if let Some(p) = compose.prefix {
-            self.status = format!("C-{p}-");
-        } else if before.is_some_and(|p| self.status == format!("C-{p}-")) {
-            self.status.clear();
+        if let Some(p) = prefix {
+            self.say_passing(Transient::Prefix, format!("C-{p}-"));
+        } else if before.is_some() {
+            self.clear_passing(Transient::Prefix);
         }
         match done {
             Done::Stay => {}
@@ -272,10 +270,10 @@ impl App {
             }
             // Asked first if changed, or carrying files: a forward's, set
             // up, is not lost to a stray key.
-            Done::Cancel
-                if compose.buffer.text() != compose.original || !compose.files.is_empty() =>
-            {
-                compose.asking = true;
+            Done::Cancel if changed => {
+                if let Some(compose) = &mut self.compose {
+                    compose.asking = true;
+                }
                 self.status = KILL_ANYWAY.to_string();
             }
             Done::Cancel => {

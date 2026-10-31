@@ -430,13 +430,14 @@ impl App {
 
     /// Call the label `old` `new`, on every account that has it, and where
     /// letterbox alone keeps it; onto a label there is, the two are one.
-    pub(super) fn rename_label(&mut self, old: &str, new: &str) {
+    /// Whether it was renamed.
+    pub(super) fn rename_label(&mut self, old: &str, new: &str) -> bool {
         if new.is_empty() || crate::index::fold(old) == crate::index::fold(new) && old == new {
             self.status = format!("kept {old}");
-            return;
+            return false;
         }
         let Some(s) = self.map.snapshot.clone() else {
-            return;
+            return false;
         };
         let folded = crate::index::fold(old);
         let accounts: std::collections::BTreeSet<usize> = s
@@ -464,12 +465,13 @@ impl App {
             }]);
         if let Err(e) = kept {
             self.status = format!("cannot rename {old}: {e:#}");
-            return;
+            return false;
         }
         if self.map.suggesting.as_deref().map(crate::index::fold) == Some(folded) {
             self.map.suggesting = Some(new.to_string());
         }
         self.status = format!("renamed {old} to {new}");
+        true
     }
 
     /// Take what a server said of filing a message: a label it does not

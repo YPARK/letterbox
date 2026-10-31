@@ -732,9 +732,7 @@ impl App {
         }
         self.scroll = 0;
         // What \ said, hidden until one is read, is not so once one is.
-        if self.status.starts_with(&Placement::Hidden.placed_said()) {
-            self.status.clear();
-        }
+        self.clear_passing(Transient::Hidden);
         let mark = self.mark_read && !seen;
         let body = match self.read.get(&(a, folder.clone(), uid)) {
             Some(m) => {

@@ -120,8 +120,7 @@ impl App {
             return;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
-            self.rename_label(&old, &new);
-            if self.status.starts_with("renamed") {
+            if self.rename_label(&old, &new) {
                 self.status.push_str(" · C-x u renames it back");
                 self.last = Some(Last::Rename(old, new));
             }
@@ -135,8 +134,7 @@ impl App {
     pub(super) fn undo_last(&mut self) {
         match self.last.take() {
             Some(Last::Rename(old, new)) => {
-                self.rename_label(&new, &old);
-                if self.status.starts_with("renamed") {
+                if self.rename_label(&new, &old) {
                     self.status = format!("{new} renamed back to {old}");
                 }
             }

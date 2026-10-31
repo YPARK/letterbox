@@ -18,6 +18,7 @@ mod mapview;
 mod marking;
 mod pages;
 mod papers;
+mod passing;
 mod relabel;
 mod replies;
 mod review;
@@ -40,6 +41,7 @@ pub use self::listing::*;
 pub use self::mapview::map_refuses;
 use self::mapview::*;
 pub use self::papers::*;
+use self::passing::*;
 pub use self::relabel::*;
 pub use self::review::*;
 pub use self::saving::*;
@@ -346,6 +348,8 @@ pub struct App {
     pub focus: Focus,
     pub theme: Theme,
     pub status: String,
+    /// The passing word the status line says, if it says one.
+    passing: Option<Passing>,
     pub targets: Vec<(Rect, Target)>,
     /// Whether to mark a message read when it is shown.
     pub mark_read: bool,
@@ -702,6 +706,7 @@ impl App {
             focus: Focus::List,
             theme: Theme::of(theme::Name::default()),
             status,
+            passing: None,
             targets: Vec::new(),
             mark_read: true,
             config,

@@ -187,7 +187,7 @@ impl App {
         let Some(before) = self.looking_new.take() else {
             return;
         };
-        if self.status != super::input::LOOKING_NEW {
+        if !self.passing(Transient::LookingNew) {
             return;
         }
         self.status = match self.inbox_total().saturating_sub(before) {
