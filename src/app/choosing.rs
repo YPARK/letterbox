@@ -17,13 +17,9 @@ impl App {
             .into_iter()
             .filter(|&j| Self::suggested(&s, j) == like)
             .collect();
-        for &j in &all {
-            self.decide(j, Some(like.clone()), false);
-            self.untaught.insert(s.dots[j].key.clone());
-        }
-        if let Some(r) = &mut self.review {
-            r.join(all.len());
-        }
+        self.decide_all(&all, |_| Some(like.clone()));
+        self.untaught
+            .extend(all.iter().map(|&j| s.dots[j].key.clone()));
         let to = match &like {
             Choice::Move(label) => format!("to go to {label}"),
             Choice::Discard => "to be discarded".to_string(),
@@ -43,10 +39,7 @@ impl App {
         let first = last.first().map(|(k, _)| k.clone());
         if let Some(r) = &mut self.review {
             for (key, was) in last.into_iter().rev() {
-                match was {
-                    Some(c) => r.chosen.insert(key, c),
-                    None => r.chosen.remove(&key),
-                };
+                r.put(key, was);
             }
         }
         let i = first.and_then(|k| self.map.snapshot.as_ref()?.find(&k));
@@ -138,13 +131,9 @@ impl App {
             // Chosen for several together: nothing said of each, so
             // nothing learnt.
             Act::Trash | Act::ScreenDown | Act::FileFirst => {
-                for &i in &selected {
-                    self.decide(i, choice(i), false);
-                    self.untaught.insert(s.dots[i].key.clone());
-                }
-                if let Some(r) = &mut self.review {
-                    r.join(selected.len());
-                }
+                self.decide_all(&selected, choice);
+                self.untaught
+                    .extend(selected.iter().map(|&i| s.dots[i].key.clone()));
             }
             // The labels dropped down for the one picked, the rest with it.
             Act::Move => {

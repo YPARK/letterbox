@@ -36,19 +36,32 @@ impl Review {
     /// Choose `c` for the message `key`, or, none, leave it as it is; what
     /// it was kept, to be taken back.
     pub fn set(&mut self, key: crate::index::Key, c: Option<Choice>) {
-        let was = match c {
-            Some(c) => self.chosen.insert(key.clone(), c),
-            None => self.chosen.remove(&key),
-        };
-        self.before.push(vec![(key, was)]);
+        self.set_all([(key, c)]);
     }
 
-    /// The last `n` choices made one, taken back together.
-    pub fn join(&mut self, n: usize) {
-        let from = self.before.len().saturating_sub(n);
-        let joined: Vec<_> = self.before.drain(from..).flatten().collect();
-        if !joined.is_empty() {
-            self.before.push(joined);
+    /// Choose for several messages at once, each its choice or none: what
+    /// each was kept together, to be taken back as one.
+    pub fn set_all(
+        &mut self,
+        choices: impl IntoIterator<Item = (crate::index::Key, Option<Choice>)>,
+    ) {
+        let step: Vec<_> = choices
+            .into_iter()
+            .map(|(key, c)| {
+                let was = self.put(key.clone(), c);
+                (key, was)
+            })
+            .collect();
+        if !step.is_empty() {
+            self.before.push(step);
+        }
+    }
+
+    /// `c` chosen for `key`, or, none, nothing; what it was.
+    pub(super) fn put(&mut self, key: crate::index::Key, c: Option<Choice>) -> Option<Choice> {
+        match c {
+            Some(c) => self.chosen.insert(key, c),
+            None => self.chosen.remove(&key),
         }
     }
 }
@@ -316,16 +329,25 @@ impl App {
     /// Choose `c` for the message `i`, or, none, leave it as it is; then,
     /// `on`, go on to the next.
     pub(super) fn decide(&mut self, i: usize, c: Option<Choice>, on: bool) {
-        let Some(key) = self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()) else {
-            return;
-        };
-        // Decided alone: learnt, once done.
-        self.untaught.remove(&key);
-        if let Some(r) = &mut self.review {
-            r.set(key, c);
-        }
+        self.decide_all(&[i], |_| c.clone());
         if on {
             self.review_step(1);
+        }
+    }
+
+    /// Choose for each of the messages `all` what `c` says, or leave it as
+    /// it is: taken back as one.
+    pub(super) fn decide_all(&mut self, all: &[usize], c: impl Fn(usize) -> Option<Choice>) {
+        let Some(s) = self.map.snapshot.clone() else {
+            return;
+        };
+        let keys: Vec<_> = all.iter().map(|&i| (s.dots[i].key.clone(), c(i))).collect();
+        // Decided alone: learnt, once done.
+        for (key, _) in &keys {
+            self.untaught.remove(key);
+        }
+        if let Some(r) = &mut self.review {
+            r.set_all(keys);
         }
     }
 
@@ -513,12 +535,7 @@ impl App {
                 let all: Vec<usize> = std::iter::once(i)
                     .chain(menu.with.iter().filter_map(|k| s.find(k)))
                     .collect();
-                for &j in &all {
-                    self.decide(j, Some(choice.clone()), false);
-                }
-                if let Some(r) = &mut self.review {
-                    r.join(all.len());
-                }
+                self.decide_all(&all, |_| Some(choice.clone()));
                 self.status = format!(
                     "{} to go to {said} · C-c C-c does it, with the rest",
                     all.len()
