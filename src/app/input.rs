@@ -164,6 +164,9 @@ pub fn keys(spec: &str) -> Vec<KeyEvent> {
         .collect()
 }
 
+/// What U says till what it asked is answered.
+pub(super) const LOOKING_NEW: &str = "looking for new mail…";
+
 /// What `v` says: several are selected with the mouse.
 pub(super) const SELECT_BY_MOUSE: &str =
     "select with the mouse: drag over rows, or Ctrl and a click on one";
@@ -413,8 +416,9 @@ impl App {
             Act::Reply => self.respond(Respond::Reply),
             Act::Forward => self.respond(Respond::Forward),
             Act::NewMail => {
+                self.looking_new = Some(self.inbox_total());
                 self.refresh();
-                self.status = "looking for new mail…".to_string();
+                self.status = LOOKING_NEW.to_string();
             }
             Act::NextMessage => self.next(1),
             Act::PreviousMessage => self.next(-1),
@@ -459,7 +463,10 @@ impl App {
                 self.reader_width = Some(self.read_width.saturating_add_signed(by));
                 self.remember_look();
             }
-            Act::Wider | Act::Narrower => {}
+            Act::Wider | Act::Narrower => {
+                self.status =
+                    "< and > size the message read beside the list, or below it".to_string();
+            }
             Act::Place => {
                 self.placement = self.placement.next();
                 if self.focus == Focus::Reader {
@@ -469,7 +476,7 @@ impl App {
                 // till then, nothing read as the list is moved along.
                 self.side_by_side = false;
                 self.due = None;
-                self.status = format!("the message read: {}", self.placement.said());
+                self.status = self.placement.placed_said();
                 if self.placed() != self.placement {
                     self.status += if self.panes.width < ui::MEDIUM {
                         ", when the window is wider; this narrow, one pane at a time"

@@ -191,3 +191,21 @@ fn one_archived_from_the_list_is_picked_again_once_put_back() {
     );
     assert_eq!(app.message().unwrap().subject, subject, "the one read");
 }
+
+#[test]
+fn after_many_are_put_back_the_one_the_key_was_pressed_on_is_picked() {
+    let mut app = demo_map();
+    press(&mut app, &["M"]);
+    press(&mut app, &["j", "j", "j"]);
+    let picked = app.shown[3].summary.subject.clone();
+    // y files them; any key closes how it went.
+    press(&mut app, &["Y", "y", "x"]);
+    undo(&mut app);
+    assert!(
+        app.status.contains("put back as they were"),
+        "{}",
+        app.status
+    );
+    let at = app.list.selected().unwrap();
+    assert_eq!(app.shown[at].summary.subject, picked);
+}

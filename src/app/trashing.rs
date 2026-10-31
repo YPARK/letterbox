@@ -51,7 +51,11 @@ impl App {
         // Archived, it is kept: learnt as not thrown away.
         self.teach_at(account, &folder, summary.uid, false);
         self.drop_listed(account, &folder, summary.uid);
-        self.status = "archived, out of the Inbox".to_string();
+        let from = match self.folder_of(account, &folder) {
+            Some(f) if f.role == Role::Inbox => "the Inbox".to_string(),
+            _ => self.folder_label(account, &folder),
+        };
+        self.status = format!("archived, out of {from}");
         self.ask(
             account,
             Ask::Archive {
@@ -60,6 +64,12 @@ impl App {
                 message_id: summary.message_id,
             },
         );
+    }
+
+    /// Whether the message picked is in Trash, where d puts it back.
+    pub fn picked_in_trash(&self) -> bool {
+        self.picked()
+            .is_some_and(|l| self.is_trash(l.account, &l.folder))
     }
 
     /// Move what is picked to Trash, or, in Trash, back where it was.

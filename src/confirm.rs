@@ -143,6 +143,16 @@ impl Batch {
         }
     }
 
+    /// What `account`'s server says it did to a message no look can see,
+    /// in a folder the index does not read, as Drafts: taken as done.
+    pub fn trust_unseen(&mut self, account: usize) {
+        for job in self.jobs.iter_mut().filter(|j| j.account == account) {
+            if job.key.is_none() && matches!(job.state, State::Done { .. }) {
+                job.state = State::Confirmed;
+            }
+        }
+    }
+
     /// Whether any of it is still waited for.
     pub fn busy(&self) -> bool {
         self.jobs

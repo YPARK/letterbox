@@ -210,3 +210,43 @@ fn what_was_found_in_a_cluster_stays_of_it_when_the_map_is_drawn_again() {
     assert_eq!(app.folder_name(), name);
     assert_eq!(listed(&app), found);
 }
+
+#[test]
+fn from_drafts_enter_searches_drafts_on_its_server() {
+    let mut app = inbox();
+    press(&mut app, &["h", "j", "l"]);
+    assert_eq!(app.folder_name(), "Drafts");
+    assert!(!app.searches_everywhere());
+    press(&mut app, &["/", "note g", "<enter>"]);
+    assert!(
+        listed(&app)
+            .iter()
+            .any(|s| s.contains("Notes on the engine")),
+        "{:?}: {}",
+        listed(&app),
+        app.status
+    );
+}
+
+#[test]
+fn what_enter_does_is_said_when_nothing_listed_matches() {
+    let mut app = inbox();
+    press(&mut app, &["/", "annual progress"]);
+    let screen = app::screen(&mut app, 120, 30);
+    assert!(
+        screen.contains("⏎ searches every folder letterbox knows"),
+        "{screen}"
+    );
+    assert!(!screen.contains("on the server"), "{screen}");
+}
+
+#[test]
+fn nothing_found_says_which_folders_are_left_out() {
+    let mut app = inbox();
+    press(&mut app, &["/", "zzqqxx", "<enter>"]);
+    assert!(
+        app.status.contains("but Drafts, Junk and Trash"),
+        "{}",
+        app.status
+    );
+}
