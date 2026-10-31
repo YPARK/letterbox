@@ -150,7 +150,7 @@ fn in_a_label_alone_filed_from_its_list_it_loses_that_label() {
 #[test]
 fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back() {
     let (mut app, boxes) = gmail_app(true);
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     app.settle(Duration::from_secs(5));
     let (labels, _) = on_server(&boxes, "Aims page, third pass");
     assert!(labels.contains(&"Projects/Grant".to_string()), "{labels:?}");

@@ -16,8 +16,8 @@ fn m_goes_between_the_map_and_the_list_and_lets_go_of_what_was_the_maps() {
     press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     assert!(app.map.region.is_none() && app.map.moving.is_none());
-    // The view menu open, M-l closes it and goes to the list.
-    press(&mut app, &["M", ",", "f", "<m-l>"]);
+    // The view menu open, M closes it and goes to the list.
+    press(&mut app, &["M", ",", "f", "M"]);
     assert!(!app.dialog.is_open());
     assert_eq!(app.map.mode, crate::map::Mode::List);
     // From the Inbox looked through, the list is picked, not the message.
@@ -773,13 +773,13 @@ fn the_message_read_is_let_go_when_the_list_gives_way_to_the_map_and_back() {
     let _ = app::screen(&mut app, 150, 45);
     assert!(app.reading.is_some(), "still read, in the list it is in");
     // To the map: the list's message is not beside it.
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     let screen = app::screen(&mut app, 150, 45);
     assert!(app.reading.is_none(), "{screen}");
     // Read on the map, and back to the list: not beside the list either.
     read_on_map(&mut app);
     assert!(app.reading.is_some(), "read on the map");
-    press(&mut app, &["<m-l>"]);
+    press(&mut app, &["M"]);
     let screen = app::screen(&mut app, 150, 45);
     assert!(app.reading.is_none(), "{screen}");
     assert!(screen.contains("reads the message picked"), "{screen}");

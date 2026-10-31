@@ -308,13 +308,42 @@ fn reply_forward_and_new_mail_have_their_keys() {
 }
 
 #[test]
-fn c_g_never_loses_the_message_and_c_c_c_k_asks_once_it_is_changed() {
+fn c_g_leaves_the_message_asking_once_it_is_changed_as_c_c_c_k_does() {
+    // Unchanged, C-g, or esc, leaves it at once, from its To line.
+    for key in ["<c-g>", "<esc>"] {
+        let mut app = demo();
+        press(&mut app, &["c", key]);
+        assert!(app.compose.is_none(), "{key}: {}", app.status);
+    }
+    // Changed, esc asks as C-g does.
+    let mut app = demo();
+    press(&mut app, &["c", "ada@analytical.example", "<esc>"]);
+    assert!(app.compose.as_ref().unwrap().asking);
+    // Changed, it asks; anything but y goes on writing.
+    let mut app = demo();
+    press(&mut app, &["c", "ada@analytical.example", "<c-g>"]);
+    assert!(app.compose.as_ref().unwrap().asking);
+    press(&mut app, &["n"]);
+    assert!(app.compose.is_some());
+    // The mark set, C-g lets it go first, as Emacs's does.
+    press(&mut app, &["<c- >", "<c-g>"]);
+    assert!(!app.compose.as_ref().unwrap().asking);
+    press(&mut app, &["<c-g>", "y"]);
+    assert!(app.compose.is_none());
+    // A forward, its files carried, unchanged: asked too.
+    let mut app = demo();
+    let at = app
+        .shown
+        .iter()
+        .position(|l| l.summary.from == "Alan Turing")
+        .unwrap();
+    app.list.select(Some(at));
+    press(&mut app, &["<enter>", "f"]);
+    assert!(!app.compose.as_ref().unwrap().files.is_empty());
+    press(&mut app, &["<c-g>"]);
+    assert!(app.compose.as_ref().unwrap().asking, "{}", app.status);
     let mut app = demo();
     press(&mut app, &["c", "ada@analytical.example"]);
-    // As often as it is pressed, C-g keeps it, and says how to go on.
-    press(&mut app, &["<c-g>", "<c-g>", "<c-g>"]);
-    assert!(app.compose.is_some());
-    assert!(app.status.contains("C-c C-k discards it"), "{}", app.status);
     // Changed, C-c C-k asks, on the message's own mode line too.
     press(&mut app, &["<c-c>", "<c-k>"]);
     assert!(app.compose.as_ref().unwrap().asking);
@@ -394,7 +423,7 @@ fn every_key_shown_is_clicked_as_it_is_pressed() {
     click_at(&mut app, key("y"));
     assert!(app.compose.is_none(), "{}", app.status);
     // The map's view menu: its rows, and esc on its border.
-    press(&mut app, &["<m-g>", ","]);
+    press(&mut app, &["M", ","]);
     click_at(&mut app, key("esc"));
     assert!(matches!(app.dialog, app::Dialog::Closed));
 }
@@ -773,11 +802,11 @@ fn the_region_from_the_mark_is_cut_with_c_w_and_copied_with_m_w() {
     edit_keys(&mut buffer, &["<c-e>", "<c-w>"]);
     assert_eq!(buffer.text(), "keep\n");
 
-    // C-g lets the mark go, and then only says it quit: never the message.
+    // C-g lets the mark go, and then the message, as C-c C-k does.
     let mut buffer = Buffer::from_text("x");
     assert_eq!(edit_keys(&mut buffer, &["<c- >", "<c-g>"]), Done::Stay);
     assert_eq!(buffer.region(), None);
-    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Quit);
+    assert_eq!(edit_keys(&mut buffer, &["<c-g>"]), Done::Cancel);
     assert_eq!(edit_keys(&mut buffer, &["<c-c>", "<c-k>"]), Done::Cancel);
 }
 

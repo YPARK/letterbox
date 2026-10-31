@@ -25,19 +25,15 @@ pub struct Compose {
     pub held: Option<Holding>,
     /// The text it was opened with, to tell whether it has been changed.
     pub(super) original: String,
-    /// `C-c C-k` was pressed on a message changed: whether to let it go is
-    /// asked, as Emacs asks.
+    /// `C-c C-k`, `C-g` or `esc` was pressed on a message changed, or
+    /// carrying files: whether to let it go is asked, as Emacs asks.
     pub asking: bool,
 }
 
-/// What `C-c C-k` asks of a message changed, as Emacs's message-mode asks,
+/// What `C-c C-k` and `C-g` ask of a message changed, or carrying files, as Emacs's message-mode asks,
 /// and what each answer does.
 pub const KILL_ANYWAY: &str =
     "Message modified; kill anyway? (y or n) · y discards it, n goes on writing";
-
-/// What `C-g` says when it had nothing to let go: that the message stays,
-/// and how it is sent or let go.
-pub(super) const QUIT: &str = "Quit · the message stays: C-c C-c sends it, C-c C-k discards it";
 
 /// How much attached most servers take, in bytes.
 pub(super) const LARGE: usize = 25 * 1024 * 1024;
@@ -255,8 +251,11 @@ impl App {
         }
         match done {
             Done::Stay => {}
-            Done::Quit => self.status = QUIT.to_string(),
-            Done::Cancel if compose.buffer.text() != compose.original => {
+            // Asked first if changed, or carrying files: a forward's, set
+            // up, is not lost to a stray key.
+            Done::Cancel
+                if compose.buffer.text() != compose.original || !compose.files.is_empty() =>
+            {
                 compose.asking = true;
                 self.status = KILL_ANYWAY.to_string();
             }

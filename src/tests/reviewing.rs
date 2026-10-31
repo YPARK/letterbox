@@ -523,13 +523,13 @@ fn going_to_the_list_lets_go_of_what_was_moving_and_marked_on_the_map() {
         keys: vec![s.dots[0].key.clone()],
     });
     app.map.moving = Some(vec![s.dots[1].key.clone()]);
-    press(&mut app, &["<m-l>"]);
+    press(&mut app, &["M"]);
     assert!(app.map.moving.is_none());
     assert!(app.map.region.is_none(), "marked on the map, let go");
     // Marked in the list, kept as the list is asked for again.
     super::selecting::ctrl_click(&mut app, 0);
     assert!(app.map.region.is_some(), "{}", app.status);
-    press(&mut app, &["<m-l>"]);
+    press(&mut app, &["M"]);
     assert!(app.map.region.is_some(), "marked in the list, kept");
 }
 
@@ -770,7 +770,7 @@ pub(super) fn demo_refusing(subject: &str) -> App {
 fn what_the_inbox_looked_through_does_is_confirmed_and_what_failed_is_said() {
     let refused = "R01 resubmission: internal deadline 3 November";
     let mut app = demo_refusing(refused);
-    press(&mut app, &["<m-g>", "i"]);
+    press(&mut app, &["M", "i"]);
     let s = app.map.snapshot.clone().unwrap();
     let rows = app.review_rows();
     let r01 = rows
@@ -787,7 +787,7 @@ fn what_the_inbox_looked_through_does_is_confirmed_and_what_failed_is_said() {
             .chosen
             .insert(s.dots[i].key.clone(), app::Choice::Discard);
     }
-    press(&mut app, &["$", "y"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     app.settle(Duration::from_secs(5));
     // A pop-up says how it went: the one done, the one not, and why.
     let screen = app::screen(&mut app, 150, 45);
@@ -829,7 +829,7 @@ fn what_was_chosen_is_not_done_again_while_the_last_is_waited_for() {
     let mut app = demo_map();
     press(&mut app, &["i", "d"]);
     app.batch.ask(job(1, crate::confirm::Goal::Trashed));
-    press(&mut app, &["$"]);
+    press(&mut app, &["<c-c>", "<c-c>"]);
     assert!(!app.dialog.is_open());
     assert!(app.status.contains("still applying"), "{}", app.status);
     // How far it has come, at the foot, over anything else said.

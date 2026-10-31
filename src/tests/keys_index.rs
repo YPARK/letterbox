@@ -40,6 +40,17 @@ fn every_key_in_the_table_is_read_and_bound_once() {
 }
 
 #[test]
+fn keys_said_twice_or_hard_to_guess_are_gone() {
+    for name in ["M-g", "M-l", "s-g", "s-l", "B", "$"] {
+        assert_eq!(
+            crate::keymap::act(crate::keymap::key_named(name).unwrap()),
+            None,
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn the_readme_names_every_key_the_help_does() {
     let readme = include_str!("../../README.md");
     let said = crate::keymap::KEYS
@@ -172,7 +183,7 @@ fn a_narrow_foot_leaves_hints_out_but_help_and_quit() {
     let mut app = demo();
     let screen = app::screen(&mut app, 40, 20);
     assert!(
-        screen.contains(" ? help") && screen.contains(" C-x C-c quit"),
+        screen.contains(" ? all keys") && screen.contains(" C-x C-c quit"),
         "{screen}"
     );
     assert!(!screen.contains("new mail"), "{screen}");
@@ -828,4 +839,56 @@ fn the_app_maps_every_account_as_it_starts() {
         INBOX + ARCHIVE + 4 + 4
     );
     assert!(app.mapping.is_empty(), "{}", app.mapping);
+}
+
+#[test]
+fn the_foot_shows_undo_junk_and_pages_and_its_keys_stand_out() {
+    let mut app = demo();
+    let foot = app::screen(&mut app, 160, 30);
+    for hint in [" C-/ undo", " J junk", " ? all keys"] {
+        assert!(foot.contains(hint), "{hint} in {foot}");
+    }
+    press(&mut app, &["<enter>"]);
+    let foot = app::screen(&mut app, 160, 30);
+    assert!(foot.contains(" V pages"), "{foot}");
+    // Each key in the accent's colour, bold, on the page's.
+    let buffer = app::screen_buffer(&mut app, 160, 30);
+    let y = (0..30)
+        .rev()
+        .find(|&y| (0..160).any(|x| buffer[(x, y)].symbol() == "?"))
+        .unwrap();
+    let x = (0..160).find(|&x| buffer[(x, y)].symbol() == "?").unwrap();
+    let cell = &buffer[(x, y)];
+    assert_eq!(cell.fg, app.theme.accent);
+    assert_eq!(cell.bg, app.theme.page);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+}
+
+#[test]
+fn c_slash_at_the_foot_is_a_key_to_click_and_j_k_two() {
+    let undo = crate::keymap::pressed("C-/");
+    assert_eq!(undo.len(), 1);
+    assert_eq!(undo[0].2, vec![crate::keymap::key_named("C-/").unwrap()]);
+    assert_eq!(crate::keymap::pressed("j/k").len(), 2);
+    assert_eq!(crate::keymap::pressed("</>").len(), 2);
+}
+
+#[test]
+fn c_c_is_the_inbox_looked_throughs_only_on_the_map_and_lets_another_key_be() {
+    let mut app = super::mapscreen::demo_map();
+    press(&mut app, &["i"]);
+    let rows = app.review_rows();
+    // C-c and j: j moves on, as it would.
+    let before = app.review.as_ref().unwrap().picked.clone();
+    press(&mut app, &["<c-c>", "j"]);
+    assert_ne!(
+        app.review.as_ref().unwrap().picked,
+        before,
+        "{}",
+        app.status
+    );
+    assert!(!rows.is_empty());
+    // Back in the list, C-c is not the Inbox's.
+    press(&mut app, &["M", "<c-c>"]);
+    assert!(app.status.contains("C-x C-c quits"), "{}", app.status);
 }

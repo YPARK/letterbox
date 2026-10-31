@@ -39,8 +39,8 @@ fn keys_mean_the_same_on_the_map_as_in_the_list() {
     press(&mut app, &["e"]);
     let (_, inbox) = dot_labels(&app, "Aims page, third pass");
     assert!(!inbox, "{}", app.status);
-    // ⌘L, or Super+L, back to the list.
-    app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::SUPER));
+    // M, back to the list.
+    press(&mut app, &["M"]);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     let first = app.shown[0].summary.subject.clone();
     press(&mut app, &["e"]);
@@ -185,9 +185,9 @@ fn the_line_before_the_message_is_dragged_to_make_it_wider() {
     assert!(!app.resizing);
     assert_eq!(divider(&mut app), x - 20, "the message twenty wider");
     // The map keeps its width too.
-    press(&mut app, &["<m-g>"]);
+    press(&mut app, &["M"]);
     assert_eq!(divider(&mut app), x - 20);
-    press(&mut app, &["<m-l>"]);
+    press(&mut app, &["M"]);
     // Not past what leaves the list room.
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), x - 20, 10));
     app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 10));
@@ -776,7 +776,7 @@ fn letterbox_opens_as_it_was_left_the_list_or_the_map_and_its_clusters() {
     assert_eq!(again.map.mode, crate::map::Mode::Map);
     assert!(again.map.tree.is_none());
     // Left at the list, the list.
-    press(&mut again, &["<m-l>"]);
+    press(&mut again, &["M"]);
     again.remember_look();
     let mut third = demo();
     third.look_file = Some(look);
@@ -995,6 +995,6 @@ fn r_renames_the_label_picked_on_its_server() {
     let (labels, _) = dot_labels(&app, "Letter of support, signed");
     assert_eq!(labels, ["Projects", "Funding"]);
     // Outside the map, R renames an account, as it did.
-    press(&mut app, &["<m-l>", "R"]);
+    press(&mut app, &["M", "R"]);
     assert!(matches!(app.dialog, app::Dialog::Rename(0, _)));
 }

@@ -175,20 +175,17 @@ letterbox search grant report --account Work
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text |
 | `I` | the message read as its pages, as `V` shows them, with the pictures it shows from the web fetched. Never else: fetching them tells the sender it was read, and when |
-| `B` | what was thrown away as junk in the last 7 days, and why: `⏎` puts the one picked back, `u` all of them, each learnt as kept. Told of as letterbox opens too |
-| `J` | with the auto filter on, the new mail that looks like junk, each, how sure, and why, as what weighed most: `space` chooses one, `d` throws those chosen away, `n` says the one picked is not junk, learnt so, `i` looks through the Inbox, any other key leaves them. None chosen till you choose; never shown, nor thrown away, unasked |
+| `J` | with the auto filter on, the new mail that looks like junk, each, how sure, and why, as what weighed most: `space` chooses one, `d` throws those chosen away, `n` says the one picked is not junk, learnt so, `i` looks through the Inbox, any other key leaves them. None chosen till you choose; never shown, nor thrown away, unasked. `tab` goes to what was thrown away as junk in the last 7 days, and why, and back: `⏎` puts the one picked back, `u` all of them, each learnt as kept. With nothing new, `J` opens on what was thrown away. Told of as letterbox opens too |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, and the list closes, saying so below; `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
 | `R` | rename the account picked in the sidebar, or the one listed; in the map, the label picked: asked first, how many carry it and where, and never onto a label there is. A right-click on a label's anchor on the map offers it too, with splitting it and removing it, as [the map](#the-map) says. `C-x u` undoes each |
 | `D` | remove the account picked in the sidebar, or the one listed |
-| `M` | the map, or back to the list from it, in any terminal: as `M-g` and `M-l` |
-| `M-g`, `s-g` | the map: every account's mail laid out by what it is about and who it is from. `s-g` is ⌘G on a Mac, Super+G elsewhere; or click Map at the top |
-| `M-l`, `s-l` | back to the list, of what the sidebar picks: a folder, a label, a cluster, or every cluster |
+| `M` | the map: every account's mail laid out by what it is about and who it is from; or back to the list from it, of what the sidebar picks: a folder, a label, a cluster, or every cluster. Or click Map or List at the top |
 | `z` / `Z` / `0` | in the map, into the block picked, its parts a mosaic too, or out a level; `0` all the clusters. The wheel too, up over a block and down |
 | `[` / `]` | in the map, narrow to the cluster before, or after |
 | `i` | the Inbox, beside the map, to look through as far as you like: each message with what is suggested for it, none chosen until you choose; `m` drops down the labels nearest it to move it to, narrowed as you type, `space` keeps it, `d` discards it, `y` takes what is suggested, `←` `→` go round them; `⏎` reads it |
-| `$` | in the Inbox looked through, do what was chosen, once asked: filed, kept, or discarded; those not chosen are left as they are |
+| `C-c C-c` | in the Inbox looked through, do what was chosen, once asked, as it sends a message: filed, kept, or discarded; those not chosen are left as they are |
 | `,` | in the map, what it shows and how, each a key: `w` lays it out by words and people, words alone, or people alone; `t` all of it, this week's, or today's; `r` shows or hides read mail; `s` the mail you sent; `f` only the mail not yet filed under a label, each where it would go; `n` dims the areas with nothing new; `l` lays it out again |
 | `m` | in the map, down at a message, move it onto a cluster or a label: `enter` on one, or a click on its anchor. It is given the label and taken out of the Inbox. In the list, the labels it may go to drop down, as in the Inbox looked through, and it is filed there at once, several asked first; another account's folder, as `Grant · ubc.ca`, moves it there |
 | `N` | while moving, in the list, or in the Inbox looked through, a new label for it alone: its name is asked, its commonest word given; made as it is filed |
@@ -196,16 +193,10 @@ letterbox search grant report --account Work
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
 | `?`, `F1` | all the keys; `F1` while writing too |
-| `C-x` `u` | undo what was done last: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `$` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
+| `C-x` `u`, `C-/`, `C-_` | undo what was done last, as Emacs's three do: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `C-c C-c` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
 
 No key holds Ctrl and Shift together, as kitty keeps those for itself.
-⌘G and Super+G reach letterbox only in a terminal that speaks kitty's
-keyboard protocol, as kitty, WezTerm and Ghostty do, and keeps no
-shortcut of its own on them; Terminal and iTerm2 keep ⌘G to find. `M-g`
-needs ⌥ sent as Meta (in Terminal, Settings › Profiles › Keyboard, “Use
-Option as Meta key”). `M`, or a click on Map at the top right, shows the
-map in any terminal, and `M` or List goes back.
 
 `c` opens a message to write, `r` a reply, over the list or the map,
 which stay faded beneath it; it is edited as Emacs edits a buffer: `C-a` and `C-e` the ends of a line, `C-f` `C-b` `C-n` `C-p`
@@ -218,8 +209,9 @@ again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
 it, held 10 seconds first, counted down at the foot: `C-g` takes it back,
 still there to change, and `C-c C-c` again sends it at once. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
-lets go of a search, the mark, or a `C-c` begun, as Emacs's does, and
-never of the message. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
+lets go of a search, the mark, or a `C-c` begun, as Emacs's does; with
+nothing to let go, it leaves the message, from wherever the cursor is,
+asking first if you changed it or it carries files. `esc` does as `C-g`. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
 `C-c C-s`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
@@ -248,7 +240,7 @@ If Emacs is new to you, this is all you need:
 | send it | `C-c C-c`: Ctrl and c, twice |
 | attach a file | `C-c C-a`, then type part of its name and `⏎` |
 | stop writing, unsent | `C-c C-k`, then `y` if it asks |
-| get out of anything half done | `C-g`, which never loses what you wrote |
+| get out of anything half done, or a message opened by mistake | `esc` or `C-g`; once more leaves the message, asking first if you changed it |
 
 The same guide is under the message as you write, `F1` lists every key,
 and the foot says what each key did and what to press next. The file
@@ -334,12 +326,11 @@ its tests:
 
 ## The map
 
-`M` (or `M-g`, ⌘G or Super+G where the terminal passes it on, or a click
-on Map at the top right) shows a second way into your mail, in place of the sidebar and the list: every
+`M` (or a click on Map at the top right) shows a second way into your mail, in place of the sidebar and the list: every
 message of every account in its cluster, near what it is about and who it is
 from, as a mosaic, as paperstack shows its themes. Filing a
 message is moving it onto a cluster; letterbox learns from what you file
-and says what else would go there. `M` or `M-l` goes back to the list.
+and says what else would go there. `M`, or a click on List, goes back to the list.
 
 ![letterbox's map of the demo's mail](docs/map.png)
 
@@ -416,14 +407,14 @@ takes it. `N` names a new label
 or folder for it, made as it is filed; `space` keeps it, `d`
 discards it, and `y` takes what is suggested; each goes on to the next.
 `←` and `→` go round them, and back to none chosen; and `C-f` and `C-b`, as Emacs's keys move everywhere; `C-v` and `M-v` a page; a click picks one, and
-again leaves it. Nothing is done until `$`, or the Apply button, asks in
+again leaves it. Nothing is done until `C-c C-c`, or the Apply button, asks in
 a pop-up, saying how many go under each label, to the Trash and stay, and
 is told `y` or Do it: then each chosen is filed, kept, or moved to the
 Trash, at once, and the rest are left in the Inbox as they are. Each is
 followed till its server says it is done and the next look at the mail
 finds it so: the foot says how far it has come, and once all have
 settled a pop-up says how it went, each that failed with why. What failed
-is left where it was, marked `✗`, chosen as it was, for `$` again; `$`
+is left where it was, marked `✗`, chosen as it was, for `C-c C-c` again; `C-c C-c`
 waits while the last is still followed. What is deleted, archived or filed
 in the list or on the map is followed alike, one message alone said
 `✓ confirmed` at the foot. `esc` goes back to the map and `tab` comes
@@ -451,7 +442,7 @@ to its sender, as your sent mail says, whether its sender takes no answer
 unsubscribe from it, so that even a sender never seen is told apart. Once it has been taught twenty
 of each, a message in the Inbox it is sure of, 90% or more, comes to be
 looked through with `[?] discard 92%` suggested; nothing is thrown away
-unless you choose it and `$` does it.
+unless you choose it and `C-c C-c` does it.
 What it learns is written down, encrypted with the map's index, as the
 journal `taught`, and learnt again as letterbox starts.
 
@@ -487,7 +478,7 @@ thrown away so since it last told: how sure it was, who sent
 each, what about, and the few things that weighed most, as *sent to many
 · takes no answer · list news.example*; then what it learnt since, and
 how it does now. `⏎` puts the one picked back, `u` all of them, each
-learnt as kept. `B` tells of the last seven days again, and
+learnt as kept. `J` tells of the last seven days again, or `tab` in it, and
 `letterbox filter debrief` says the same on the command line.
 
 `filter check` goes through every decision in turn and says, of each,
@@ -510,7 +501,7 @@ reads it, and says so.
 The map has no sidebar beside it, as its
 clusters and labels are on it; `tab` goes between it and the message
 read. In the list, the sidebar lists the clusters too, and the messages
-that fit nowhere; `M-l` lists the cluster the map is narrowed to.
+that fit nowhere; `M` lists the cluster the map is narrowed to.
 
 The map is looked at: on its clusters no key moves mail, as one is so
 easily pressed on the wrong one. `⏎` goes down a cluster to a message,

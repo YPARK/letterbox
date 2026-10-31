@@ -275,7 +275,7 @@ fn d_in_the_junk_pop_up_throws_those_listed_away_never_learnt() {
             t.subject
         );
     }
-    assert!(app.status.contains("B says which"), "{}", app.status);
+    assert!(app.status.contains("J says which"), "{}", app.status);
     // Not learnt as thrown away; and not thrown away twice.
     assert_eq!(app.index.lock().unwrap().filter.thrown, thrown);
     app.throw_away_on_its_own();
@@ -283,7 +283,7 @@ fn d_in_the_junk_pop_up_throws_those_listed_away_never_learnt() {
 }
 
 #[test]
-fn letterbox_opens_with_a_debrief_and_b_opens_it_again() {
+fn letterbox_opens_with_a_debrief_and_j_opens_it_again() {
     let mut app = demo_taught();
     app.auto = crate::filter::Auto {
         on: true,
@@ -325,10 +325,11 @@ fn letterbox_opens_with_a_debrief_and_b_opens_it_again() {
     assert!(!app.dialog.is_open());
     app.debrief_on_start();
     assert!(!app.dialog.is_open());
-    // B tells of the last seven days again; u puts the rest back.
-    press(&mut app, &["B"]);
+    // J, nothing new looking like junk, tells of the last seven days
+    // again; u puts the rest back.
+    press(&mut app, &["J"]);
     let app::Dialog::Debrief(d) = &app.dialog else {
-        panic!("B: {}", app.status);
+        panic!("J: {}", app.status);
     };
     assert_eq!(d.thrown.len(), n);
     assert_eq!(d.thrown.iter().filter(|t| t.back).count(), 1);
@@ -338,12 +339,64 @@ fn letterbox_opens_with_a_debrief_and_b_opens_it_again() {
 }
 
 #[test]
-fn b_with_nothing_thrown_away_says_so() {
+fn tab_in_the_junk_pop_up_goes_between_what_looks_like_junk_and_what_was_thrown_away() {
+    let mut app = demo_taught();
+    app.auto = crate::filter::Auto {
+        on: true,
+        since: 0,
+        debriefed: 0,
+    };
+    app.throw_away_on_its_own();
+    press(&mut app, &["J"]);
+    let app::Dialog::Junk(pick) = &app.dialog else {
+        panic!("J: {}", app.status);
+    };
+    let held = pick.items[0].subject.clone();
+    // Nothing thrown away yet: tab says so, and stays.
+    press(&mut app, &["<tab>"]);
+    assert!(matches!(app.dialog, app::Dialog::Junk(_)), "{}", app.status);
+    assert!(app.status.contains("nothing thrown away"), "{}", app.status);
+    // Another thrown away on its own: tab goes to it, and back.
+    {
+        let mut index = app.index.lock().unwrap();
+        let key = index
+            .records
+            .iter()
+            .find(|(_, r)| r.subject != held)
+            .map(|(k, _)| k.clone())
+            .unwrap();
+        index.throw_on_its_own(&key).unwrap();
+    }
+    // Chosen, then tab there and back: still chosen.
+    press(&mut app, &["<space>", "<tab>"]);
+    assert!(
+        matches!(app.dialog, app::Dialog::Debrief(_)),
+        "{}",
+        app.status
+    );
+    let screen = app::screen(&mut app, 140, 40);
+    assert!(screen.contains("tab looks like junk"), "{screen}");
+    press(&mut app, &["<tab>"]);
+    let app::Dialog::Junk(pick) = &app.dialog else {
+        panic!("back: {}", app.status);
+    };
+    assert!(pick.items[0].chosen);
+    // J afresh: none chosen.
+    press(&mut app, &["<esc>", "J"]);
+    let app::Dialog::Junk(pick) = &app.dialog else {
+        panic!("J: {}", app.status);
+    };
+    assert!(pick.items.iter().all(|j| !j.chosen));
+}
+
+#[test]
+fn j_with_nothing_new_nor_thrown_away_says_so() {
     let mut app = demo();
-    press(&mut app, &["B"]);
+    press(&mut app, &["J"]);
     assert!(!app.dialog.is_open());
     assert!(
-        app.status.contains("nothing thrown away as junk"),
+        app.status
+            .contains("nothing looks like junk, nor was thrown away"),
         "{}",
         app.status
     );

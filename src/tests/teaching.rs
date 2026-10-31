@@ -13,7 +13,7 @@ fn kept(app: &App) -> u32 {
 
 /// $ and y: what was chosen, done.
 fn apply(app: &mut App) {
-    press(app, &["$"]);
+    press(app, &["<c-c>", "<c-c>"]);
     assert!(
         matches!(app.dialog, app::Dialog::Apply(_)),
         "{}",

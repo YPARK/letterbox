@@ -18,8 +18,9 @@ pub(super) fn foot(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Spot>) {
                 spots.push((y, rect.x, rect.width, target));
             }
             x += w;
-            // The key a block of its own colour, to stand out.
-            spans.push(Span::styled(k, Style::new().fg(t.title).bg(t.focus).bold()));
+            // The key in the accent's colour, bold, on a block of the
+            // page's, to stand out from the foot's tint.
+            spans.push(Span::styled(k, Style::new().fg(t.accent).bg(t.page).bold()));
             spans.push(Span::styled(what, Style::new().fg(t.soft)));
         }
         lines.push(Line::from(spans));

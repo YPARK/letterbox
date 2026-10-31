@@ -99,7 +99,7 @@ fn a_copy_refused_leaves_the_original_where_it_was() {
 #[test]
 fn in_the_inbox_looked_through_a_message_may_go_to_another_account() {
     let (mut app, mut home, mut work) = two_demos();
-    press(&mut app, &["<m-g>", "i"]);
+    press(&mut app, &["M", "i"]);
     let s = app.map.snapshot.clone().unwrap();
     let rows = app.review_rows();
     let at = rows
@@ -119,7 +119,7 @@ fn in_the_inbox_looked_through_a_message_may_go_to_another_account() {
         app::Choice::Bring(1, "Projects/Grant".to_string())
     );
     assert!(!work.holds("Projects/Grant", &id).unwrap(), "not till $");
-    press(&mut app, &["$", "y"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     app.settle(Duration::from_secs(5));
     assert!(work.holds("Projects/Grant", &id).unwrap());
     assert!(home.holds("Trash", &id).unwrap());

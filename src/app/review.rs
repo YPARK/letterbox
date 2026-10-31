@@ -247,7 +247,7 @@ impl App {
         self.focus = Focus::Reader;
         self.pick_review(first);
         self.status =
-            "the Inbox, to look through as far as you like: m move, space keep, d discard, y as suggested; $ does those chosen"
+            "the Inbox, to look through as far as you like: m move, space keep, d discard, y as suggested; C-c C-c does those chosen"
                 .to_string();
     }
 
@@ -489,11 +489,14 @@ impl App {
                 for &j in &all {
                     self.decide(j, Some(choice.clone()), false);
                 }
-                self.status = format!("{} to go to {said} · $ does it, with the rest", all.len());
+                self.status = format!(
+                    "{} to go to {said} · C-c C-c does it, with the rest",
+                    all.len()
+                );
                 self.after_selected(&all);
             }
             (_, Some((choice, said))) => {
-                self.status = format!("to go to {said} · $ does it, with the rest");
+                self.status = format!("to go to {said} · C-c C-c does it, with the rest");
                 self.choose(i, choice, true);
             }
             (Some(Pick::OnMap), _) => self.pick_on_map(i),
@@ -549,10 +552,10 @@ impl App {
                     r.reading = false;
                     return self.review_act(act);
                 }
-                // Nothing is done till $, read or not.
+                // Nothing is done till C-c C-c, read or not.
                 Act::Archive => {
                     self.status =
-                        "here, m moves it, space keeps it, d discards it; $ does those chosen"
+                        "here, m moves it, space keeps it, d discards it; C-c C-c does those chosen"
                             .to_string()
                 }
                 _ => return false,
@@ -614,15 +617,15 @@ impl App {
                     r.reading = true;
                 }
             }
-            (Act::Apply, _) => self.ask_apply(),
             (Act::Review, _) => self.open_review(),
             // esc goes back to the map, all of it kept.
             (Act::Back, _) => self.focus = Focus::List,
             (Act::Seen, Some(_)) => self.dot_flag(Flag::Seen),
             (Act::Flag, Some(_)) => self.dot_flag(Flag::Flagged),
             (Act::Archive, _) => {
-                self.status = "here, m moves it, space keeps it, d discards it; $ does those chosen"
-                    .to_string()
+                self.status =
+                    "here, m moves it, space keeps it, d discards it; C-c C-c does those chosen"
+                        .to_string()
             }
             (
                 Act::Left
@@ -813,7 +816,8 @@ impl App {
             && plan.brings.is_empty()
         {
             self.status =
-                "nothing chosen yet: y as suggested, m, space or d; $ does only those".to_string();
+                "nothing chosen yet: y as suggested, m, space or d; C-c C-c does only those"
+                    .to_string();
             return;
         }
         let mut said: Vec<String> = plan
@@ -901,7 +905,7 @@ impl App {
             .collect();
         let filed: usize = moves.values().map(Vec::len).sum();
         let kept_n = kept.len();
-        // Asked already, by $: those decided alone learnt.
+        // Asked already, by C-c C-c: those decided alone learnt.
         for (label, keys) in moves {
             let (taught, not): (Vec<_>, Vec<_>) = keys.into_iter().partition(|k| alone(k));
             self.file_now(taught, &label, true);

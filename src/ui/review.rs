@@ -36,7 +36,7 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         format!(" Inbox · {} to look through ", rows.len())
     };
-    let button = " Apply  $ ";
+    let button = " Apply  C-c C-c ";
     let buf = f.buffer_mut();
     buf.set_stringn(
         x,
@@ -54,16 +54,19 @@ pub(super) fn review_pane(f: &mut Frame, app: &mut App, area: Rect) {
             button,
             Style::new().fg(t.on_accent).bg(t.accent).bold(),
         );
-        if let Some(key) = keymap::key_named("$") {
+        // As the foot's hint of it is: the keys the table names.
+        if let Some((_, _, keys)) = keymap::pressed("C-c C-c").into_iter().next()
+            && let [a, b] = keys[..]
+        {
             app.targets.push((
                 Rect::new(bx, area.y, button.width() as u16, 1),
-                Target::Key(key),
+                Target::Chord(a, b),
             ));
         }
     }
     // Only those chosen are done; the rest are left as they are.
     let counts = if filed + discarded + kept == 0 {
-        " none chosen: look through as many as you like; $ does only those".to_string()
+        " none chosen: look through as many as you like; C-c C-c does only those".to_string()
     } else {
         format!(" {filed} to file · {discarded} to discard · {kept} to keep · the rest left")
     };
