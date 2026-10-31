@@ -283,8 +283,7 @@ pub(crate) fn link_label(url: &str, name: Option<&str>, what: &str) -> (String, 
     match name {
         Some(name) => {
             let to = crate::papers::unwrapped(url);
-            let host = to.split("://").nth(1).unwrap_or(&to);
-            let host = host.split(['/', '?', '#']).next().unwrap_or(host);
+            let host = crate::papers::host_of(&to).unwrap_or(to);
             let host = host.trim_start_matches("www.");
             (name.to_string(), format!("{host} · {what}"))
         }

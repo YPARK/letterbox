@@ -265,71 +265,69 @@ pub(crate) fn decode(s: &str) -> String {
     out
 }
 
-/// Where `href` sends one on to, through Scholar's and Google's redirects:
-/// only those, by their own host and path, never an address that names
-/// them elsewhere in it.
-pub(crate) fn unwrapped(href: &str) -> String {
-    let Some((scheme, rest)) = href.split_once("://") else {
-        return href.to_string();
-    };
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, path) = rest.split_at(end);
-    // Past who it says it is, and before its port.
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
-    let path = path.split(['?', '#']).next().unwrap_or(path);
-    let google = |h: &str| {
-        h.strip_prefix("google.").is_some_and(|tld| {
-            let parts: Vec<&str> = tld.split('.').collect();
-            parts.len() <= 2
-                && parts
-                    .iter()
-                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphabetic()))
-        })
-    };
-    let keys: &[&str] = match (host.strip_prefix("scholar."), host.strip_prefix("www.")) {
-        (Some(h), _) if google(h) && path == "/scholar_url" => &["url="],
-        (_, Some(h)) if google(h) && path == "/url" => &["q=", "url="],
-        _ if google(&host) && path == "/url" => &["q=", "url="],
-        _ => &[],
-    };
-    if !scheme.starts_with("http") {
-        return href.to_string();
-    }
-    let query = href
-        .split_once('?')
-        .map(|(_, q)| q.split('#').next().unwrap_or(q));
-    for key in keys {
-        if let Some(v) = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix(key)))
-            && v.starts_with("http")
-        {
-            return percent_decoded(v);
-        }
-    }
-    href.to_string()
+/// Google's own domains, whose redirects are followed: no other, however
+/// it is named.
+const GOOGLE: &[&str] = &[
+    "google.com",
+    "google.co.uk",
+    "google.ca",
+    "google.com.au",
+    "google.co.nz",
+    "google.ie",
+    "google.de",
+    "google.fr",
+    "google.es",
+    "google.it",
+    "google.nl",
+    "google.be",
+    "google.ch",
+    "google.at",
+    "google.se",
+    "google.no",
+    "google.dk",
+    "google.fi",
+    "google.pl",
+    "google.pt",
+    "google.co.jp",
+    "google.co.kr",
+    "google.co.in",
+    "google.com.sg",
+    "google.com.hk",
+    "google.com.tw",
+    "google.cn",
+    "google.com.br",
+    "google.com.mx",
+];
+
+/// The host `href` goes to, as a browser reads it: past any name and
+/// password before an `@`, without its port; none if it is not an address.
+pub(crate) fn host_of(href: &str) -> Option<String> {
+    url::Url::parse(href).ok()?.host_str().map(str::to_string)
 }
 
-fn percent_decoded(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = b
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (b[i], hex) {
-            (b'%', Some(v)) => {
-                out.push(v);
-                i += 3;
-            }
-            (v, _) => {
-                out.push(v);
-                i += 1;
-            }
+/// Where `href` sends one on to, through Scholar's and Google's redirects:
+/// only those, by their own host and path, as a browser reads them; never
+/// an address that names them elsewhere in it.
+pub(crate) fn unwrapped(href: &str) -> String {
+    let Ok(u) = url::Url::parse(href) else {
+        return href.to_string();
+    };
+    let host = u.host_str().unwrap_or("");
+    let ours = |h: Option<&str>| h.is_some_and(|h| GOOGLE.contains(&h));
+    let keys: &[&str] = match (u.scheme(), u.path()) {
+        ("http" | "https", "/scholar_url") if ours(host.strip_prefix("scholar.")) => &["url"],
+        ("http" | "https", "/url") if ours(host.strip_prefix("www.")) || ours(Some(host)) => {
+            &["q", "url"]
         }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+        _ => &[],
+    };
+    keys.iter()
+        .find_map(|key| {
+            u.query_pairs()
+                .find(|(k, v)| k == key && (v.starts_with("http://") || v.starts_with("https://")))
+                .map(|(_, v)| v.into_owned())
+        })
+        .unwrap_or_else(|| href.to_string())
 }
 
 /// The DOI in `link`'s path: `10.`, digits, `/`, up to its query.

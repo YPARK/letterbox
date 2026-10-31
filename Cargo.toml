@@ -35,6 +35,7 @@ sha2 = "0.10"
 toml = "1.1.8"
 toml_edit = "0.25.17"
 unicode-width = "0.2.2"
+url = "2.5"
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
 webpki-roots = "1.0.10"
 # A message's pages, typeset by ohp and drawn in the terminal where it can

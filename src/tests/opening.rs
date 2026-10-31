@@ -46,6 +46,8 @@ fn only_scholar_and_google_themselves_are_followed_through() {
         "https://scholar.google.com.evil.example/scholar_url?url=https://bank.example/login",
         "https://www.google.com@evil.example/url?q=https://bank.example/login",
         "https://www.google.com/search?q=https://bank.example/login",
+        "https://www.google.com\\@evil.example/url?q=https://bank.example/login",
+        "https://www.google.co.evil/url?q=https://bank.example/login",
     ] {
         assert_eq!(crate::papers::unwrapped(href), href, "{href}");
     }
@@ -60,6 +62,13 @@ fn a_link_named_as_another_address_shows_where_it_truly_goes() {
     );
     assert_eq!(said, "https://bank.example/login");
     assert_eq!(kind, "login.evil.example · browser");
+    // Who it says it is, before an @, is not where it goes.
+    let (_, kind) = crate::ui::files::link_label(
+        "https://bank.example@evil.example/x",
+        Some("Your bank"),
+        "browser",
+    );
+    assert_eq!(kind, "evil.example · browser");
 }
 
 #[test]
