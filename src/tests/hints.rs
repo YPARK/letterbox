@@ -120,19 +120,17 @@ fn hidden_until_enter_is_not_said_once_one_is_read() {
     assert!(app.status.contains("hidden until"), "{}", app.status);
     let (app, _) = at(120, 30, &["\\", "\\", "<enter>"]);
     assert!(!app.status.contains("hidden until"), "{}", app.status);
-    // The one read already, read again; or one read from the map.
-    for keys in [
-        &["<enter>", "<esc>", "\\", "\\", "<enter>"][..],
-        &["M", "\\", "\\", "<enter>", "<enter>"],
-    ] {
-        let (app, _) = at(120, 30, keys);
-        assert!(app.reading.is_some(), "{keys:?}");
-        assert!(
-            !app.status.contains("hidden until"),
-            "{keys:?}: {}",
-            app.status
-        );
-    }
+    // The one read already, read again.
+    let keys = ["<enter>", "<esc>", "\\", "\\", "<enter>"];
+    let (app, _) = at(120, 30, &keys);
+    assert!(app.reading.is_some());
+    assert!(!app.status.contains("hidden until"), "{}", app.status);
+    // One read from the map, down at it in its cluster's tree.
+    let mut app = super::mapscreen::demo_map();
+    super::filing::down_subject(&mut app, "Aims page, third pass");
+    press(&mut app, &["\\", "\\", "<enter>"]);
+    assert!(app.reading.is_some(), "{}", app.status);
+    assert!(!app.status.contains("hidden until"), "{}", app.status);
 }
 
 #[test]

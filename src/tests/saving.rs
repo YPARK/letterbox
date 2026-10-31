@@ -172,9 +172,13 @@ fn the_folder_to_save_in_shows_its_end_with_one_slash() {
         .lines()
         .find(|l| l.starts_with("│ …"))
         .expect("its start cut");
-    assert!(header.contains("/alpha/ "), "{header}");
+    let end = format!("{}alpha/ ", std::path::MAIN_SEPARATOR);
+    assert!(header.contains(&end), "{header}");
 
     // At the root, a slash alone.
+    if cfg!(windows) {
+        return;
+    }
     press(&mut app, &["<esc>"]);
     app.save_dir = Some(PathBuf::from("/"));
     press(&mut app, &["S"]);
