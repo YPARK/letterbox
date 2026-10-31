@@ -182,9 +182,9 @@ impl App {
             }
             Act::Back if self.map.focused != Focused::All => self.map.focused = Focused::All,
             // The message read beside the map is paged from it, as from
-            // the list.
+            // the list; only while it is on screen there.
             Act::PageDown | Act::PageUp | Act::ScreenDown | Act::ScreenUp
-                if self.reading.is_some() =>
+                if self.reader_beside() =>
             {
                 return false;
             }
@@ -202,15 +202,20 @@ impl App {
         true
     }
 
+    /// Whether a message read is on screen beside the map, not hidden nor
+    /// in the place of the Inbox looked through.
+    fn reader_beside(&self) -> bool {
+        self.reading.is_some() && self.side_by_side && !self.reviewing()
+    }
+
     /// Whether the map, with the focus on it, refuses `act` where it is.
     /// The map is looked at: what moves mail, or marks it to, is done down
     /// at a message in a cluster's tree, reading it, or in the Inbox looked
     /// through; never on the clusters, where a key is so easily pressed on
     /// the wrong one.
-    pub fn map_refuses(&mut self, act: Act) -> bool {
+    pub fn map_refuses(&self, act: Act) -> bool {
         let now = jiff::Timestamp::now().as_second();
-        let down = self.map.at_message(now);
-        map_refuses(act, self.map.moving.is_some(), down)
+        map_refuses(act, self.map.moving.is_some(), || self.map.at_message(now))
     }
 
     /// Whether the map is down at a message in a cluster's tree, where
@@ -218,13 +223,13 @@ impl App {
     /// every key the foot offers.
     pub fn map_down(&self) -> bool {
         let now = jiff::Timestamp::now().as_second();
-        self.map.is_at_message(now)
+        self.map.at_message(now)
     }
 }
 
 /// Whether the map refuses `act`, a message `moving` or not, and `down` at
-/// one in a cluster's tree or not.
-pub fn map_refuses(act: Act, moving: bool, down: bool) -> bool {
+/// one in a cluster's tree or not: asked only where it matters.
+pub fn map_refuses(act: Act, moving: bool, down: impl FnOnce() -> bool) -> bool {
     let moves = matches!(
         act,
         Act::Trash
@@ -236,7 +241,7 @@ pub fn map_refuses(act: Act, moving: bool, down: bool) -> bool {
             | Act::NotIt
             | Act::Mark
     );
-    moves && !moving && (act == Act::Mark || !down)
+    moves && !moving && (act == Act::Mark || !down())
 }
 
 impl App {

@@ -44,6 +44,27 @@ fn the_maps_keys_from_beside_it_say_tab_goes_to_it() {
 }
 
 #[test]
+fn space_leaves_a_message_read_but_not_on_screen_beside_the_map() {
+    let mut app = demo_map();
+    // One read in the Inbox looked through, then back to its list.
+    press(&mut app, &["i", "<enter>"]);
+    assert!(app.reading.is_some());
+    press(&mut app, &["<esc>"]);
+    if app.focus != Focus::List {
+        press(&mut app, &["<tab>"]);
+    }
+    assert!(
+        app.reviewing() && app.focus == Focus::List,
+        "{}",
+        app.status
+    );
+    let _ = app::screen(&mut app, 120, 35);
+    let before = app.scroll;
+    press(&mut app, &["<space>"]);
+    assert_eq!(app.scroll, before, "not paged out of sight");
+}
+
+#[test]
 fn y_capital_in_the_inbox_looked_through_chooses_all_like_it() {
     let mut app = demo_map();
     press(&mut app, &["i"]);
@@ -228,4 +249,34 @@ fn the_foot_asks_whether_the_map_is_down_at_a_message_without_changing_it() {
         assert_eq!(app.map.tree.as_ref().unwrap().id, here, "nothing opened");
         assert_eq!(down, app.map.at_message(now));
     }
+}
+
+#[test]
+fn whether_the_map_refuses_a_key_changes_nothing_of_it() {
+    let mut app = demo_map();
+    press(&mut app, &["<enter>"]);
+    let s = app.map.snapshot.clone().unwrap();
+    let here = app.map.tree.as_ref().unwrap().id;
+    // The message picked in another cluster, the tree not yet grown.
+    if let Some(d) = s.dots.iter().find(|d| {
+        s.group_of(s.find(&d.key).unwrap())
+            .is_some_and(|g| g.id != here)
+    }) {
+        app.map.cursor = Some(d.key.clone());
+    }
+    if let Some(t) = &mut app.map.tree {
+        t.grown = None;
+    }
+    let (cursor, depth) = (
+        app.map.cursor.clone(),
+        app.map.tree.as_ref().map(|t| t.depth),
+    );
+    use crate::keymap::Act;
+    for act in [Act::Down, Act::Trash, Act::Archive, Act::Move] {
+        app.map_refuses(act);
+    }
+    let t = app.map.tree.as_ref().unwrap();
+    assert_eq!((t.id, t.depth), (here, depth.unwrap()), "nothing opened");
+    assert!(t.grown.is_none(), "nothing grown");
+    assert_eq!(app.map.cursor, cursor, "nothing picked");
 }

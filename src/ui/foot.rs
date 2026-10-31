@@ -145,7 +145,10 @@ fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());
     // A hint whose keys are all refused there offers nothing.
     if pane == Pane::Map {
-        let (moving, down) = (app.map.moving.is_some(), app.map_down());
+        // Down at a message or not, asked once at most.
+        let moving = app.map.moving.is_some();
+        let down = std::cell::OnceCell::new();
+        let down = || *down.get_or_init(|| app.map_down());
         list.retain(|h| {
             h.keys.is_empty()
                 || h.keys

@@ -103,6 +103,23 @@ impl Tried {
     }
 }
 
+/// What `tree_picked` finds of the tree, before anything is changed.
+struct Seen {
+    /// The cluster to go into: the message picked is in it, not the one
+    /// open.
+    into: Option<u32>,
+    root: Arc<Branch>,
+    /// Grown anew: of which snapshot and how many shown, and its parts,
+    /// to be kept, if they are new.
+    #[allow(clippy::type_complexity)]
+    grown: Option<(usize, usize, Option<(usize, Vec<Vector>)>)>,
+    /// The newest message, to be picked: none of the tree is.
+    newest: Option<usize>,
+    /// How far down the branch picked is, and the way to it.
+    depth: usize,
+    path: Vec<usize>,
+}
+
 /// A cluster looked at as its tree.
 #[derive(Clone, Debug)]
 pub struct Tree {
@@ -226,65 +243,65 @@ impl Map {
         Some((branch, kept.is_none().then_some((held, centres))))
     }
 
-    /// Whether a cluster's tree is gone down to a message, as `at_message`
-    /// finds it, without opening, growing or picking anything.
-    pub fn is_at_message(&self, now: i64) -> bool {
-        let (Some(s), Some(t)) = (&self.snapshot, &self.tree) else {
-            return false;
-        };
-        // The message picked elsewhere: its cluster as it would be gone into.
-        let (id, depth) = match self.picked().and_then(|i| s.group_of(i)) {
-            Some(g) if g.id != t.id => (g.id, 1),
-            _ => (t.id, t.depth),
-        };
+    /// What `tree_picked` finds, nothing opened, grown or picked.
+    fn seen(&self, now: i64) -> Option<Seen> {
+        let (s, t) = (self.snapshot.as_ref()?, self.tree.as_ref()?);
+        // The message picked elsewhere, as by a search or the Inbox looked
+        // through: its cluster gone into instead, never another picked.
+        let into = self
+            .picked()
+            .and_then(|i| s.group_of(i))
+            .map(|g| g.id)
+            .filter(|&id| id != t.id);
+        let (id, depth) = into.map_or((t.id, t.depth), |id| (id, 1));
         let shown = self.shown(now);
         let of = Arc::as_ptr(s) as usize;
-        let root = match &t.grown {
-            Some((o, n, b)) if id == t.id && *o == of && *n == shown.len() => b.clone(),
-            _ => match self.grow(s, id, &shown) {
-                Some((b, _)) => Arc::new(b),
-                None => return false,
-            },
+        let (root, grown) = match &t.grown {
+            Some((o, n, b)) if into.is_none() && *o == of && *n == shown.len() => (b.clone(), None),
+            _ => {
+                let (b, parts) = self.grow(s, id, &shown)?;
+                (Arc::new(b), Some((of, shown.len(), parts)))
+            }
         };
-        let path = match self.picked().and_then(|i| root.path_to(i)) {
-            Some(path) => path,
-            None => match root.newest().and_then(|i| root.path_to(i)) {
-                Some(path) => path,
-                None => return false,
-            },
+        let (path, newest) = match self.picked().and_then(|i| root.path_to(i)) {
+            Some(path) => (path, None),
+            None => {
+                let i = root.newest()?;
+                (root.path_to(i)?, Some(i))
+            }
         };
         let depth = depth.clamp(1, path.len().max(1));
-        root.at(&path[..depth.min(path.len())])
-            .is_some_and(|b| b.is_leaf())
+        let path = path[..depth.min(path.len())].to_vec();
+        Some(Seen {
+            into,
+            root,
+            grown,
+            newest,
+            depth,
+            path,
+        })
     }
 
     /// The tree, and the way to the branch picked in it: the one the
     /// message picked is under, as far down as it is looked at. The newest
     /// message is picked if none of it is.
     pub fn tree_picked(&mut self, now: i64) -> Option<(Arc<Branch>, Vec<usize>)> {
-        // The message picked elsewhere, as by a search or the Inbox looked
-        // through: its cluster gone into instead, never another picked.
-        let s = self.snapshot.clone()?;
-        let elsewhere = self
-            .picked()
-            .and_then(|i| s.group_of(i))
-            .map(|g| g.id)
-            .filter(|&id| self.tree.as_ref().is_some_and(|t| t.id != id));
-        if let Some(id) = elsewhere {
+        let seen = self.seen(now)?;
+        if let Some(id) = seen.into {
             self.open_block(id);
         }
-        let root = self.grown(now)?;
-        let path = match self.picked().and_then(|i| root.path_to(i)) {
-            Some(path) => path,
-            None => {
-                let i = root.newest()?;
-                self.cursor = Some(self.snapshot.as_ref()?.dots[i].key.clone());
-                root.path_to(i)?
+        if let Some((of, n, parts)) = seen.grown {
+            let t = self.tree.as_mut()?;
+            t.grown = Some((of, n, seen.root.clone()));
+            if let Some(parts) = parts {
+                self.parts.insert(t.id, parts);
             }
-        };
-        let t = self.tree.as_mut()?;
-        t.depth = t.depth.clamp(1, path.len().max(1));
-        Some((root.clone(), path[..t.depth.min(path.len())].to_vec()))
+        }
+        if let Some(i) = seen.newest {
+            self.cursor = Some(self.snapshot.as_ref()?.dots[i].key.clone());
+        }
+        self.tree.as_mut()?.depth = seen.depth;
+        Some((seen.root, seen.path))
     }
 
     /// Pick the branch `by` after the one picked, as far down within the
@@ -313,12 +330,11 @@ impl Map {
     }
 
     /// Whether a cluster's tree is gone down to a message: the one place on
-    /// the map, besides reading it, where mail is acted on.
-    pub fn at_message(&mut self, now: i64) -> bool {
-        self.tree.is_some()
-            && self
-                .tree_picked(now)
-                .is_some_and(|(root, path)| root.at(&path).is_some_and(|b| b.is_leaf()))
+    /// the map, besides reading it, where mail is acted on. Nothing is
+    /// opened, grown or picked to say so.
+    pub fn at_message(&self, now: i64) -> bool {
+        self.seen(now)
+            .is_some_and(|s| s.root.at(&s.path).is_some_and(|b| b.is_leaf()))
     }
 
     /// Go into the branch picked, to the one under it the message picked
