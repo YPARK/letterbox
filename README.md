@@ -154,7 +154,7 @@ letterbox search grant report --account Work
 | `j` / `k`, the arrows, `C-n` / `C-p` | move; in a message, scroll |
 | `h` / `l`, `C-b` / `C-f`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
-| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys |
+| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys. In the sidebar, `space` folds the folder picked to itself, if folders are under it (`+3` says how many), else its account to its Inbox (`▸`), or opens it again; a click on an account does too, and one on ALL ACCOUNTS folds them all, or opens them. What is folded is remembered |
 | the mouse | several selected, in the list or the Inbox looked through: dragged over their rows, Ctrl and a click adding one or taking it away, Shift and a click as far as one (where the terminal passes Shift and a click on). Selected rows are shown `▪`, and the foot says how many; `m`, `d`, `e`, `u` and `!` then act on all of it, asked first, and `esc` lets it go. No key selects alone, and nothing is selected on the map |
 | `<` / `>` | make the message read wider, or narrower; below the list, taller or shorter; or drag the line before it. It opens as wide again next time |
 | `\` | put the message read elsewhere, in turn: below the list, hidden until `enter` reads one, a pop-up over the list until `esc`, or beside it again. It opens where it was left |

@@ -514,6 +514,10 @@ pub struct App {
     /// Where it is written down how the mail was looked at, the list or
     /// the map, to open as it was left; none to keep nothing.
     pub look_file: Option<PathBuf>,
+    /// What is folded in the sidebar, by account name, each by folder path:
+    /// the account itself, by an empty path, to its Inbox; a folder to
+    /// itself.
+    pub folded: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     /// Whether new mail is thrown away on its own, and when what it did
     /// was last told of; and where that is kept, if anywhere.
     pub auto: crate::filter::Auto,
@@ -796,6 +800,7 @@ impl App {
             read_height: 0,
             page_room: (0, 0),
             look_file: None,
+            folded: Default::default(),
             auto: Default::default(),
             filter_file: None,
             library: Default::default(),

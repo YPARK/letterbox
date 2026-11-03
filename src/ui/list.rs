@@ -167,39 +167,67 @@ pub(super) fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             ),
             Row::Account(a) => {
                 let account = &app.accounts[a];
+                let folded = app.is_folded(a, None);
+                // Folded or open, as space or a click on it turns it.
+                let mut spans = vec![Span::styled(
+                    if folded { " ▸" } else { " ▾" },
+                    Style::new().fg(t.faint),
+                )];
                 // Its colour, to tell its messages by among others'.
-                let mut spans = if together {
-                    vec![Span::styled(" ●", Style::new().fg(t.account(a)))]
-                } else {
-                    Vec::new()
-                };
-                spans.push(Span::styled(
-                    format!(
-                        " {}",
-                        clip(&account.name.to_uppercase(), width.saturating_sub(16))
-                    ),
-                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
-                ));
+                if together {
+                    spans.push(Span::styled(" ●", Style::new().fg(t.account(a))));
+                }
+                // After its name, what is folded away, and how it connects:
+                // the name clipped to leave room for them.
+                let mut after = Vec::new();
+                if folded {
+                    let hidden = account
+                        .folders
+                        .iter()
+                        .filter(|f| !crate::app::shown_folded(f))
+                        .count();
+                    after.push(Span::styled(
+                        format!(" {hidden} more"),
+                        Style::new().fg(t.faint),
+                    ));
+                }
                 match &account.state {
                     State::Connecting => {
-                        spans.push(Span::styled(" connecting…", Style::new().fg(t.faint)))
+                        after.push(Span::styled(" connecting…", Style::new().fg(t.faint)))
                     }
                     State::Failed(_) => {
-                        spans.push(Span::styled(" cannot connect", Style::new().fg(t.error)))
+                        after.push(Span::styled(" cannot connect", Style::new().fg(t.error)))
                     }
                     State::Ready => {}
                 }
+                let used: usize = spans.iter().chain(&after).map(Span::width).sum();
+                spans.push(Span::styled(
+                    format!(
+                        " {}",
+                        clip(
+                            &account.name.to_uppercase(),
+                            width.saturating_sub(used + 3).max(4)
+                        )
+                    ),
+                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
+                ));
+                spans.extend(after);
                 ListItem::new(vec![Line::raw(""), Line::from(spans)])
             }
             Row::Folder(a, i) => {
                 let folder = &app.accounts[a].folders[i];
+                // Folded, how many are under it, beside its name.
+                let name = match app.is_folded(a, Some(i)).then(|| app.under(a, i)) {
+                    Some(n) if n > 0 => format!("{} +{n}", folder.name),
+                    _ => folder.name.clone(),
+                };
                 folder_row(
                     t,
                     width,
                     FolderRow {
                         depth: folder.depth + 1,
                         role: folder.role,
-                        name: &folder.name,
+                        name: &name,
                         unseen: folder.unseen,
                         selectable: folder.selectable,
                         open: matches!(listed, Some(View::Folder(x, path))

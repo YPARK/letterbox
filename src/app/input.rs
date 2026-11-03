@@ -444,7 +444,8 @@ impl App {
             Act::Up => self.step(-1),
             Act::PageDown if self.focus == Focus::Side => self.step(5),
             Act::PageUp if self.focus == Focus::Side => self.step(-5),
-            Act::ScreenDown | Act::ScreenUp if self.focus == Focus::Side => {}
+            Act::ScreenDown if self.focus == Focus::Side => self.fold(),
+            Act::ScreenUp if self.focus == Focus::Side => {}
             Act::PageDown | Act::ScreenDown => self.scroll_by(page),
             Act::PageUp | Act::ScreenUp => self.scroll_by(-page),
             Act::Top => self.jump(false),
@@ -693,13 +694,25 @@ impl App {
             }
             Some(Target::Row(i)) => {
                 self.focus = Focus::Side;
-                if matches!(
-                    self.rows.get(i),
-                    Some(Row::Folder(..) | Row::All(_) | Row::Map | Row::Cluster(_) | Row::Loners)
-                ) {
-                    self.row = i;
-                    self.open_row(true);
-                    self.focus = Focus::List;
+                match self.rows.get(i).copied() {
+                    // Every account folded to its Inbox, or, all folded,
+                    // opened; one account; a folder that cannot be opened,
+                    // with folders within it.
+                    Some(Row::Everyone) => self.fold_all(),
+                    Some(Row::Account(a)) => self.fold_at(a, None),
+                    Some(Row::Folder(a, n))
+                        if !self.accounts[a].folders[n].selectable && self.has_under(a, n) =>
+                    {
+                        self.fold_at(a, Some(n))
+                    }
+                    Some(
+                        Row::Folder(..) | Row::All(_) | Row::Map | Row::Cluster(_) | Row::Loners,
+                    ) => {
+                        self.row = i;
+                        self.open_row(true);
+                        self.focus = Focus::List;
+                    }
+                    _ => {}
                 }
             }
             Some(Target::List | Target::Map) => self.focus = Focus::List,

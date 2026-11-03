@@ -86,6 +86,16 @@ pub struct Folder {
 }
 
 impl Folder {
+    /// Whether it is within the folder at `path`, under it as deep as it
+    /// goes, by its path and its server's delimiter, `/` where none is said.
+    pub fn is_within(&self, path: &str) -> bool {
+        !path.is_empty()
+            && self
+                .path
+                .strip_prefix(path)
+                .is_some_and(|rest| rest.starts_with(self.delimiter.as_deref().unwrap_or("/")))
+    }
+
     pub fn new(
         path: &str,
         delimiter: Option<&str>,

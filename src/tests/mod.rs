@@ -24,6 +24,7 @@ mod editing;
 mod filing;
 mod filter;
 mod folders;
+mod folding;
 mod gmail;
 mod grammar;
 mod hints;

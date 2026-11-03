@@ -343,10 +343,29 @@ impl App {
             self.rows.push(Row::Everyone);
             self.rows.extend(TOGETHER.map(Row::All));
         }
+        // What is folded of an account or a folder no more, let go.
+        let names: Vec<&str> = self.accounts.iter().map(|a| a.name.as_str()).collect();
+        self.folded.retain(|n, _| names.contains(&n.as_str()));
+        for account in self.accounts.iter().filter(|a| !a.folders.is_empty()) {
+            if let Some(paths) = self.folded.get_mut(&account.name) {
+                paths.retain(|p| p.is_empty() || account.folders.iter().any(|f| f.path == *p));
+            }
+        }
         for a in self.live().collect::<Vec<_>>() {
             self.rows.push(Row::Account(a));
-            self.rows
-                .extend((0..self.accounts[a].folders.len()).map(|i| Row::Folder(a, i)));
+            let folded = self.is_folded(a, None);
+            let account = &self.accounts[a];
+            let folds = self.folded.get(&account.name);
+            for (i, f) in account.folders.iter().enumerate() {
+                if folded && !shown_folded(f) {
+                    continue;
+                }
+                // Within a folder folded, as deep as it goes, nothing shown.
+                let hidden = folds.is_some_and(|paths| paths.iter().any(|p| f.is_within(p)));
+                if !hidden {
+                    self.rows.push(Row::Folder(a, i));
+                }
+            }
         }
         if let Some(s) = &self.map.snapshot
             && !s.groups.is_empty()
@@ -366,6 +385,114 @@ impl App {
             .and_then(|p| self.rows.iter().position(|r| *r == p))
             .or_else(|| self.rows.iter().position(|r| matches!(r, Row::Folder(..))))
             .unwrap_or(0);
+    }
+
+    /// How many folders are within the folder `i` of `account`, by path.
+    pub fn under(&self, account: usize, i: usize) -> usize {
+        let folders = &self.accounts[account].folders;
+        folders
+            .iter()
+            .filter(|f| f.is_within(&folders[i].path))
+            .count()
+    }
+
+    /// Whether any folder is within the folder `i` of `account`.
+    pub fn has_under(&self, account: usize, i: usize) -> bool {
+        let folders = &self.accounts[account].folders;
+        folders.iter().any(|f| f.is_within(&folders[i].path))
+    }
+
+    /// Whether the account `account` is folded, or its folder `i` is.
+    pub fn is_folded(&self, account: usize, i: Option<usize>) -> bool {
+        let a = &self.accounts[account];
+        let path = i.map_or("", |i| a.folders[i].path.as_str());
+        self.folded.get(&a.name).is_some_and(|p| p.contains(path))
+    }
+
+    /// Space in the sidebar: an account folded opened again; else the
+    /// folder picked folded to itself, or opened, if folders are within it;
+    /// else its account, to its Inbox.
+    pub(super) fn fold(&mut self) {
+        let (a, i) = match self.rows.get(self.row) {
+            Some(&Row::Folder(a, i)) if !self.is_folded(a, None) && self.has_under(a, i) => {
+                (a, Some(i))
+            }
+            Some(&Row::Folder(a, _) | &Row::Account(a)) => (a, None),
+            _ => return,
+        };
+        self.fold_at(a, i);
+    }
+
+    /// Every account folded to its Inbox; or, if all are, every one opened.
+    pub(super) fn fold_all(&mut self) {
+        let live: Vec<usize> = self.live().collect();
+        let all = live.iter().all(|&a| self.is_folded(a, None));
+        for a in live {
+            let paths = self
+                .folded
+                .entry(self.accounts[a].name.clone())
+                .or_default();
+            if all {
+                paths.remove("");
+            } else {
+                paths.insert(String::new());
+            }
+        }
+        self.refold();
+        self.status = if all {
+            "every account opened · a click on one folds it".to_string()
+        } else {
+            "every account folded to its Inbox · a click on one opens it".to_string()
+        };
+    }
+
+    /// Fold the account `a`, or its folder `i`, or open it, and say so.
+    pub(super) fn fold_at(&mut self, a: usize, i: Option<usize>) {
+        let account = &self.accounts[a];
+        let (path, name) = match i {
+            Some(i) => (
+                account.folders[i].path.clone(),
+                account.folders[i].name.clone(),
+            ),
+            None => (String::new(), account.name.clone()),
+        };
+        let paths = self.folded.entry(account.name.clone()).or_default();
+        let folding = !paths.remove(&path);
+        if folding {
+            paths.insert(path);
+        }
+        self.refold();
+        self.status = if folding {
+            format!("{name} folded · space opens it")
+        } else {
+            format!("{name} opened · space folds it")
+        };
+    }
+
+    /// The sidebar again, as folded now, and written down. What is picked
+    /// stays picked; folded away, the folder it is within is picked, else its
+    /// account's Inbox, and listed.
+    fn refold(&mut self) {
+        let picked = self.rows.get(self.row).copied();
+        self.rebuild();
+        self.remember_look();
+        if self.rows.get(self.row).copied() == picked {
+            return;
+        }
+        let Some(Row::Folder(a, i)) = picked else {
+            return;
+        };
+        let folders = &self.accounts[a].folders;
+        let inbox = self.role_folder(a, Role::Inbox).map(|f| f.path.as_str());
+        let instead = (0..folders.len())
+            .find(|&n| folders[i].is_within(&folders[n].path) && self.is_folded(a, Some(n)))
+            .or_else(|| folders.iter().position(|f| Some(f.path.as_str()) == inbox));
+        if let Some(at) =
+            instead.and_then(|n| self.rows.iter().position(|r| *r == Row::Folder(a, n)))
+        {
+            self.row = at;
+            self.due = Some((Instant::now(), Due::Folder));
+        }
     }
 
     pub fn current(&self) -> Option<&Listed> {
@@ -975,4 +1102,9 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Whether `f` is shown of an account folded: its Inbox alone.
+pub fn shown_folded(f: &Folder) -> bool {
+    f.role == Role::Inbox
 }

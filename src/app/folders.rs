@@ -242,13 +242,12 @@ impl App {
         // A folder under it would be removed with it: never.
         for a in self.live().collect::<Vec<_>>() {
             let folders = &self.accounts[a].folders;
-            if let Some(f) = crate::index::labels::folder_for(folders, &label) {
-                let under = format!("{}{}", f.path, f.delimiter.as_deref().unwrap_or("/"));
-                if folders.iter().any(|g| g.path.starts_with(&under)) {
-                    self.status =
-                        format!("{label} has folders under it: remove those first, or split it");
-                    return;
-                }
+            if let Some(f) = crate::index::labels::folder_for(folders, &label)
+                && folders.iter().any(|g| g.is_within(&f.path))
+            {
+                self.status =
+                    format!("{label} has folders under it: remove those first, or split it");
+                return;
             }
         }
         let members = self.in_label(&label);

@@ -410,6 +410,17 @@ impl App {
             if let Some(dir) = line.strip_prefix("save ") {
                 self.save_dir = Some(PathBuf::from(dir));
             }
+            if let Some((account, path)) =
+                line.strip_prefix("fold ").and_then(|f| f.split_once('\t'))
+            {
+                self.folded
+                    .entry(account.to_string())
+                    .or_default()
+                    .insert(path.to_string());
+            }
+        }
+        if !self.folded.is_empty() {
+            self.rebuild();
         }
         if look.split_whitespace().next() != Some("map") || self.map_off.is_some() || self.map_later
         {
@@ -446,8 +457,16 @@ impl App {
             .and_then(|d| d.to_str())
             .filter(|d| !d.contains('\n'))
             .map_or(String::new(), |d| format!("save {d}\n"));
+        // What is folded, by names on one line: none across lines kept.
+        let folded: String = self
+            .folded
+            .iter()
+            .flat_map(|(a, paths)| paths.iter().map(move |p| (a, p)))
+            .filter(|(a, p)| !(a.contains(['\n', '\t']) || p.contains(['\n', '\t'])))
+            .map(|(a, p)| format!("fold {a}\t{p}\n"))
+            .collect();
         // Only how it was left; nothing lost if it cannot be kept.
-        let _ = std::fs::write(path, format!("{look}\n{wide}{save}"));
+        let _ = std::fs::write(path, format!("{look}\n{wide}{save}{folded}"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked
