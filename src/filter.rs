@@ -44,6 +44,10 @@ pub struct Taught {
     /// Decided through an AI agent, and confirmed by you as it asked.
     #[serde(default)]
     pub agent: bool,
+    /// Answered as you were asked about it, what it was least sure of, or
+    /// got wrong: not asked of again.
+    #[serde(default)]
+    pub asked: bool,
 }
 
 /// What is known beside a message, that tells mail you want: whom you
@@ -76,6 +80,11 @@ pub const SURE: f32 = 0.9;
 /// How sure it is to be, at least, to throw new mail away on its own: at
 /// 95%, graded on real mail, it would have thrown away none of 161 kept.
 pub const AUTO: f32 = 0.95;
+/// How far it is to lean against what you decided, at least, to ask you
+/// again.
+pub const DISAGREES: f32 = 0.7;
+/// How far from even it may be, at most, to ask you as it is not sure.
+pub const UNSURE: f32 = 0.2;
 /// How much of each weight is kept a decision: what was learnt long ago,
 /// and not since, fades, by half in some 7,000 decisions, and no weight
 /// grows without end. Graded on real mail, stronger fading only lost what
@@ -325,6 +334,12 @@ impl Filter {
             self.kept += 1;
         }
         self.taught.push(t);
+    }
+
+    /// How far it now leans against what was decided in `t`, from 0 to 1.
+    pub fn against(&self, t: &Taught) -> f32 {
+        let odds = self.odds(&t.tokens);
+        if t.thrown { 1.0 - odds } else { odds }
     }
 
     /// Whether it has been taught enough of both to say anything.

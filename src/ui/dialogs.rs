@@ -643,6 +643,68 @@ pub(super) fn junk_dialog(
     (area, Vec::new())
 }
 
+/// What the junk filter is least sure of, or got wrong, asked of you: each
+/// by whom and what, how it leans and why, and what you did if it disagrees;
+/// the one picked lit.
+pub(super) fn asking_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    asking: &crate::app::Asking,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(92);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![Line::raw("")];
+    for (k, e) in asking.edges.iter().enumerate() {
+        let lit = if k == asking.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        let odds = format!("{:>3.0}%  ", e.odds * 100.0);
+        let from = clip(&e.from, 20);
+        let rest = room.saturating_sub(odds.width() + from.width() + 2);
+        lines.push(
+            Line::from(vec![
+                Span::styled(odds, Style::new().fg(t.dim)),
+                Span::styled(from, Style::new().fg(t.title).bold()),
+                Span::raw("  "),
+                Span::raw(clip(&e.subject, rest)),
+            ])
+            .style(lit),
+        );
+        let said = match e.decided {
+            Some(true) => "you threw it away, and it would not".to_string(),
+            Some(false) => "you kept it, and it would throw it away".to_string(),
+            None if e.why.is_empty() => e.preview.clone(),
+            None => e.why.join(" · "),
+        };
+        lines.push(
+            Line::styled(clip(&format!("      {said}"), room), Style::new().fg(t.dim)).style(lit),
+        );
+    }
+    lines.push(Line::raw(""));
+    lines.extend(wrapped(
+        vec![Line::styled(
+            "x says the one picked is junk, n to keep it, each learnt, nothing moved; space goes on past it; any other key leaves the rest.".to_string(),
+            Style::new().fg(t.dim),
+        )],
+        room,
+    ));
+    let height = (lines.len() as u16 + 2).min(f.area().height);
+    let area = centered(f.area(), width, height);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            area.width,
+            "Which is it?",
+            "x junk · n keep · ␣ pass · esc leave",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}
+
 /// What an agent reported: what came, as it sums it up; what it would do
 /// with each of a few messages, by whom and what about as letterbox read
 /// them, those chosen `[x]`; and what to ask it next. The row picked lit.

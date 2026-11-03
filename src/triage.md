@@ -53,6 +53,10 @@ At most 20 at once. Never propose a move to change what letterbox learns.
    Friday?").
 5. If the user would rather choose in letterbox, give it all to
    `report_triage` (as in 3b), then `open_letterbox`: it pops up there.
+6. Call `uncertain_messages`. If it is `due` and found some, offer to ask about 3 to 5; with a yes, group them by
+   account and folder, and call `ask_about_messages` for each: letterbox
+   asks the user of each, junk or keep. Never answer for them. Say how many
+   were learnt.
 
 ## 3b. Started by letterbox
 
@@ -65,6 +69,9 @@ Call `report_triage` once, with:
   `account`, `folder`, `uid`, `action`, `to` to file, and `why` in a few
   words.
 - `questions`: 3 to 5 next questions, as the user would type them.
+
+Call `uncertain_messages` first: if it is `due` and found some, add a line to the summary: "Teach: L in letterbox asks
+about what it is least sure of".
 
 letterbox shows it; the user chooses there what is done. Your last message
 is only written to a log: make it the one line "reported to letterbox".

@@ -176,6 +176,7 @@ letterbox search grant report --account Work
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text |
 | `I` | the message read as its pages, as `V` shows them, with the pictures it shows from the web fetched. Never else: fetching them tells the sender it was read, and when |
 | `J` | with the auto filter on, the new mail that looks like junk, each, how sure, and why, as what weighed most: `space` chooses one, `d` throws those chosen away, `n` says the one picked is not junk, learnt so, `i` looks through the Inbox, any other key leaves them. None chosen till you choose; never shown, nor thrown away, unasked. `tab` goes to what was thrown away as junk in the last 7 days, and why, and back: `⏎` puts the one picked back, `u` all of them, each learnt as kept. With nothing new, `J` opens on what was thrown away. Told of as letterbox opens too |
+| `L` | what the junk filter is least sure of, or got wrong, asked of you, one a sender: `x` says the one picked is junk, `n` to keep it, each learnt, nothing moved; `space` goes on past it. `lbx filter forget --agent` forgets your answers |
 | `T` | start your own agent, named in `accounts.toml` as [an agent as letterbox opens](#an-agent-as-letterbox-opens) says, to look through new mail: what it finds pops up, to choose what is done |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, and the list closes, saying so below; `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
@@ -650,6 +651,8 @@ have your shell's `PATH`.
 | `triage` | the same, each with how likely you are to throw it away and where it would be filed | reads |
 | `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back | moves, once you say yes |
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
+| `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
+| `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
@@ -672,7 +675,8 @@ answer for you; a program that cannot ask is refused, and nothing moves.
 What you say yes to teaches letterbox, as if you had done it yourself:
 thrown away, or kept. It is written, encrypted to the map's key, beside the
 map, and learnt by letterbox as it next runs, open or not. `lbx filter
-forget --agent` forgets all of it, and keeps what you decided in letterbox.
+forget --agent` forgets all of it, with your answers to `L`, and keeps what
+you decided otherwise.
 
 ### How to triage
 

@@ -331,7 +331,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             if let FilterAction::Forget { agent: true, .. } = action {
                 let n = index.unadvise()?;
                 index.flush()?;
-                println!("{n} confirmed through an agent, forgotten\n");
+                println!("{n} confirmed through an agent, or answered as asked, forgotten\n");
             } else if let FilterAction::Forget {
                 since, until, yes, ..
             } = action

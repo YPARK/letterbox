@@ -240,10 +240,10 @@ fn what_an_agent_wrote_down_is_left_for_the_letterbox_that_writes_the_index() {
     let deal = sent_by("d", "deals@shop.example", "Save now");
     let open = Index::open_with(dir.path(), &id);
     index::advise(dir.path(), &id.to_public(), &[confirmed(&deal, true)]).unwrap();
-    // Another letterbox, reading only, learns it in memory and leaves it.
+    // Another letterbox, reading only, sees it in memory and leaves it.
     let mut reader = Index::read_only(dir.path(), &id);
     reader.take_advice().unwrap();
-    assert_eq!(reader.filter.thrown, 0);
+    assert_eq!(reader.filter.thrown, 1);
     drop(reader);
     drop(open);
     let index = Index::open_with(dir.path(), &id);

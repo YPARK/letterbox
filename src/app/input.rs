@@ -551,6 +551,7 @@ impl App {
             Act::SaveAll => self.save_all(),
             Act::Junk => self.show_junk(),
             Act::Agent => self.run_agent(),
+            Act::Asking => self.ask_edges(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),
             Act::Images => self.pages_with_images(),
