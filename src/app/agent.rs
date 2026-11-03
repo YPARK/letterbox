@@ -93,8 +93,6 @@ impl App {
             return;
         };
         set.due = false;
-        set.last_ran = jiff::Timestamp::now().as_second();
-        let _ = std::fs::write(&set.ran, set.last_ran.to_string());
         let started = (|| -> anyhow::Result<std::process::Child> {
             let mut open = std::fs::OpenOptions::new();
             open.create(true).write(true).truncate(true);
@@ -111,6 +109,8 @@ impl App {
         })();
         match started {
             Ok(child) => {
+                set.last_ran = jiff::Timestamp::now().as_second();
+                let _ = std::fs::write(&set.ran, set.last_ran.to_string());
                 self.agent = Some(AgentRun {
                     child,
                     reported: false,
