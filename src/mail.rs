@@ -66,6 +66,11 @@ impl Role {
     }
 }
 
+/// The folder of `role`, of those `folders`, to list.
+pub fn role_folder(folders: &[Folder], role: Role) -> Option<&Folder> {
+    folders.iter().find(|f| f.selectable && f.role == role)
+}
+
 /// The folder mail is moved to as thrown away, of those `folders`: the one
 /// `chosen` for the account, when it is still there, else the one the
 /// server marks as Trash.
@@ -579,6 +584,21 @@ fn plain<'x>(m: &'x mail_parser::Message<'x>) -> Option<std::borrow::Cow<'x, str
         Some(PartType::Html(h)) => Some(html_to_text(&blocks(h)).into()),
         _ => m.body_text(0),
     }
+}
+
+/// The plain part of a message, just as it was written, line ends made one
+/// and nothing a terminal would take as a command; none if it has only HTML.
+pub fn plain_text(raw: &[u8]) -> Option<String> {
+    let m = MessageParser::default().parse(raw)?;
+    let PartType::Text(text) = &m.text_part(0)?.body else {
+        return None;
+    };
+    Some(
+        text.replace("\r\n", "\n")
+            .chars()
+            .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+            .collect(),
+    )
 }
 
 /// The tags of HTML that begin and end a line of it read as text:

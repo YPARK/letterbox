@@ -257,16 +257,18 @@ impl App {
     }
 
     pub(super) fn is_trash(&self, account: usize, path: &str) -> bool {
+        self.role_is(account, path, Role::Trash)
+    }
+
+    /// Whether the folder `path` of `account` is its folder of `role`.
+    pub(super) fn role_is(&self, account: usize, path: &str, role: Role) -> bool {
         self.folder_of(account, path)
-            .is_some_and(|f| f.role == Role::Trash)
+            .is_some_and(|f| f.role == role)
     }
 
     /// The account's folder of `role`, if it has one to list.
     pub(super) fn role_folder(&self, account: usize, role: Role) -> Option<&Folder> {
-        self.accounts[account]
-            .folders
-            .iter()
-            .find(|f| f.selectable && f.role == role)
+        crate::mail::role_folder(&self.accounts[account].folders, role)
     }
 
     /// The folders of `role`, one an account, of the accounts in use.

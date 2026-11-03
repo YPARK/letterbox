@@ -170,6 +170,7 @@ letterbox search grant report --account Work
 | `a` | reply to all: the sender, the others it went to copied |
 | `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; several selected, asked first |
+| `E` | in Drafts, go on writing the draft picked, its thread and files kept: sent, it goes to Trash |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message. A PDF attached may be signed there, `S` in ohp, and replied with, as [Signing a PDF](#signing-a-pdf) says |
 | `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
@@ -653,6 +654,8 @@ have your shell's `PATH`.
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
+| `draft_reply` | a reply, threaded, quoting what it answers, kept in Drafts; never sent | writes a draft |
+| `draft_message` | a new letter, kept in Drafts; never sent | writes a draft |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
@@ -660,7 +663,9 @@ have your shell's `PATH`.
 The tools that read are marked read-only, so a program may let the agent
 use them without asking. The map's index is read as letterbox last kept it,
 and never written, so an agent may ask while letterbox runs. Nothing is
-sent, or deleted for good. Mail is from strangers, and a message may be
+sent, or deleted for good: an agent's letters wait in Drafts, for you to
+change and send, `E` on one there taking it up, and it goes to Trash once
+sent. Mail is from strangers, and a message may be
 written to steer an agent: the agent is told to read what a message says
 as data, never as instructions. An account whose password is in the vault
 is not served, as its passphrase cannot be asked for there; one in the

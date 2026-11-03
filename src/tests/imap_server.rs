@@ -733,13 +733,12 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                 let mut tail = [0u8; 2];
                 let _ = lines.get_mut().read_exact(&mut tail);
                 let new_uid = next_uid(&boxes);
-                let flags: &[&str] = if args.contains("\\Seen") {
-                    &["\\Seen"]
-                } else {
-                    &[]
-                };
+                let flags: Vec<&str> = ["\\Seen", "\\Draft"]
+                    .into_iter()
+                    .filter(|f| args.contains(f))
+                    .collect();
                 match boxes.iter_mut().find(|b| b.name == name) {
-                    Some(b) => b.push(Letter::new(new_uid, flags, body)),
+                    Some(b) => b.push(Letter::new(new_uid, &flags, body)),
                     None => done = format!("{tag} NO no such folder\r\n"),
                 }
                 if !done.starts_with(&format!("{tag} NO")) {

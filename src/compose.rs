@@ -240,6 +240,9 @@ pub(crate) struct Thread {
     pub in_reply_to: Option<String>,
     pub references: Option<String>,
     pub answering: Option<(String, u32)>,
+    /// The draft it was taken up from: its folder, UID and `Message-ID`, to
+    /// go to Trash once sent, not to be sent twice.
+    pub draft: Option<(String, u32, String)>,
 }
 
 /// How a message is answered: to its sender, to all it went to, or
@@ -249,6 +252,8 @@ pub enum Respond {
     Reply,
     All,
     Forward,
+    /// A draft taken up again, to go on writing it.
+    Draft,
 }
 
 /// What answering `message`, in `folder`, as `how` says, begins with: the
@@ -266,6 +271,7 @@ pub(crate) fn respond(
             in_reply_to,
             references,
             answering: Some((folder.to_string(), message.uid)),
+            draft: None,
         }
     };
     match how {
@@ -279,15 +285,118 @@ pub(crate) fn respond(
         }
         Respond::Forward => {
             let (text, row, col) = forward(message);
-            let files = files(message);
-            let names: Vec<String> = files
-                .iter()
-                .map(|f| format!("{}{FORWARDED}", f.name))
-                .collect();
-            let (text, _, _) = with_attached(&text, &names);
+            let (text, files) = sending_on(message, &text);
             (text, (row, col), Thread::default(), files)
         }
+        Respond::Draft => {
+            let r = resume(message, folder);
+            (r.text, r.at, r.thread, r.files)
+        }
     }
+}
+
+/// The lines above a message's text, as written.
+fn head(to: &str, cc: &str, subject: &str) -> String {
+    format!("To: {to}\nCc: {cc}\nSubject: {subject}")
+}
+
+/// The row of a message's text, with no `Attach` line above it.
+const BODY_ROW: usize = 4;
+
+/// `text` with an `Attach` line for each of the files of `message`, sent
+/// on with it; and those files.
+fn sending_on(message: &Message, text: &str) -> (String, Vec<File>) {
+    let files = files(message);
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| format!("{}{FORWARDED}", f.name))
+        .collect();
+    (with_attached(text, &names).0, files)
+}
+
+/// A draft taken up again: its buffer, where point is, what it answers,
+/// its files, and whether it had only HTML, gone on with as plain text.
+pub(crate) struct Resumed {
+    pub text: String,
+    pub at: (usize, usize),
+    pub thread: Thread,
+    pub files: Vec<File>,
+    pub html_only: bool,
+}
+
+/// The draft `message`, in `folder`, taken up: its text as it was written,
+/// not as it is read; what its HTML says, where it has only that.
+pub(crate) fn resume(message: &Message, folder: &str) -> Resumed {
+    let plain = mail::plain_text(&message.raw);
+    let html_only = plain.is_none();
+    let text = plain.unwrap_or_else(|| message.text.clone());
+    let buffer = format!(
+        "{}\n\n{}\n",
+        head(
+            &message.to.join(", "),
+            &message.cc.join(", "),
+            &message.subject
+        ),
+        text.trim_end_matches(['\r', '\n']),
+    );
+    let (text, files) = sending_on(message, &buffer);
+    Resumed {
+        text,
+        at: (BODY_ROW + files.len(), 0),
+        thread: Thread {
+            in_reply_to: mail::field(&message.raw, "In-Reply-To"),
+            references: mail::field(&message.raw, "References"),
+            answering: None,
+            draft: Some((
+                folder.to_string(),
+                message.uid,
+                message.message_id.clone().unwrap_or_default(),
+            )),
+        },
+        files,
+        html_only,
+    }
+}
+
+/// `body` above what a reply to `message` opens with, quoting it: as sent,
+/// from `me`, answering it, to all it went to if `all`. An error, if it
+/// cannot be addressed.
+pub fn reply_draft(message: &Message, me: &str, all: bool, body: &str) -> Result<Vec<u8>, String> {
+    let (to, cc) = if all {
+        to_all(message, me)
+    } else {
+        (sender(message), Vec::new())
+    };
+    let (head, quoted) = parts(message, &to, &cc);
+    let draft = parse(&format!("{head}\n\n{}\n\n{quoted}", body.trim_end()))?;
+    let (in_reply_to, references) = thread(message);
+    Ok(bytes(
+        me,
+        &draft,
+        in_reply_to.as_deref(),
+        references.as_deref(),
+        &[],
+    ))
+}
+
+/// A new letter, as sent from `me`. An error, if it cannot be addressed, or
+/// a line break in what goes in its headers would add one of its own.
+pub fn new_draft(
+    me: &str,
+    to: &[String],
+    cc: &[String],
+    subject: &str,
+    body: &str,
+) -> Result<Vec<u8>, String> {
+    let (to, cc) = (to.join(", "), cc.join(", "));
+    if [to.as_str(), cc.as_str(), subject]
+        .iter()
+        .any(|h| h.contains(['\n', '\r']))
+    {
+        return Err("a line break in who it is to, or its subject".to_string());
+    }
+    let draft = parse(&format!("{}\n\n{body}\n", head(&to, &cc, subject)))?;
+    Ok(bytes(me, &draft, None, None, &[]))
 }
 
 /// The buffer a reply opens with, and the row its point starts on: the
@@ -300,6 +409,12 @@ pub fn reply(message: &Message) -> (String, usize) {
 /// or copied to copied, each once, but `me`. Your own message is answered
 /// to whom it went, those it was copied to copied.
 pub fn reply_all(message: &Message, me: &str) -> (String, usize) {
+    let (to, cc) = to_all(message, me);
+    answer(message, &to, &cc)
+}
+
+/// Who a reply to all goes to, and who is copied.
+fn to_all(message: &Message, me: &str) -> (Vec<String>, Vec<String>) {
     let spec = |a: &str| addr_spec(a).map(|s| s.to_lowercase());
     let me = spec(me);
     let mine = me.is_some() && spec(&message.from) == me;
@@ -319,11 +434,17 @@ pub fn reply_all(message: &Message, me: &str) -> (String, usize) {
             cc.push(a);
         }
     }
-    answer(message, &to, &cc)
+    (to, cc)
 }
 
 /// The buffer a reply opens with: to `to`, `cc` copied.
 fn answer(message: &Message, to: &[String], cc: &[String]) -> (String, usize) {
+    let (head, quoted) = parts(message, to, cc);
+    (format!("{head}\n\n\n{quoted}"), BODY_ROW)
+}
+
+/// A reply's headers, and what it quotes.
+fn parts(message: &Message, to: &[String], cc: &[String]) -> (String, String) {
     let to = to.join(", ");
     let subject = reply_subject(&message.subject);
     let wrote = match when(message) {
@@ -332,9 +453,7 @@ fn answer(message: &Message, to: &[String], cc: &[String]) -> (String, usize) {
     };
     let quoted = quote(&message.text);
     let cc = cc.join(", ");
-    let text = format!("To: {to}\nCc: {cc}\nSubject: {subject}\n\n\n{wrote}\n{quoted}");
-    let row = 4;
-    (text, row)
+    (head(&to, &cc, &subject), format!("{wrote}\n{quoted}"))
 }
 
 /// When `message` is dated, as a reply or a forward says it.
@@ -378,14 +497,14 @@ pub fn forward(message: &Message) -> (String, usize, usize) {
         "To: \nCc: \nSubject: {subject}\n\n\n{FORWARD_LINE}\n{head}\n{}\n",
         message.text.trim_end()
     );
-    (text, 0, 4)
+    (text, 0, BODY_ROW)
 }
 
 /// An empty message; point is at the end of `To:`, to type the address.
 /// The blank line after `Subject` ends the headers, and the line under it
 /// is where the body is written.
 pub fn blank() -> (String, usize, usize) {
-    ("To: \nCc: \nSubject: \n\n\n".to_string(), 0, 4)
+    (format!("{}\n\n\n", head("", "", "")), 0, BODY_ROW)
 }
 
 /// `In-Reply-To` and `References` for a reply to `message`: its id, and the
