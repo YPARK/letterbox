@@ -1019,6 +1019,16 @@ impl Index {
             .filter(|r| self.system(&r.key).inbox)
     }
 
+    /// The message of `account` by its `Message-ID`, if it has one.
+    pub fn by_message_id(&self, account: &str, id: &str) -> Option<&Record> {
+        if id.is_empty() {
+            return None;
+        }
+        self.records
+            .values()
+            .find(|r| r.key.account == account && r.message_id == id)
+    }
+
     /// The message of `account` at `uid` in `folder`, by its key.
     pub fn key_at(&self, account: &str, folder: &str, uid: u32) -> Option<Key> {
         self.records

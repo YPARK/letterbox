@@ -161,13 +161,7 @@ impl App {
             .or(key)
             .or_else(|| index.key_at(ident, folder, uid))
             .and_then(|k| index.records.get(&k))
-            .or_else(|| {
-                (!message_id.is_empty()).then_some(())?;
-                index
-                    .records
-                    .values()
-                    .find(|r| &r.key.account == ident && r.message_id == message_id)
-            });
+            .or_else(|| index.by_message_id(ident, message_id));
         let Some(record) = record else {
             return Some(Noted::Unknown);
         };

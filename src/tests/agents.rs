@@ -334,6 +334,8 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "recent_messages",
             "triage",
             "uncertain_messages",
+            "draft_reply",
+            "draft_message",
             "report_triage",
             "open_letterbox",
             "mark_message"

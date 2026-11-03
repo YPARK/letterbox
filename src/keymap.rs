@@ -59,6 +59,8 @@ pub enum Act {
     Images,
     /// Out of the Inbox, to Archive.
     Archive,
+    /// The draft picked taken up, to go on writing it.
+    TakeUp,
     NewMail,
     AddAccount,
     Rename,
@@ -504,6 +506,13 @@ pub const KEYS: &[Binding] = &[
         hint: "z/Z",
         foot: &[(Map, "in/out")],
         help: "in the map, a mosaic of the clusters, each a block as big as how many it holds, beside those it lies by: z, ⏎ or a click goes into the block picked, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; Z or esc goes out a level, 0 to all the clusters. The wheel up over a block goes into it, and down out a level",
+    },
+    Binding {
+        keys: &[("E", TakeUp)],
+        name: "E",
+        hint: "E",
+        foot: &[],
+        help: "in Drafts, go on writing the draft picked: sent, it goes to Trash",
     },
     Binding {
         keys: &[("L", Asking)],

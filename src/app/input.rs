@@ -557,6 +557,7 @@ impl App {
             Act::Images => self.pages_with_images(),
             Act::Present => self.present(),
             Act::Archive => self.archive(),
+            Act::TakeUp => self.take_up(),
             Act::AddAccount => self.open_form(),
             Act::Remove => self.ask_to_remove(),
             Act::Trash => self.delete(),
