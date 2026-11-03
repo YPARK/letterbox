@@ -697,20 +697,22 @@ fn an_agent_letterbox_started_is_told_so_and_moves_nothing() {
 fn new_mail_is_found_though_an_old_message_came_back_to_the_inbox_after_it() {
     use serde_json::json;
     let mut server = demo_server(false);
-    let count = |server: &mut crate::mcp::Server| {
+    let found = |server: &mut crate::mcp::Server| {
         let r = call(server, "recent_messages", json!({ "hours": 24 }));
         r["structuredContent"]["accounts"][0]["messages"]
             .as_array()
             .unwrap()
-            .len()
+            .iter()
+            .map(|m| m["uid"].clone())
+            .collect::<Vec<_>>()
     };
-    let before = count(&mut server);
-    assert!(before > 0);
+    let before = found(&mut server);
+    assert!(!before.is_empty());
     // An old one put back from the Archive: the newest to come, dated long ago.
     let store = server.first_store();
     let old = store.page("Archive", 0, 1).unwrap().summaries[0].uid;
     store.relocate("Archive", old, "INBOX", "").unwrap();
-    assert_eq!(count(&mut server), before);
+    assert_eq!(found(&mut server), before);
 }
 
 #[test]

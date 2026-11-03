@@ -326,6 +326,8 @@ struct Lab {
     from: &'static str,
     subject: &'static str,
     body: &'static str,
+    /// Never exactly 1: a day old sits on the edge of a 24-hour look, and
+    /// crosses it as the clock moves between two looks.
     days: f64,
     unread: bool,
     flagged: bool,
@@ -410,7 +412,7 @@ const LAB: &[Lab] = &[
     lab("shop", "Your order has shipped", "Pattern Recognition and Machine Learning, arriving Tuesday.", 4.9, READ, &[]),
     lab("hotel", "Booking confirmed: 3 nights in Boston", "Check-in 12 November, check-out 15 November.", 2.6, READ, &[]),
     lab("hyun", "Photos from Saturday", "The kids at the beach, and the one of you asleep on the ferry.", 0.5, NEW, &[]),
-    lab("dana", "Long time! In Boston next month?", "Saw you are speaking in Boston. Dinner while you are in town?", 1.0, NEW, &[]),
+    lab("dana", "Long time! In Boston next month?", "Saw you are speaking in Boston. Dinner while you are in town?", 0.95, NEW, &[]),
 ];
 
 /// The older grant letters, kept in Projects/Grant as someone filing by
