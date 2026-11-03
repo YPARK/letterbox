@@ -66,6 +66,21 @@ impl Role {
     }
 }
 
+/// The folder mail is moved to as thrown away, of those `folders`: the one
+/// `chosen` for the account, when it is still there, else the one the
+/// server marks as Trash.
+pub fn trash_folder(folders: &[Folder], chosen: Option<&str>) -> Option<String> {
+    if let Some(path) = chosen
+        && folders.iter().any(|f| f.path == path && f.selectable)
+    {
+        return Some(path.to_string());
+    }
+    folders
+        .iter()
+        .find(|f| f.role == Role::Trash && f.selectable)
+        .map(|f| f.path.clone())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Folder {
     /// Its name on the server, as commands give it.

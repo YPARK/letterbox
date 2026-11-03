@@ -43,6 +43,7 @@ mod placing;
 mod quitting;
 mod reading;
 mod relabel;
+mod reporting;
 mod restoring;
 mod reviewing;
 mod saving;

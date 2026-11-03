@@ -41,6 +41,9 @@ pub struct Taught {
     pub subject: String,
     #[serde(default)]
     pub odds: f32,
+    /// Decided through an AI agent, and confirmed by you as it asked.
+    #[serde(default)]
+    pub agent: bool,
 }
 
 /// What is known beside a message, that tells mail you want: whom you

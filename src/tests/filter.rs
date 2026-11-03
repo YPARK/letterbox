@@ -134,6 +134,122 @@ fn what_was_learnt_is_written_down_and_learnt_again_as_it_starts() {
     assert!(index.key_at("a@b.c", "INBOX", 1).is_some());
 }
 
+/// A decision for the message `r`, as an agent writes it down once you
+/// confirmed it.
+fn confirmed(r: &index::Record, thrown: bool) -> crate::filter::Taught {
+    crate::filter::Taught {
+        key: r.key.clone(),
+        thrown,
+        tokens: crate::filter::Filter::tokens(r, &Default::default()),
+        message_id: r.message_id.clone(),
+        agent: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn what_you_confirmed_through_an_agent_is_learnt_as_letterbox_opens_and_as_it_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let deal = sent_by("d", "deals@shop.example", "Save now");
+    let note = sent_by("n", "ada@analytical.example", "Engine notes");
+    // Written while letterbox is closed, with the key's public half alone.
+    index::advise(dir.path(), &id.to_public(), &[confirmed(&deal, true)]).unwrap();
+    let mut index = Index::open_with(dir.path(), &id);
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 0));
+    assert!(index.filter.taught[0].agent);
+    // Written while it is open: learnt as letterbox next looks for it.
+    index::advise(dir.path(), &id.to_public(), &[confirmed(&note, false)]).unwrap();
+    index.take_advice().unwrap();
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 1));
+    // Each learnt once, and kept as letterbox's own.
+    index.take_advice().unwrap();
+    index.flush().unwrap();
+    drop(index);
+    let mut index = Index::open_with(dir.path(), &id);
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 1));
+    // Written down again, as by an agent that did not know it was read,
+    // it is learnt once.
+    let again = crate::filter::Taught {
+        at: index.filter.taught[1].at,
+        ..confirmed(&note, false)
+    };
+    index::advise(dir.path(), &id.to_public(), &[again]).unwrap();
+    index.take_advice().unwrap();
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 1));
+    // Forgotten together, as what you decided in letterbox is kept.
+    index
+        .cache(vec![Cached::Upsert(Box::new(deal.clone()))])
+        .unwrap();
+    index.teach(&deal.key, true).unwrap();
+    assert_eq!(index.unadvise().unwrap(), 2);
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 0));
+}
+
+#[test]
+fn a_file_an_agent_wrote_that_cannot_be_read_is_set_aside_and_the_rest_learnt() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let deal = sent_by("d", "deals@shop.example", "Save now");
+    let note = sent_by("n", "ada@analytical.example", "Engine notes");
+    index::advise(dir.path(), &id.to_public(), &[confirmed(&deal, true)]).unwrap();
+    // Written to another key, as by a map begun again: not readable here.
+    index::advise(
+        dir.path(),
+        &identity().to_public(),
+        &[confirmed(&note, false)],
+    )
+    .unwrap();
+    let mut index = Index::open_with(dir.path(), &id);
+    assert_eq!(
+        (index.filter.thrown, index.filter.kept),
+        (1, 0),
+        "the rest learnt"
+    );
+    assert!(
+        index
+            .fault
+            .as_deref()
+            .unwrap_or_default()
+            .contains("set aside"),
+        "{:?}",
+        index.fault
+    );
+    let names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("agent."))
+        .collect();
+    assert_eq!(
+        names.iter().filter(|n| n.ends_with(".unread")).count(),
+        1,
+        "{names:?}"
+    );
+    assert!(!names.iter().any(|n| n.ends_with(".log.age")), "{names:?}");
+    // In the way no more, and nothing learnt twice.
+    index.fault = None;
+    index.take_advice().unwrap();
+    assert_eq!(index.fault, None);
+    assert_eq!((index.filter.thrown, index.filter.kept), (1, 0));
+}
+
+#[test]
+fn what_an_agent_wrote_down_is_left_for_the_letterbox_that_writes_the_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let deal = sent_by("d", "deals@shop.example", "Save now");
+    let open = Index::open_with(dir.path(), &id);
+    index::advise(dir.path(), &id.to_public(), &[confirmed(&deal, true)]).unwrap();
+    // Another letterbox, reading only, learns it in memory and leaves it.
+    let mut reader = Index::read_only(dir.path(), &id);
+    reader.take_advice().unwrap();
+    assert_eq!(reader.filter.thrown, 0);
+    drop(reader);
+    drop(open);
+    let index = Index::open_with(dir.path(), &id);
+    assert_eq!(index.filter.thrown, 1);
+}
+
 #[test]
 fn trashing_teaches_and_the_inbox_looked_through_says_what_would_be_thrown_away() {
     let mut app = demo_map();

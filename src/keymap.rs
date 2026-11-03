@@ -47,6 +47,8 @@ pub enum Act {
     Undo,
     /// What looks like junk, and what was thrown away on its own, and why.
     Junk,
+    /// Your own agent started, to look through new mail and report.
+    Agent,
     /// The papers the message read tells of, to put in paperstack.
     Papers,
     /// The message read as its pages, or as its text again.
@@ -500,6 +502,13 @@ pub const KEYS: &[Binding] = &[
         hint: "z/Z",
         foot: &[(Map, "in/out")],
         help: "in the map, a mosaic of the clusters, each a block as big as how many it holds, beside those it lies by: z, ⏎ or a click goes into the block picked, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; Z or esc goes out a level, 0 to all the clusters. The wheel up over a block goes into it, and down out a level",
+    },
+    Binding {
+        keys: &[("T", Agent)],
+        name: "T",
+        hint: "T",
+        foot: &[(List, "agent"), (Map, "agent")],
+        help: "start your own agent, named as [agent] in accounts.toml, to look through new mail: what it finds pops up here, to choose what is done. It starts on its own as letterbox opens only if new mail came since it last ran",
     },
     Binding {
         keys: &[("i", Review)],

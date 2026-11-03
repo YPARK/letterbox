@@ -467,6 +467,7 @@ impl App {
                 );
             }
             Answer::Mapped(passed) => {
+                self.agent_mapped(a);
                 // A look that failed is one that cannot tell: as many such,
                 // and its server's word is taken.
                 if passed.is_ok() {
