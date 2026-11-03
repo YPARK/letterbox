@@ -21,7 +21,7 @@ pub const CHUNK: usize = 100;
 /// How many of a folder's newest messages have their flags read each pass
 /// where the server keeps no mod-sequences; all of them are, once a day.
 const NEWEST: usize = 500;
-const DAY: i64 = 24 * 60 * 60;
+pub(super) const DAY: i64 = 24 * 60 * 60;
 /// How often what the index holds is written down while the sync waits.
 const TICK: Duration = Duration::from_secs(5);
 

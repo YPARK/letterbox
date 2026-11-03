@@ -275,6 +275,18 @@ pub fn drain<T: DeserializeOwned>(
     }
 }
 
+/// Each event of the journal `name` in `dir` that can be read, oldest first,
+/// and nothing removed: a look at what another program takes in.
+pub fn peek<T: DeserializeOwned>(dir: &Path, name: &str, identity: &Identity) -> Vec<T> {
+    let mut found = files(dir, name).unwrap_or_default();
+    found.sort();
+    found
+        .iter()
+        .filter_map(|(_, _, path)| read::<T>(path, identity).ok())
+        .flatten()
+        .collect()
+}
+
 /// Write `events` to the journal `name` in `dir`, with the key's public
 /// half alone, as a log of its own: for the program that drains it.
 pub fn append<T: Serialize + DeserializeOwned>(

@@ -49,6 +49,8 @@ pub enum Act {
     Junk,
     /// Your own agent started, to look through new mail and report.
     Agent,
+    /// What the junk filter is least sure of, or got wrong, asked of you.
+    Asking,
     /// The papers the message read tells of, to put in paperstack.
     Papers,
     /// The message read as its pages, or as its text again.
@@ -502,6 +504,13 @@ pub const KEYS: &[Binding] = &[
         hint: "z/Z",
         foot: &[(Map, "in/out")],
         help: "in the map, a mosaic of the clusters, each a block as big as how many it holds, beside those it lies by: z, ⏎ or a click goes into the block picked, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; Z or esc goes out a level, 0 to all the clusters. The wheel up over a block goes into it, and down out a level",
+    },
+    Binding {
+        keys: &[("L", Asking)],
+        name: "L",
+        hint: "L",
+        foot: &[(List, "teach"), (Map, "teach")],
+        help: "what the junk filter is least sure of, or got wrong, asked of you: x says the one picked is junk, n to keep it, each learnt, nothing moved; space passes over it",
     },
     Binding {
         keys: &[("T", Agent)],

@@ -333,6 +333,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "would_throw_away",
             "recent_messages",
             "triage",
+            "uncertain_messages",
             "report_triage",
             "open_letterbox",
             "mark_message"
@@ -411,7 +412,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
 
 /// What a server writes, kept to be read after.
 #[derive(Clone, Default)]
-struct Written(Arc<Mutex<Vec<u8>>>);
+pub(super) struct Written(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Written {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -424,7 +425,7 @@ impl Write for Written {
 }
 
 impl Written {
-    fn messages(&self) -> Vec<serde_json::Value> {
+    pub(super) fn messages(&self) -> Vec<serde_json::Value> {
         String::from_utf8_lossy(&self.0.lock().unwrap())
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
@@ -434,7 +435,7 @@ impl Written {
 
 /// The demo's server, begun by a program that can, or cannot, ask the
 /// user something for it.
-fn demo_server(asks: bool) -> crate::mcp::Server {
+pub(super) fn demo_server(asks: bool) -> crate::mcp::Server {
     use serde_json::json;
     let mut server = crate::mcp::Server::new(&PathBuf::from("/nowhere"), true).unwrap();
     let capabilities = if asks {
