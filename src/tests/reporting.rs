@@ -155,11 +155,12 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     press(&mut app, &["T"]);
     assert!(app.status.contains("no agent is set"), "{}", app.status);
 
-    std::fs::write(
-        &path,
-        "[agent]\ncommand = \"echo looked at $LETTERBOX_AGENT; exit 3\"\n",
-    )
-    .unwrap();
+    let script = if cfg!(windows) {
+        "echo looked at %LETTERBOX_AGENT%& exit 3"
+    } else {
+        "echo looked at $LETTERBOX_AGENT; exit 3"
+    };
+    std::fs::write(&path, format!("[agent]\ncommand = \"{script}\"\n")).unwrap();
     let command = crate::config::agent(&path).unwrap().unwrap();
     assert!(crate::config::load(&path).unwrap().is_empty(), "no account");
     let set = app::AgentSet::beside(command, &path);
@@ -171,7 +172,8 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     assert!(app.status.contains("still looking"), "{}", app.status);
     until_ended(&mut app);
     assert!(app.status.contains("failing"), "{}", app.status);
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), "looked at 1\n");
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(said.lines().collect::<Vec<_>>(), ["looked at 1"]);
     assert!(
         std::fs::read_to_string(&ran)
             .unwrap()
@@ -187,13 +189,36 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
 }
 
 #[test]
+fn an_agent_that_could_not_start_has_not_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = demo_map();
+    let mut set = app::AgentSet::beside("exit 0".to_string(), &path);
+    set.log = dir.path().to_path_buf();
+    let ran = set.ran.clone();
+    app.agent_set = Some(set);
+    press(&mut app, &["T"]);
+    assert!(app.status.contains("cannot start"), "{}", app.status);
+    assert!(!ran.exists(), "the mail waits for one that does");
+    assert_eq!(app.agent_set.as_ref().unwrap().last_ran, 0);
+}
+
+#[test]
+fn a_quoted_word_reaches_the_shell_as_it_was_written() {
+    let out = crate::config::shell("echo \"a  b\"").output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    // cmd's echo keeps the quotes, sh's does not; neither gains a backslash.
+    assert_eq!(said.trim().trim_matches('"'), "a  b");
+}
+
+#[test]
 fn the_agent_starts_on_its_own_only_once_new_mail_came_since_it_last_ran() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts.toml");
     let ran = path.with_file_name("agent-ran");
     let mut app = demo_map();
     let set =
-        |app: &mut App| app.agent_set = Some(app::AgentSet::beside("true".to_string(), &path));
+        |app: &mut App| app.agent_set = Some(app::AgentSet::beside("exit 0".to_string(), &path));
     // Last ran after all there is: nothing new as the mail is taken in.
     let later = jiff::Timestamp::now().as_second() + 3600;
     std::fs::write(&ran, later.to_string()).unwrap();

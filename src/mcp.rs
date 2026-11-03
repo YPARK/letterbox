@@ -1253,7 +1253,7 @@ const CANNOT_ASK: &str = "the agent's program cannot ask the user to say yes, so
 /// How letterbox, at `lbx`, is opened in a terminal of its own: as `set`
 /// says, `{lbx}` in it where it is; else, on macOS, in Terminal.
 pub fn open_command(set: Option<&str>, lbx: &Path) -> Option<String> {
-    let quoted = format!("'{}'", lbx.display().to_string().replace('\'', "'\\''"));
+    let quoted = config::shell_quote(&lbx.display().to_string());
     match set {
         Some(c) => Some(c.replace("{lbx}", &quoted)),
         None if cfg!(target_os = "macos") => Some(format!("open -a Terminal {quoted}")),
