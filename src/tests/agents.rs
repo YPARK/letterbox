@@ -472,14 +472,19 @@ fn inbox(server: &mut crate::mcp::Server) -> Vec<(u64, String)> {
 fn an_agent_opens_letterbox_in_a_terminal_as_set_and_the_demo_opens_nothing() {
     use serde_json::json;
     let lbx = PathBuf::from("/opt/it's/lbx");
+    let quoted = if cfg!(windows) {
+        "\"/opt/it's/lbx\""
+    } else {
+        "'/opt/it'\\''s/lbx'"
+    };
     assert_eq!(
-        crate::mcp::open_command(Some("ghostty -e {lbx}"), &lbx).as_deref(),
-        Some("ghostty -e '/opt/it'\\''s/lbx'")
+        crate::mcp::open_command(Some("ghostty -e {lbx}"), &lbx),
+        Some(format!("ghostty -e {quoted}"))
     );
     #[cfg(target_os = "macos")]
     assert_eq!(
-        crate::mcp::open_command(None, &lbx).as_deref(),
-        Some("open -a Terminal '/opt/it'\\''s/lbx'")
+        crate::mcp::open_command(None, &lbx),
+        Some(format!("open -a Terminal {quoted}"))
     );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts.toml");

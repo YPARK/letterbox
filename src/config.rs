@@ -96,14 +96,31 @@ struct Agent {
 }
 
 /// `command`, as the system's shell runs it.
+#[cfg(windows)]
 pub fn shell(command: &str) -> Command {
-    let mut c = if cfg!(windows) {
-        Command::new("cmd")
-    } else {
-        Command::new("sh")
-    };
-    c.args([if cfg!(windows) { "/C" } else { "-c" }, command]);
+    use std::os::windows::process::CommandExt;
+    // Raw: cmd takes the outer quotes off, and knows nothing of the
+    // backslashes the usual quoting would put before those within.
+    let mut c = Command::new("cmd");
+    c.arg("/C").raw_arg(format!("\"{command}\""));
     c
+}
+
+/// `command`, as the system's shell runs it.
+#[cfg(not(windows))]
+pub fn shell(command: &str) -> Command {
+    let mut c = Command::new("sh");
+    c.args(["-c", command]);
+    c
+}
+
+/// `word`, as one word to the shell `shell` runs.
+pub fn shell_quote(word: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{word}\"")
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 /// The command of the agent started as letterbox opens, if one is set in
