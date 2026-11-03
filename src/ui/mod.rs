@@ -262,6 +262,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Dialog::Apply(plan) => Some(applying(f, &t, &plan.said)),
         Dialog::Bulk(bulk) => Some(bulk_dialog(f, &t, &bulk.said)),
         Dialog::Junk(pick) => Some(junk_dialog(f, &t, pick)),
+        Dialog::Report(view) => Some(report_dialog(f, &t, view)),
         Dialog::Split(plan) => Some(split_dialog(f, &t, plan)),
         Dialog::RemoveLabel(plan) => Some(remove_label_dialog(f, &t, plan)),
         &Dialog::ClusterMenu { id, at } => {

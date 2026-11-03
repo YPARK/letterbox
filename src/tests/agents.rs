@@ -331,6 +331,10 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "nearest_messages",
             "suggest_label",
             "would_throw_away",
+            "recent_messages",
+            "triage",
+            "report_triage",
+            "open_letterbox",
             "mark_message"
         ]
     );
@@ -403,6 +407,337 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
     );
     let none = call(&mut server, "mark_message", json!({ "uid": uid }));
     assert_eq!(none["content"][0]["text"], "say seen, flagged, or both");
+}
+
+/// What a server writes, kept to be read after.
+#[derive(Clone, Default)]
+struct Written(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Written {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Written {
+    fn messages(&self) -> Vec<serde_json::Value> {
+        String::from_utf8_lossy(&self.0.lock().unwrap())
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+}
+
+/// The demo's server, begun by a program that can, or cannot, ask the
+/// user something for it.
+fn demo_server(asks: bool) -> crate::mcp::Server {
+    use serde_json::json;
+    let mut server = crate::mcp::Server::new(&PathBuf::from("/nowhere"), true).unwrap();
+    let capabilities = if asks {
+        json!({ "elicitation": {} })
+    } else {
+        json!({})
+    };
+    server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": capabilities } }))
+        .unwrap();
+    server
+}
+
+/// The uids of the demo's Inbox, newest first, and who each is from.
+fn inbox(server: &mut crate::mcp::Server) -> Vec<(u64, String)> {
+    let listed = call(server, "list_messages", serde_json::json!({ "limit": 200 }));
+    listed["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["uid"].as_u64().unwrap(),
+                m["from"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_agent_opens_letterbox_in_a_terminal_as_set_and_the_demo_opens_nothing() {
+    use serde_json::json;
+    let lbx = PathBuf::from("/opt/it's/lbx");
+    assert_eq!(
+        crate::mcp::open_command(Some("ghostty -e {lbx}"), &lbx).as_deref(),
+        Some("ghostty -e '/opt/it'\\''s/lbx'")
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        crate::mcp::open_command(None, &lbx).as_deref(),
+        Some("open -a Terminal '/opt/it'\\''s/lbx'")
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(&path, "[agent]\nopen = \"wezterm start {lbx}\"\n").unwrap();
+    assert_eq!(
+        crate::config::opener(&path).unwrap().as_deref(),
+        Some("wezterm start {lbx}")
+    );
+    assert_eq!(crate::config::agent(&path).unwrap(), None);
+    let mut server = demo_server(true);
+    let r = call(&mut server, "open_letterbox", json!({}));
+    assert_eq!(r["structuredContent"]["opened"], false, "{r}");
+}
+
+#[test]
+fn how_to_triage_mail_is_served_to_every_agent_as_a_prompt() {
+    use serde_json::json;
+    let mut server = demo_server(true);
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 3, "method": "prompts/list" }))
+        .unwrap();
+    assert_eq!(listed["result"]["prompts"][0]["name"], "mail-triage");
+    let got = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 4, "method": "prompts/get",
+            "params": { "name": "mail-triage" } }))
+        .unwrap();
+    let text = got["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("report_triage") && text.contains("started_by_letterbox"));
+    let none = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 5, "method": "prompts/get",
+            "params": { "name": "other" } }))
+        .unwrap();
+    assert_eq!(none["error"]["code"], -32602);
+}
+
+#[test]
+fn an_agent_moves_mail_only_once_the_user_said_yes_to_it() {
+    use serde_json::json;
+    let mut server = demo_server(true);
+    // Offered where the user can be asked; not otherwise.
+    let offered = |server: &mut crate::mcp::Server| {
+        let listed = server
+            .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+            .unwrap();
+        listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "trash_messages")
+    };
+    assert!(offered(&mut server));
+    assert!(!offered(&mut demo_server(false)));
+    let before = inbox(&mut server);
+    let (first, second, third) = (before[0].0, before[1].0, before[2].0);
+    let label = call(&mut server, "suggest_label", json!({ "uid": third }));
+    let label = label["structuredContent"]["labels"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tool = |id: u64, name: &str, args: serde_json::Value| {
+        json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": { "name": name, "arguments": args } })
+        .to_string()
+    };
+    let said = |id: &str, action: &str| {
+        json!({ "jsonrpc": "2.0", "id": id,
+            "result": { "action": action, "content": { "confirm": true } } })
+        .to_string()
+    };
+    let script = vec![
+        tool(10, "trash_messages", json!({ "uids": [first] })),
+        // A ping while the user is asked is answered; what was asked is not.
+        json!({ "jsonrpc": "2.0", "id": 11, "method": "ping" }).to_string(),
+        said("letterbox-1", "accept"),
+        tool(12, "trash_messages", json!({ "uids": [second] })),
+        said("letterbox-2", "decline"),
+        tool(13, "file_messages", json!({ "uids": [third], "to": label })),
+        said("letterbox-3", "accept"),
+        tool(
+            14,
+            "file_messages",
+            json!({ "uids": [second], "to": "Made up" }),
+        ),
+        tool(
+            15,
+            "file_messages",
+            json!({ "uids": [second], "to": "Trash" }),
+        ),
+        tool(16, "trash_messages", json!({ "uids": [second] })),
+        said("letterbox-4", "cancel"),
+    ];
+    let out = Written::default();
+    server
+        .serve(crate::mcp::Io {
+            lines: Box::new(script.into_iter().map(Ok)),
+            out: Box::new(out.clone()),
+        })
+        .unwrap();
+    let written = out.messages();
+    let asked: Vec<&serde_json::Value> = written
+        .iter()
+        .filter(|m| m["method"] == "elicitation/create")
+        .collect();
+    assert_eq!(asked.len(), 4, "asked of the user, each time: {written:?}");
+    let shown = asked[0]["params"]["message"].as_str().unwrap();
+    assert!(shown.contains(&before[0].1), "{shown}");
+    assert!(shown.contains("put it back"), "{shown}");
+    let reply = |id: u64| written.iter().find(|m| m["id"] == id).unwrap().clone();
+    assert_eq!(reply(11)["result"], json!({}));
+    assert_eq!(reply(10)["result"]["structuredContent"]["moved"], 1);
+    assert_eq!(reply(12)["result"]["structuredContent"]["moved"], 0);
+    assert_eq!(reply(13)["result"]["structuredContent"]["moved"], 1);
+    assert_eq!(
+        reply(14)["result"]["isError"],
+        true,
+        "never a label made up"
+    );
+    assert_eq!(reply(15)["result"]["isError"], true, "nor filed in Trash");
+    let unanswered = reply(16)["result"]["structuredContent"].clone();
+    assert_eq!(unanswered["moved"], 0);
+    assert!(
+        unanswered["said"]
+            .as_str()
+            .unwrap()
+            .contains("did not answer"),
+        "{unanswered}"
+    );
+    assert_eq!(asked.len(), 4, "neither asked of");
+
+    let after: Vec<u64> = inbox(&mut server).iter().map(|m| m.0).collect();
+    assert!(!after.contains(&first) && !after.contains(&third));
+    assert!(after.contains(&second), "the user said no");
+    let trash = call(&mut server, "list_messages", json!({ "folder": "Trash" }));
+    assert_eq!(
+        trash["structuredContent"]["messages"][0]["from"],
+        before[0].1
+    );
+    // What the user said yes to is learnt: thrown away, and kept.
+    let learnt: Vec<(bool, bool)> = server.learnt.iter().map(|t| (t.thrown, t.agent)).collect();
+    assert_eq!(learnt, [(true, true), (false, true)]);
+}
+
+#[test]
+fn an_agent_whose_program_cannot_ask_the_user_moves_nothing() {
+    use serde_json::json;
+    let mut server = demo_server(false);
+    let before = inbox(&mut server);
+    let r = call(
+        &mut server,
+        "trash_messages",
+        json!({ "uids": [before[0].0] }),
+    );
+    assert_eq!(r["isError"], true);
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("cannot ask the user"),
+        "{r}"
+    );
+    assert_eq!(inbox(&mut server), before);
+    assert!(server.learnt.is_empty());
+}
+
+#[test]
+fn an_agent_letterbox_started_is_told_so_and_moves_nothing() {
+    use serde_json::json;
+    let mut server = demo_server(true);
+    server.background = true;
+    let triaged = call(&mut server, "triage", json!({}));
+    assert_eq!(triaged["structuredContent"]["started_by_letterbox"], true);
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .unwrap();
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for hidden in ["trash_messages", "file_messages", "open_letterbox"] {
+        assert!(!names.contains(&hidden), "{hidden} offered: {names:?}");
+        // Nor taken, if called all the same.
+        let r = call(&mut server, hidden, json!({ "uids": [1], "to": "x" }));
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("letterbox started"),
+            "{r}"
+        );
+    }
+    let before = inbox(&mut server);
+    let r = call(
+        &mut server,
+        "trash_messages",
+        json!({ "uids": [before[0].0] }),
+    );
+    assert_eq!(r["isError"], true);
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("report_triage"),
+        "{r}"
+    );
+    assert_eq!(inbox(&mut server), before);
+}
+
+#[test]
+fn new_mail_is_found_though_an_old_message_came_back_to_the_inbox_after_it() {
+    use serde_json::json;
+    let mut server = demo_server(false);
+    let count = |server: &mut crate::mcp::Server| {
+        let r = call(server, "recent_messages", json!({ "hours": 24 }));
+        r["structuredContent"]["accounts"][0]["messages"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let before = count(&mut server);
+    assert!(before > 0);
+    // An old one put back from the Archive: the newest to come, dated long ago.
+    let store = server.first_store();
+    let old = store.page("Archive", 0, 1).unwrap().summaries[0].uid;
+    store.relocate("Archive", old, "INBOX", "").unwrap();
+    assert_eq!(count(&mut server), before);
+}
+
+#[test]
+fn an_agent_is_given_new_mail_with_what_letterbox_has_learnt_of_it() {
+    use serde_json::json;
+    let mut server = demo_server(false);
+    let recent = call(&mut server, "recent_messages", json!({ "hours": 24 }));
+    let messages = recent["structuredContent"]["accounts"][0]["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!messages.is_empty(), "{recent}");
+    assert!(
+        messages.len() < inbox(&mut server).len(),
+        "only the last day's"
+    );
+    let unread = call(
+        &mut server,
+        "recent_messages",
+        json!({ "hours": 24, "unread_only": true }),
+    );
+    let unread = unread["structuredContent"]["accounts"][0]["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(unread.iter().all(|m| m["seen"] == false));
+    assert!(unread.len() < messages.len());
+    let triaged = call(&mut server, "triage", json!({ "hours": 24 }));
+    let first = &triaged["structuredContent"]["accounts"][0]["messages"][0];
+    assert_eq!(first["uid"], messages[0]["uid"]);
+    assert!(first["junk_odds"].is_number(), "{first}");
+    assert!(first.get("would_go_to").is_some(), "{first}");
 }
 
 #[test]
@@ -563,6 +898,34 @@ fn a_trash_record_that_cannot_be_read_is_left_as_it_is() {
     assert!(err.to_string().contains("cannot read"), "{err}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn what_another_letterbox_recorded_in_the_trash_ledger_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trash.toml");
+    let entry = |uid: u32| crate::trash::Entry {
+        account: "a@b.c".to_string(),
+        message_id: format!("<{uid}@b.c>"),
+        folder: "Trash".to_string(),
+        uid,
+        origin: "INBOX".to_string(),
+        at: 1,
+    };
+    // Open in letterbox, and an agent's recording beside it.
+    let mut open = crate::trash::Ledger::open(path.clone());
+    crate::trash::Ledger::open(path.clone())
+        .record(entry(1))
+        .unwrap();
+    open.record(entry(2)).unwrap();
+    let both = crate::trash::Ledger::open(path.clone());
+    assert_eq!(both.between(0, 9, None), [entry(1), entry(2)]);
+    // And what the other recorded later is found, as letterbox looks.
+    crate::trash::Ledger::open(path).record(entry(3)).unwrap();
+    assert_eq!(
+        open.origin("a@b.c", "Trash", "<3@b.c>", 3).as_deref(),
+        Some("INBOX")
+    );
 }
 
 #[test]

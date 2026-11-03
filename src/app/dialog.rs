@@ -109,6 +109,9 @@ pub enum Dialog {
     Bulk(Box<Bulk>),
     /// New mail letterbox is sure is junk, listed to choose from.
     Junk(JunkPick),
+    /// What an agent reported: what came, what it would do, to choose
+    /// from, and what to ask it next.
+    Report(Box<ReportView>),
     /// What may be done with a cluster, by a right-click on its anchor.
     ClusterMenu {
         id: u32,
@@ -313,6 +316,7 @@ impl App {
             }
             Dialog::Bulk(_) => self.bulk_key(key),
             Dialog::Junk(_) => self.junk_key(key),
+            Dialog::Report(_) => self.report_key(key),
             Dialog::ClusterMenu { .. } => self.cluster_menu_key(key),
             Dialog::Split(_) => self.split_key(key),
             Dialog::RemoveLabel(_) => self.remove_label_key(key),
@@ -447,6 +451,7 @@ impl App {
             // from it, nothing is done.
             (Dialog::Bulk(_), _) => {}
             (Dialog::Junk(_), _) => {}
+            (Dialog::Report(_), _) => {}
             (
                 Dialog::ClusterMenu { .. }
                 | Dialog::ConfirmRename { .. }

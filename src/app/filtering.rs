@@ -20,12 +20,9 @@ impl App {
             let decided: std::collections::HashSet<&crate::index::Key> =
                 index.filter.taught.iter().map(|t| &t.key).collect();
             index
-                .records
-                .values()
                 // New, and never read: mail read and left is yours.
-                .filter(|r| r.first_seen >= self.auto.since && !decided.contains(&r.key))
-                .filter(|r| !r.flags.seen)
-                .filter(|r| index.system(&r.key).inbox)
+                .new_unread(self.auto.since)
+                .filter(|r| !decided.contains(&r.key))
                 .filter(|r| !self.junk_asked.contains(&r.key))
                 .filter_map(|r| {
                     let tokens = crate::filter::Filter::tokens(r, &known);

@@ -28,6 +28,7 @@ mod pages;
 mod papers;
 mod paperstack;
 mod pick;
+mod report;
 mod secret;
 mod setup;
 mod smtp;
@@ -115,6 +116,14 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 // come from now on.
                 app.remember_auto();
                 app.debrief_on_start();
+                // Your agent, if one is set: started by T, and on its own
+                // once new mail has come since it last ran.
+                match config::agent(&args.config) {
+                    Ok(command) => {
+                        app.agent_set = command.map(|c| app::AgentSet::beside(c, &args.config))
+                    }
+                    Err(e) => app.status = format!("{e:#}"),
+                }
             }
             app::run(&mut app)
         }
@@ -319,7 +328,14 @@ fn command(args: &Args) -> anyhow::Result<()> {
                     "letterbox is open, and writes what is learnt: close it, then run this again"
                 );
             }
-            if let FilterAction::Forget { since, until, yes } = action {
+            if let FilterAction::Forget { agent: true, .. } = action {
+                let n = index.unadvise()?;
+                index.flush()?;
+                println!("{n} confirmed through an agent, forgotten\n");
+            } else if let FilterAction::Forget {
+                since, until, yes, ..
+            } = action
+            {
                 match since {
                     Some(since) => {
                         let since = when(since)?;

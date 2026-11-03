@@ -285,19 +285,7 @@ impl App {
     /// it is still there, else the one the server marks as Trash.
     pub(super) fn trash_of(&self, account: usize) -> Option<String> {
         let account = self.accounts.get(account)?;
-        if let Some(path) = &account.trash
-            && account
-                .folders
-                .iter()
-                .any(|f| f.path == *path && f.selectable)
-        {
-            return Some(path.clone());
-        }
-        account
-            .folders
-            .iter()
-            .find(|f| f.role == Role::Trash && f.selectable)
-            .map(|f| f.path.clone())
+        crate::mail::trash_folder(&account.folders, account.trash.as_deref())
     }
 
     /// Give the chosen folder the Trash role, once the server has listed it.
