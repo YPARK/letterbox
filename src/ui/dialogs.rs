@@ -643,6 +643,210 @@ pub(super) fn junk_dialog(
     (area, Vec::new())
 }
 
+/// What the junk filter is least sure of, or got wrong, asked of you: each
+/// by whom and what, how it leans and why, and what you did if it disagrees;
+/// the one picked lit.
+pub(super) fn asking_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    asking: &crate::app::Asking,
+) -> (Rect, Targets) {
+    let width = f.area().width.min(92);
+    let room = (width as usize).saturating_sub(4);
+    let mut lines = vec![Line::raw("")];
+    for (k, e) in asking.edges.iter().enumerate() {
+        let lit = if k == asking.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        };
+        let odds = format!("{:>3.0}%  ", e.odds * 100.0);
+        let from = clip(&e.from, 20);
+        let rest = room.saturating_sub(odds.width() + from.width() + 2);
+        lines.push(
+            Line::from(vec![
+                Span::styled(odds, Style::new().fg(t.dim)),
+                Span::styled(from, Style::new().fg(t.title).bold()),
+                Span::raw("  "),
+                Span::raw(clip(&e.subject, rest)),
+            ])
+            .style(lit),
+        );
+        let said = match e.decided {
+            Some(true) => "you threw it away, and it would not".to_string(),
+            Some(false) => "you kept it, and it would throw it away".to_string(),
+            None if e.why.is_empty() => e.preview.clone(),
+            None => e.why.join(" · "),
+        };
+        lines.push(
+            Line::styled(clip(&format!("      {said}"), room), Style::new().fg(t.dim)).style(lit),
+        );
+    }
+    lines.push(Line::raw(""));
+    lines.extend(wrapped(
+        vec![Line::styled(
+            "x says the one picked is junk, n to keep it, each learnt, nothing moved; space goes on past it; any other key leaves the rest.".to_string(),
+            Style::new().fg(t.dim),
+        )],
+        room,
+    ));
+    let height = (lines.len() as u16 + 2).min(f.area().height);
+    let area = centered(f.area(), width, height);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            area.width,
+            "Which is it?",
+            "x junk · n keep · ␣ pass · esc leave",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}
+
+/// What an agent reported: what came, as it sums it up; what it would do
+/// with each of a few messages, by whom and what about as letterbox read
+/// them, those chosen `[x]`; and what to ask it next. The row picked lit.
+pub(super) fn report_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    view: &crate::app::ReportView,
+) -> (Rect, Targets) {
+    use crate::report::Action;
+    let width = f.area().width.min(92);
+    let room = (width as usize).saturating_sub(4);
+    let r = &view.report;
+    let lit = |k: usize| {
+        if k == view.at {
+            Style::new().bg(t.focus)
+        } else {
+            Style::new()
+        }
+    };
+    let mut lines = vec![Line::raw("")];
+    let summary: Vec<String> = r.summary.lines().flat_map(|l| wrap(l, room)).collect();
+    let cut = summary.len() > 10;
+    for l in summary.into_iter().take(10) {
+        lines.push(Line::raw(l));
+    }
+    if cut {
+        lines.push(Line::styled("…", Style::new().fg(t.dim)));
+    }
+    // Each row, a proposal or a question, as its lines, the first of each
+    // kind after the heading of its kind.
+    let heading = |text: &str| {
+        vec![
+            Line::raw(""),
+            Line::styled(text.to_string(), Style::new().fg(t.dim)),
+        ]
+    };
+    let mut rows: Vec<Vec<Line>> = Vec::new();
+    for (k, p) in r.proposals.iter().enumerate() {
+        let mut row = if k == 0 {
+            heading("It would")
+        } else {
+            Vec::new()
+        };
+        let mark = if p.chosen { "[x] " } else { "[ ] " };
+        let what = match p.action {
+            Action::Trash => "trash  ".to_string(),
+            Action::File => format!("→ {}  ", clip(&p.to, 16)),
+        };
+        let from = clip(&p.from, 20);
+        let rest = room.saturating_sub(mark.width() + what.width() + from.width() + 2);
+        row.push(
+            Line::from(vec![
+                Span::styled(mark, Style::new().fg(t.flag)),
+                Span::styled(what, Style::new().fg(t.dim)),
+                Span::styled(from, Style::new().fg(t.title).bold()),
+                Span::raw("  "),
+                Span::raw(clip(&p.subject, rest)),
+            ])
+            .style(lit(k)),
+        );
+        if !p.why.is_empty() {
+            row.push(
+                Line::styled(
+                    clip(&format!("     {}", p.why), room),
+                    Style::new().fg(t.dim),
+                )
+                .style(lit(k)),
+            );
+        }
+        rows.push(row);
+    }
+    for (q, text) in r.questions.iter().enumerate() {
+        let k = r.proposals.len() + q;
+        let mut row = if q == 0 {
+            heading("You might ask it")
+        } else {
+            Vec::new()
+        };
+        row.push(Line::raw(clip(&format!("› {text}"), room)).style(lit(k)));
+        rows.push(row);
+    }
+    let mut foot = vec![Line::raw("")];
+    let chosen = r.proposals.iter().filter(|p| p.chosen).count();
+    let said = if r.proposals.is_empty() {
+        "c copies the question picked, to paste to your agent; any other key leaves this."
+            .to_string()
+    } else {
+        format!(
+            "{chosen} chosen of {}. Nothing is done unless you choose it: space chooses the one \
+             picked, a all, ⏎ does those chosen, learnt as your own; c copies the question picked.",
+            r.proposals.len()
+        )
+    };
+    foot.extend(wrapped(
+        vec![Line::styled(said, Style::new().fg(t.dim))],
+        room,
+    ));
+    // The rows that fit, the one picked among them: never one chosen out
+    // of sight. A line above and below says how many more there are.
+    let fits = (f.area().height as usize)
+        .saturating_sub(2 + lines.len() + foot.len() + 2)
+        .max(1);
+    let at = view.at.min(rows.len().saturating_sub(1));
+    let mut top = at;
+    let mut used = rows.get(at).map_or(0, Vec::len);
+    while top > 0 && used + rows[top - 1].len() <= fits {
+        top -= 1;
+        used += rows[top].len();
+    }
+    let mut end = (at + 1).min(rows.len());
+    while end < rows.len() && used + rows[end].len() <= fits {
+        used += rows[end].len();
+        end += 1;
+    }
+    let more =
+        |n: usize, way: &str| Line::styled(format!("  {way} {n} more"), Style::new().fg(t.dim));
+    let total = rows.len();
+    if top > 0 {
+        lines.push(more(top, "↑"));
+    }
+    for row in rows.drain(top..end) {
+        lines.extend(row);
+    }
+    if end < total {
+        lines.push(more(total - end, "↓"));
+    }
+    lines.extend(foot);
+    let height = (lines.len() as u16 + 2).min(f.area().height);
+    let area = centered(f.area(), width, height);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            area.width,
+            "Your agent on new mail",
+            "␣ choose · a all · ⏎ do chosen · c copy question · esc leave",
+        )),
+        area,
+    );
+    (area, Vec::new())
+}
+
 /// A label split into subfolders, shown before it is done: each part, as
 /// `Label/name`, how many go there, and the words it was named by; the one
 /// picked lit, its name typed over if it is being.

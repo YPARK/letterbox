@@ -551,11 +551,14 @@ impl App {
             Act::Save => self.list_to_save(),
             Act::SaveAll => self.save_all(),
             Act::Junk => self.show_junk(),
+            Act::Agent => self.run_agent(),
+            Act::Asking => self.ask_edges(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),
             Act::Images => self.pages_with_images(),
             Act::Present => self.present(),
             Act::Archive => self.archive(),
+            Act::TakeUp => self.take_up(),
             Act::AddAccount => self.open_form(),
             Act::Remove => self.ask_to_remove(),
             Act::Trash => self.delete(),
@@ -701,7 +704,7 @@ impl App {
                     Some(Row::Everyone) => self.fold_all(),
                     Some(Row::Account(a)) => self.fold_at(a, None),
                     Some(Row::Folder(a, n))
-                        if !self.accounts[a].folders[n].selectable && self.has_under(a, n) =>
+                        if !self.accounts[a].folders[n].selectable && self.under(a, n) > 0 =>
                     {
                         self.fold_at(a, Some(n))
                     }

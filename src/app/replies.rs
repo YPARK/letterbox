@@ -467,6 +467,7 @@ impl App {
                 );
             }
             Answer::Mapped(passed) => {
+                self.agent_mapped(a);
                 // A look that failed is one that cannot tell: as many such,
                 // and its server's word is taken.
                 if passed.is_ok() {
@@ -686,7 +687,20 @@ impl App {
                         if let Some((folder, uid)) = answer {
                             self.marked(a, &folder, uid, Flag::Answered, true);
                         }
-                        self.compose = None;
+                        // Taken up from a draft: that draft goes, to Trash,
+                        // not to be sent twice.
+                        let draft = self.compose.take().and_then(|c| c.thread.draft);
+                        match (draft, self.trash_of(a)) {
+                            (Some((folder, uid, id)), Some(trash)) => {
+                                self.trash_quietly(a, folder, uid, id, trash);
+                            }
+                            (Some(_), None) => {
+                                self.send_note = Some(
+                                    "no Trash known, so its draft stays in Drafts".to_string(),
+                                );
+                            }
+                            _ => {}
+                        }
                         self.status = match self.send_note.take() {
                             Some(note) => format!("{said} · {note}"),
                             None => said,

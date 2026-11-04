@@ -22,7 +22,7 @@ pub(super) fn message_id(app: &App, key: &crate::index::Key) -> String {
 /// Whether the message of Message-ID `id` is in Trash, as its server
 /// confirmed and letterbox recorded, to be put back.
 pub(super) fn trashed(app: &App, id: &str) -> bool {
-    app.ledger.find("you@example.com", id).is_some()
+    app.ledger.records("you@example.com", id)
 }
 
 /// Down the cluster's tree to the message `key`, as ⏎ and the arrows go.

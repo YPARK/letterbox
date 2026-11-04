@@ -18,8 +18,9 @@ use age::x25519::Identity;
 use journal::Journal;
 pub use record::{FolderState, Key, Place, Record};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// What the servers say, as it is written down: each event a change.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,6 +269,52 @@ pub struct Index {
     pub fault: Option<String>,
     /// Held while it is written to: one letterbox writes it at a time.
     held: Option<std::fs::File>,
+    /// Where it is and its key, for the letterbox that writes it to take in
+    /// what an agent wrote down.
+    advised: Option<(PathBuf, Identity)>,
+}
+
+/// How far back mail not decided on is asked of, in seconds.
+const ASKED_WITHIN: i64 = 60 * sync::DAY;
+
+/// A message weighed to be asked about.
+struct Candidate<'a> {
+    record: &'a Record,
+    odds: f32,
+    /// Which to ask first: the highest.
+    rank: f32,
+    tokens: Cow<'a, [(String, f32)]>,
+    decided: Option<bool>,
+}
+
+/// A message worth asking you about, to learn from your answer.
+#[derive(Clone, Debug)]
+pub struct Edge {
+    pub key: Key,
+    /// Where it is.
+    pub place: Option<Place>,
+    pub from: String,
+    pub subject: String,
+    pub preview: String,
+    /// How likely it says it is to be thrown away.
+    pub odds: f32,
+    pub why: Vec<String>,
+    /// What you decided, thrown away or kept, where it now disagrees.
+    pub decided: Option<bool>,
+}
+
+/// The journal what you confirmed through an agent is written to.
+const ADVICE: &str = "agent";
+
+/// Write down `taught`, decisions you confirmed through an agent, for the
+/// letterbox that writes the index in `dir` to learn as it next can: with
+/// the key's public half alone, never the index itself.
+pub fn advise(
+    dir: &Path,
+    recipient: &age::x25519::Recipient,
+    taught: &[crate::filter::Taught],
+) -> anyhow::Result<()> {
+    journal::append(dir, ADVICE, recipient, taught.to_vec())
 }
 
 /// The index's lock, as asked for.
@@ -286,6 +333,11 @@ pub fn lock(dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
         Hold::Held(file) => Ok(file),
         Hold::Busy => anyhow::bail!("letterbox is open: close it, then run this again"),
     }
+}
+
+/// Whether a letterbox open writes the index in `dir`.
+pub fn is_open(dir: &Path) -> bool {
+    matches!(hold(dir), Hold::Busy)
 }
 
 /// Hold the lock of the index in `dir`, if no other letterbox does.
@@ -319,6 +371,7 @@ impl Index {
             version: 0,
             fault: None,
             held: None,
+            advised: None,
         }
     }
 
@@ -384,8 +437,75 @@ impl Index {
             index.kept = Some(kept);
             index.taught = Some(taught);
             index.compact();
+            index.advised = Some((dir.to_path_buf(), identity.clone()));
+            if let Err(e) = index.take_advice() {
+                index.fault = Some(match index.fault.take() {
+                    Some(f) => format!("{f}; {e:#}"),
+                    None => format!("{e:#}"),
+                });
+            }
+        } else {
+            // Seen, as what an agent wrote down waits to be learnt, and left
+            // for the letterbox that writes the index to take in.
+            for t in journal::peek::<crate::filter::Taught>(dir, ADVICE, identity) {
+                index.filter.learn(t);
+            }
         }
         index
+    }
+
+    /// Each event another program wrote to the journal `name` for the
+    /// letterbox that writes the index, gone from there once read; none for
+    /// one that only reads it.
+    pub fn take_written<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+        take: impl FnOnce(Vec<T>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        match &self.advised {
+            Some((dir, identity)) if self.taught.is_some() => {
+                journal::drain(dir, name, identity, take)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Learn what you confirmed through an agent, as it wrote it down, and
+    /// write it down as letterbox's own at once: the agent's is gone once
+    /// read. Nothing is taken in while what was learnt could not be read.
+    pub fn take_advice(&mut self) -> anyhow::Result<()> {
+        if self.taught.as_ref().is_none_or(|t| t.fault().is_some()) {
+            return Ok(());
+        }
+        let Some((dir, identity)) = self.advised.clone() else {
+            return Ok(());
+        };
+        journal::drain(
+            &dir,
+            ADVICE,
+            &identity,
+            |advice: Vec<crate::filter::Taught>| {
+                if advice.is_empty() {
+                    return Ok(());
+                }
+                // Each once: what was learnt and not yet written down, as
+                // when writing it failed, is not learnt again as it is read
+                // again.
+                let learnt: std::collections::HashSet<(Key, i64)> = self
+                    .filter
+                    .taught
+                    .iter()
+                    .filter(|t| t.agent)
+                    .map(|t| (t.key.clone(), t.at))
+                    .collect();
+                for t in advice {
+                    if !learnt.contains(&(t.key.clone(), t.at)) {
+                        self.learn(t)?;
+                    }
+                }
+                self.taught.as_mut().map_or(Ok(()), Journal::flush)
+            },
+        )
     }
 
     /// Whether what is new is written down: not in memory alone, nor read
@@ -494,18 +614,42 @@ impl Index {
         if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
             return Ok(());
         }
-        let Some(r) = self.records.get(key) else {
-            return Ok(());
-        };
-        let t = crate::filter::Taught {
+        self.teach_as(key, thrown, false, &self.known()).map(|_| ())
+    }
+
+    /// Learn of the message `key`, `asked` if you answered as you were
+    /// asked; whether it was known to learn of.
+    fn teach_as(
+        &mut self,
+        key: &Key,
+        thrown: bool,
+        asked: bool,
+        known: &crate::filter::Known,
+    ) -> anyhow::Result<bool> {
+        match self.lesson(key, thrown, known) {
+            Some(t) => self
+                .learn(crate::filter::Taught { asked, ..t })
+                .map(|()| true),
+            None => Ok(false),
+        }
+    }
+
+    /// What is learnt of the message `key`, thrown away or kept, as it is
+    /// read now beside `known`; none if it is not indexed.
+    pub fn lesson(
+        &self,
+        key: &Key,
+        thrown: bool,
+        known: &crate::filter::Known,
+    ) -> Option<crate::filter::Taught> {
+        let r = self.records.get(key)?;
+        Some(crate::filter::Taught {
             key: key.clone(),
             thrown,
-            tokens: crate::filter::Filter::tokens(r, &self.known()),
+            tokens: crate::filter::Filter::tokens(r, known),
             message_id: r.message_id.clone(),
-            seeded: false,
             ..Default::default()
-        };
-        self.learn(t)
+        })
     }
 
     fn learn(&mut self, mut t: crate::filter::Taught) -> anyhow::Result<()> {
@@ -645,6 +789,148 @@ impl Index {
         self.forget_where(|t| t.seeded)
     }
 
+    /// Forget what you confirmed through an agent, and what you answered
+    /// as you were asked: what you decided in letterbox is kept. How many
+    /// were forgotten.
+    pub fn unadvise(&mut self) -> anyhow::Result<usize> {
+        self.forget_where(|t| t.agent || t.asked)
+    }
+
+    /// Learn what you answered as you were asked about the message `key`:
+    /// thrown away, or kept; whether it was known to learn of. Nothing is
+    /// moved; and an error, nothing learnt, while what was learnt could not
+    /// be read.
+    pub fn teach_asked(
+        &mut self,
+        key: &Key,
+        thrown: bool,
+        known: &crate::filter::Known,
+    ) -> anyhow::Result<bool> {
+        if self.taught.as_ref().is_some_and(|t| t.fault().is_some()) {
+            anyhow::bail!("what was learnt cannot be read, so nothing more is learnt");
+        }
+        self.teach_as(key, thrown, true, known)
+    }
+
+    /// How many days ago you last answered as you were asked; none if never.
+    pub fn days_since_asked(&self, now: i64) -> Option<i64> {
+        let last = self
+            .filter
+            .taught
+            .iter()
+            .filter(|t| t.asked)
+            .map(|t| t.at)
+            .max()?;
+        Some((now - last).max(0) / sync::DAY)
+    }
+
+    /// At most `n` messages worth asking about, one a sender: first those
+    /// where what was learnt now disagrees with what you decided, surest
+    /// first, up to half; then those come in the last while, undecided, that
+    /// it is least sure of. Never one already asked about, nor one that is
+    /// no longer anywhere.
+    pub fn edges(&self, n: usize, now: i64, known: &crate::filter::Known) -> Vec<Edge> {
+        use crate::filter::{DISAGREES, Filter, UNSURE};
+        let filter = &self.filter;
+        let asked: BTreeSet<&Key> = filter
+            .taught
+            .iter()
+            .filter(|t| t.asked)
+            .map(|t| &t.key)
+            .collect();
+        // Your own last word on each, as it was read then.
+        let mut decided: BTreeMap<&Key, &crate::filter::Taught> = BTreeMap::new();
+        for t in filter.taught.iter().filter(|t| !t.seeded && !t.auto) {
+            decided.insert(&t.key, t);
+        }
+        let there = |r: &&Record| !r.places.is_empty();
+        let mut wrong: Vec<Candidate> = decided
+            .values()
+            .filter(|t| !asked.contains(&t.key))
+            .filter_map(|t| {
+                let rank = filter.against(t);
+                let record = self
+                    .records
+                    .get(&t.key)
+                    .filter(|_| rank > DISAGREES)
+                    .filter(there)?;
+                Some(Candidate {
+                    record,
+                    odds: filter.odds(&t.tokens),
+                    rank,
+                    tokens: Cow::Borrowed(&t.tokens),
+                    decided: Some(t.thrown),
+                })
+            })
+            .collect();
+        let mut unsure: Vec<Candidate> = self
+            .records
+            .values()
+            .filter(there)
+            .filter(|r| {
+                // As it came: by the earlier, as a date to come says nothing.
+                r.date.unwrap_or(r.first_seen).min(r.first_seen) >= now - ASKED_WITHIN
+                    && !asked.contains(&r.key)
+                    && !decided.contains_key(&r.key)
+            })
+            .filter(|r| {
+                let s = labels::system(r, &self.folders);
+                !s.sent && !s.draft
+            })
+            .filter_map(|record| {
+                let tokens = Filter::tokens(record, known);
+                let odds = filter.odds(&tokens);
+                ((odds - 0.5).abs() <= UNSURE).then(|| Candidate {
+                    record,
+                    odds,
+                    rank: -(odds - 0.5).abs(),
+                    tokens: Cow::Owned(tokens),
+                    decided: None,
+                })
+            })
+            .collect();
+        for list in [&mut wrong, &mut unsure] {
+            list.sort_by(|a, b| {
+                b.rank
+                    .total_cmp(&a.rank)
+                    .then(a.record.key.cmp(&b.record.key))
+            });
+        }
+        let mut senders: BTreeSet<String> = BTreeSet::new();
+        let mut edges: Vec<Edge> = Vec::new();
+        let mut fill = |from: &mut dyn Iterator<Item = Candidate>, upto: usize| {
+            while edges.len() < upto {
+                let Some(c) = from.next() else { break };
+                if senders.insert(c.record.address.to_lowercase()) {
+                    edges.push(Edge {
+                        key: c.record.key.clone(),
+                        place: self.inbox_first(c.record),
+                        from: c.record.from.clone(),
+                        subject: c.record.subject.clone(),
+                        preview: c.record.preview.clone(),
+                        odds: c.odds,
+                        why: filter.why(&c.tokens),
+                        decided: c.decided,
+                    });
+                }
+            }
+        };
+        let mut wrong = wrong.into_iter();
+        fill(&mut wrong, n.div_ceil(2));
+        fill(&mut unsure.into_iter().chain(wrong), n);
+        edges
+    }
+
+    /// Where `r` is: its Inbox, if it is in one, as its server's role says.
+    fn inbox_first(&self, r: &Record) -> Option<Place> {
+        let inbox = |p: &&Place| {
+            let state = self.folders.get(&(r.key.account.clone(), p.folder.clone()));
+            state.and_then(|s| s.role) == Some(crate::mail::Role::Inbox)
+                || p.folder.eq_ignore_ascii_case("INBOX")
+        };
+        r.places.iter().find(inbox).or(r.places.first()).cloned()
+    }
+
     /// Forget each message taught as thrown away by your own decision from
     /// `since` to `until`, both included, as by a trashing done by mistake;
     /// what was read from the Trash then, and what was thrown away as junk,
@@ -722,6 +1008,25 @@ impl Index {
         kept.sort_by_key(|(at, t)| (std::cmp::Reverse(*at), t.key.clone()));
         kept.truncate(limit);
         kept
+    }
+
+    /// The mail come to an Inbox from `since` on, in seconds since 1970,
+    /// and never read: new, and not yet yours.
+    pub fn new_unread(&self, since: i64) -> impl Iterator<Item = &Record> {
+        self.records
+            .values()
+            .filter(move |r| r.first_seen >= since && !r.flags.seen)
+            .filter(|r| self.system(&r.key).inbox)
+    }
+
+    /// The message of `account` by its `Message-ID`, if it has one.
+    pub fn by_message_id(&self, account: &str, id: &str) -> Option<&Record> {
+        if id.is_empty() {
+            return None;
+        }
+        self.records
+            .values()
+            .find(|r| r.key.account == account && r.message_id == id)
     }
 
     /// The message of `account` at `uid` in `folder`, by its key.

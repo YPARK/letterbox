@@ -265,11 +265,8 @@ impl App {
         // On Gmail the map reads All Mail, not the Inbox listed: there the
         // message is found by its Message-ID.
         let key = index.key_at(ident, &l.folder, l.summary.uid).or_else(|| {
-            let id = &l.summary.message_id;
             index
-                .records
-                .values()
-                .find(|r| r.key.account == *ident && !id.is_empty() && r.message_id == *id)
+                .by_message_id(ident, &l.summary.message_id)
                 .map(|r| r.key.clone())
         })?;
         drop(index);

@@ -66,6 +66,26 @@ impl Role {
     }
 }
 
+/// The folder of `role`, of those `folders`, to list.
+pub fn role_folder(folders: &[Folder], role: Role) -> Option<&Folder> {
+    folders.iter().find(|f| f.selectable && f.role == role)
+}
+
+/// The folder mail is moved to as thrown away, of those `folders`: the one
+/// `chosen` for the account, when it is still there, else the one the
+/// server marks as Trash.
+pub fn trash_folder(folders: &[Folder], chosen: Option<&str>) -> Option<String> {
+    if let Some(path) = chosen
+        && folders.iter().any(|f| f.path == path && f.selectable)
+    {
+        return Some(path.to_string());
+    }
+    folders
+        .iter()
+        .find(|f| f.role == Role::Trash && f.selectable)
+        .map(|f| f.path.clone())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Folder {
     /// Its name on the server, as commands give it.
@@ -89,11 +109,10 @@ impl Folder {
     /// Whether it is within the folder at `path`, under it as deep as it
     /// goes, by its path and its server's delimiter, `/` where none is said.
     pub fn is_within(&self, path: &str) -> bool {
-        !path.is_empty()
-            && self
-                .path
-                .strip_prefix(path)
-                .is_some_and(|rest| rest.starts_with(self.delimiter.as_deref().unwrap_or("/")))
+        let delimiter = self.delimiter.as_deref().filter(|d| !d.is_empty());
+        self.path
+            .strip_prefix(path)
+            .is_some_and(|rest| rest.starts_with(delimiter.unwrap_or("/")))
     }
 
     pub fn new(
@@ -574,6 +593,21 @@ fn plain<'x>(m: &'x mail_parser::Message<'x>) -> Option<std::borrow::Cow<'x, str
         Some(PartType::Html(h)) => Some(html_to_text(&blocks(h)).into()),
         _ => m.body_text(0),
     }
+}
+
+/// The plain part of a message, just as it was written, line ends made one
+/// and nothing a terminal would take as a command; none if it has only HTML.
+pub fn plain_text(raw: &[u8]) -> Option<String> {
+    let m = MessageParser::default().parse(raw)?;
+    let PartType::Text(text) = &m.text_part(0)?.body else {
+        return None;
+    };
+    Some(
+        text.replace("\r\n", "\n")
+            .chars()
+            .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+            .collect(),
+    )
 }
 
 /// The tags of HTML that begin and end a line of it read as text:

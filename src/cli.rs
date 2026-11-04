@@ -236,8 +236,14 @@ pub(super) enum FilterAction {
     },
     /// Forget what was learnt from the Trash and your labels: only your
     /// own decisions are kept; or, given --since, each message learnt as
-    /// thrown away then, as by a trashing done by mistake; then check
+    /// thrown away then, as by a trashing done by mistake; or, given
+    /// --agent, what you confirmed through an AI agent and your answers as
+    /// you were asked; then check
     Forget {
+        /// Forget what you confirmed through an AI agent, and your answers as
+        /// you were asked by L or an agent; nothing else
+        #[arg(long, conflicts_with = "since")]
+        agent: bool,
         /// From when: `2026-10-27 13:50`, in local time, or seconds since 1970
         #[arg(long)]
         since: Option<String>,

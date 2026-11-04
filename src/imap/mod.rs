@@ -43,6 +43,26 @@ pub struct Imap {
 }
 
 impl Imap {
+    /// Add `raw` to the end of `folder`, with `flags`.
+    fn append_flagged(
+        &mut self,
+        folder: &str,
+        raw: &[u8],
+        flags: &[imap::types::Flag<'static>],
+    ) -> anyhow::Result<()> {
+        self.run(|s, selected| {
+            let mut cmd = s.append(folder, raw);
+            for flag in flags {
+                cmd.flag(flag.clone());
+            }
+            cmd.finish()?;
+            if selected.as_ref().is_some_and(|sel| sel.folder == folder) {
+                *selected = None;
+            }
+            Ok(())
+        })
+    }
+
     pub fn new(account: Account) -> Self {
         Imap {
             account,
@@ -305,17 +325,17 @@ impl Store for Imap {
     }
 
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
-        self.run(|s, selected| {
-            let mut cmd = s.append(folder, raw);
-            if seen {
-                cmd.flag(imap::types::Flag::Seen);
-            }
-            cmd.finish()?;
-            if selected.as_ref().is_some_and(|sel| sel.folder == folder) {
-                *selected = None;
-            }
-            Ok(())
-        })
+        let flags: &[imap::types::Flag] = if seen {
+            &[imap::types::Flag::Seen]
+        } else {
+            &[]
+        };
+        self.append_flagged(folder, raw, flags)
+    }
+
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<()> {
+        use imap::types::Flag;
+        self.append_flagged(folder, raw, &[Flag::Seen, Flag::Draft])
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {

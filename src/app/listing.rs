@@ -257,16 +257,18 @@ impl App {
     }
 
     pub(super) fn is_trash(&self, account: usize, path: &str) -> bool {
+        self.role_is(account, path, Role::Trash)
+    }
+
+    /// Whether the folder `path` of `account` is its folder of `role`.
+    pub(super) fn role_is(&self, account: usize, path: &str, role: Role) -> bool {
         self.folder_of(account, path)
-            .is_some_and(|f| f.role == Role::Trash)
+            .is_some_and(|f| f.role == role)
     }
 
     /// The account's folder of `role`, if it has one to list.
     pub(super) fn role_folder(&self, account: usize, role: Role) -> Option<&Folder> {
-        self.accounts[account]
-            .folders
-            .iter()
-            .find(|f| f.selectable && f.role == role)
+        crate::mail::role_folder(&self.accounts[account].folders, role)
     }
 
     /// The folders of `role`, one an account, of the accounts in use.
@@ -344,13 +346,15 @@ impl App {
             self.rows.extend(TOGETHER.map(Row::All));
         }
         // What is folded of an account or a folder no more, let go.
-        let names: Vec<&str> = self.accounts.iter().map(|a| a.name.as_str()).collect();
-        self.folded.retain(|n, _| names.contains(&n.as_str()));
-        for account in self.accounts.iter().filter(|a| !a.folders.is_empty()) {
-            if let Some(paths) = self.folded.get_mut(&account.name) {
+        self.folded.retain(|name, paths| {
+            let Some(account) = self.accounts.iter().find(|a| a.name == *name) else {
+                return false;
+            };
+            if !account.folders.is_empty() {
                 paths.retain(|p| p.is_empty() || account.folders.iter().any(|f| f.path == *p));
             }
-        }
+            true
+        });
         for a in self.live().collect::<Vec<_>>() {
             self.rows.push(Row::Account(a));
             let folded = self.is_folded(a, None);
@@ -361,7 +365,8 @@ impl App {
                     continue;
                 }
                 // Within a folder folded, as deep as it goes, nothing shown.
-                let hidden = folds.is_some_and(|paths| paths.iter().any(|p| f.is_within(p)));
+                let hidden = folds
+                    .is_some_and(|paths| paths.iter().any(|p| !p.is_empty() && f.is_within(p)));
                 if !hidden {
                     self.rows.push(Row::Folder(a, i));
                 }
@@ -396,12 +401,6 @@ impl App {
             .count()
     }
 
-    /// Whether any folder is within the folder `i` of `account`.
-    pub fn has_under(&self, account: usize, i: usize) -> bool {
-        let folders = &self.accounts[account].folders;
-        folders.iter().any(|f| f.is_within(&folders[i].path))
-    }
-
     /// Whether the account `account` is folded, or its folder `i` is.
     pub fn is_folded(&self, account: usize, i: Option<usize>) -> bool {
         let a = &self.accounts[account];
@@ -414,7 +413,7 @@ impl App {
     /// else its account, to its Inbox.
     pub(super) fn fold(&mut self) {
         let (a, i) = match self.rows.get(self.row) {
-            Some(&Row::Folder(a, i)) if !self.is_folded(a, None) && self.has_under(a, i) => {
+            Some(&Row::Folder(a, i)) if !self.is_folded(a, None) && self.under(a, i) > 0 => {
                 (a, Some(i))
             }
             Some(&Row::Folder(a, _) | &Row::Account(a)) => (a, None),

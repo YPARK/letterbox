@@ -97,6 +97,11 @@ pub trait Store: Send {
     }
     /// Add `raw` to the end of `folder`, seen if `seen` is.
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()>;
+    /// Add `raw` to the end of `folder` as a draft, marked so, for a mail
+    /// app to open it to go on writing it: read, to count as nothing new.
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<()> {
+        self.append(folder, raw, true)
+    }
     /// Whether `folder` holds a message of the Message-ID `message_id`.
     fn holds(&mut self, _folder: &str, _message_id: &str) -> anyhow::Result<bool> {
         anyhow::bail!("this account cannot be asked what a folder holds")

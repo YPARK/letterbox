@@ -91,6 +91,18 @@ impl App {
         self.open_compose(account, text, (row, col), Thread::default(), Vec::new());
     }
 
+    /// E: go on writing the draft picked, in Drafts.
+    pub(super) fn take_up(&mut self) {
+        if self
+            .picked()
+            .is_some_and(|l| self.role_is(l.account, &l.folder, Role::Drafts))
+        {
+            self.respond(Respond::Draft);
+        } else {
+            self.status = "E goes on writing a draft: pick one in Drafts".to_string();
+        }
+    }
+
     /// Answer the message picked, as `how` says; read first, if it was
     /// not.
     pub(super) fn respond(&mut self, how: Respond) {
@@ -164,9 +176,39 @@ impl App {
         message: &Message,
         how: Respond,
     ) {
+        if how == Respond::Draft {
+            return self.open_draft(account, folder, message);
+        }
         let me = self.accounts[account].email.clone();
         let (text, at, thread, files) = compose::respond(message, folder, how, &me);
         self.open_compose(account, text, at, thread, files);
+    }
+
+    /// Go on writing the draft `message`, in `folder` of `account`; unless
+    /// it has a Bcc, left whole, as letterbox sends none.
+    fn open_draft(&mut self, account: usize, folder: &str, message: &Message) {
+        if mail::field(&message.raw, "Bcc").is_some() {
+            self.clear_passing(Transient::Reading);
+            self.status =
+                "it has a Bcc, which letterbox cannot send: open it in your mail app".to_string();
+            return;
+        }
+        let mut r = compose::resume(message, folder);
+        r.thread.answering = self.answered_by(account, r.thread.in_reply_to.as_deref());
+        self.open_compose(account, r.text, r.at, r.thread, r.files);
+        if r.html_only {
+            self.status = "it was written in HTML: it goes on as plain text".to_string();
+        }
+    }
+
+    /// Where the message of `account` a draft answers is, by its
+    /// `Message-ID`, to mark it answered once the draft is sent.
+    fn answered_by(&self, account: usize, id: Option<&str>) -> Option<(String, u32)> {
+        let id = mail::brackets(id?);
+        let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        let r = index.by_message_id(&self.accounts[account].ident, &id)?;
+        let p = r.places.first()?;
+        Some((p.folder.clone(), p.uid))
     }
 
     pub(super) fn open_compose(

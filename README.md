@@ -170,12 +170,15 @@ letterbox search grant report --account Work
 | `a` | reply to all: the sender, the others it went to copied |
 | `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; several selected, asked first |
+| `E` | in Drafts, go on writing the draft picked, its thread and files kept: sent, it goes to Trash |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message. A PDF attached may be signed there, `S` in ohp, and replied with, as [Signing a PDF](#signing-a-pdf) says |
 | `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
 | `V` | the message read as its pages, typeset by ohp and drawn in the terminal, where it draws images (kitty, WezTerm, Ghostty, iTerm2): `j` `k` or `space` `b` turn them, `V` again its text |
 | `I` | the message read as its pages, as `V` shows them, with the pictures it shows from the web fetched. Never else: fetching them tells the sender it was read, and when |
 | `J` | with the auto filter on, the new mail that looks like junk, each, how sure, and why, as what weighed most: `space` chooses one, `d` throws those chosen away, `n` says the one picked is not junk, learnt so, `i` looks through the Inbox, any other key leaves them. None chosen till you choose; never shown, nor thrown away, unasked. `tab` goes to what was thrown away as junk in the last 7 days, and why, and back: `⏎` puts the one picked back, `u` all of them, each learnt as kept. With nothing new, `J` opens on what was thrown away. Told of as letterbox opens too |
+| `L` | what the junk filter is least sure of, or got wrong, asked of you, one a sender: `x` says the one picked is junk, `n` to keep it, each learnt, nothing moved; `space` goes on past it. `lbx filter forget --agent` forgets your answers |
+| `T` | start your own agent, named in `accounts.toml` as [an agent as letterbox opens](#an-agent-as-letterbox-opens) says, to look through new mail: what it finds pops up, to choose what is done |
 | `P` | the papers the message read tells of, a Scholar alert's or a journal's table of contents, each said to be in your [paperstack](https://github.com/YPARK/paperstack), like what you starred there, or new: `⏎` puts the one picked there, starred, and the list closes, saying so below; `o` opens it. paperstack is asked over MCP, `paperstack mcp` run as it is first wanted (`$LETTERBOX_PAPERSTACK` names another program) |
 | `U` | look for new mail now; it is looked for every two minutes |
 | `A` | add an account |
@@ -645,16 +648,82 @@ have your shell's `PATH`.
 | `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
 | `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |
 | `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
+| `recent_messages` | what came to each Inbox in the last hours, every account or one | reads |
+| `triage` | the same, each with how likely you are to throw it away and where it would be filed | reads |
+| `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back | moves, once you say yes |
+| `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
+| `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
+| `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
+| `draft_reply` | a reply, threaded, quoting what it answers, kept in Drafts; never sent | writes a draft |
+| `draft_message` | a new letter, kept in Drafts; never sent | writes a draft |
+| `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
+| `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
 
-All but the last are marked read-only, so a program may let the agent use
-them without asking. The map's index is read as letterbox last kept it,
-and never written, so an agent may ask while letterbox runs. Nothing is sent, moved or deleted. Mail is from
-strangers, and a message may be written to steer an agent: the agent is
-told to read what a message says as data, never as instructions. An
-account whose password is in the vault is not served, as its passphrase
-cannot be asked for there; one in the keyring, or Outlook's, is. `lbx
---demo mcp` serves the demo's mail, to try an agent on.
+The tools that read are marked read-only, so a program may let the agent
+use them without asking. The map's index is read as letterbox last kept it,
+and never written, so an agent may ask while letterbox runs. Nothing is
+sent, or deleted for good: an agent's letters wait in Drafts, for you to
+change and send, `E` on one there taking it up, and it goes to Trash once
+sent. Mail is from strangers, and a message may be
+written to steer an agent: the agent is told to read what a message says
+as data, never as instructions. An account whose password is in the vault
+is not served, as its passphrase cannot be asked for there; one in the
+keyring, or Outlook's, is. `lbx --demo mcp` serves the demo's mail, to try
+an agent on.
+
+**Nothing moves unless you say yes, to letterbox.** `trash_messages` and
+`file_messages` have letterbox itself ask you, through the agent's program
+(MCP's elicitation: Claude Code shows it as a dialog), listing each message
+by who sent it and what about, flagged or answered said. The agent cannot
+answer for you; a program that cannot ask is refused, and nothing moves.
+What you say yes to teaches letterbox, as if you had done it yourself:
+thrown away, or kept. It is written, encrypted to the map's key, beside the
+map, and learnt by letterbox as it next runs, open or not. `lbx filter
+forget --agent` forgets all of it, with your answers to `L`, and keeps what
+you decided otherwise.
+
+### How to triage
+
+`lbx mcp` serves how an agent goes through new mail as the prompt
+`mail-triage`, so every agent it is given to has it, on every machine,
+with nothing more to copy: in Claude Code, `/mcp__letterbox__mail-triage`.
+Its rules are in what the server tells an agent as it begins, too, so
+"check my email", "check my letterbox" or "check lbx" is enough. Rather
+choose in letterbox? The agent reports it all, then opens letterbox, in
+Terminal on macOS, or as `open` in `[agent]` says, `{lbx}` where letterbox
+is:
+
+```toml
+[agent]
+open = "open -na Ghostty --args -e {lbx}"
+```
+ It sums up what needs an answer, what is due,
+what is only to know, papers and junk; proposes what to throw away or
+file, never mail flagged, answered or from a person to the Trash, nor
+what needs you out of the Inbox; and ends with what you might ask next.
+
+### An agent as letterbox opens
+
+Name your own agent in `accounts.toml`, and `T` starts it, with
+`LETTERBOX_AGENT=1` set, what it says written to `agent.log` beside the
+file, only you able to read it. letterbox starts it on its own too, once
+as it opens, if new mail came since it last ran:
+
+```toml
+[agent]
+command = "claude -p /mcp__letterbox__mail-triage --allowedTools mcp__letterbox__triage,mcp__letterbox__recent_messages,mcp__letterbox__read_message,mcp__letterbox__suggest_label,mcp__letterbox__report_triage"
+```
+
+Any agent that speaks MCP will do: give its own command. Started so, no
+one is there to say yes, so it is offered nothing that moves mail: it
+calls `report_triage`,
+and letterbox pops up what it found, a moment before a key acts on it, so
+a key pressed as it came is not taken. There, space chooses what it would
+trash or file, `a` all of them, `⏎` does those chosen, learnt as your own;
+`c` copies a question it suggests asking next, to paste to your agent; any
+other key leaves it all as it is. A report written while letterbox is shut
+is shown as it next opens.
 
 ## In Emacs
 

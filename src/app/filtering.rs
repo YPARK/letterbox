@@ -20,12 +20,9 @@ impl App {
             let decided: std::collections::HashSet<&crate::index::Key> =
                 index.filter.taught.iter().map(|t| &t.key).collect();
             index
-                .records
-                .values()
                 // New, and never read: mail read and left is yours.
-                .filter(|r| r.first_seen >= self.auto.since && !decided.contains(&r.key))
-                .filter(|r| !r.flags.seen)
-                .filter(|r| index.system(&r.key).inbox)
+                .new_unread(self.auto.since)
+                .filter(|r| !decided.contains(&r.key))
                 .filter(|r| !self.junk_asked.contains(&r.key))
                 .filter_map(|r| {
                     let tokens = crate::filter::Filter::tokens(r, &known);
@@ -346,6 +343,98 @@ impl App {
     pub fn remember_auto(&self) {
         if let Some(path) = &self.filter_file {
             let _ = std::fs::write(path, self.auto.to_string());
+        }
+    }
+}
+
+/// How many are asked about at once, by L.
+const ASKED: usize = 5;
+
+/// What the filter is least sure of, or got wrong, listed by L: the one
+/// picked, and how many answers were learnt.
+#[derive(Clone, Debug, Default)]
+pub struct Asking {
+    pub edges: Vec<crate::index::Edge>,
+    pub at: usize,
+    pub learnt: usize,
+    /// Whom you wrote to, as each answer is read beside.
+    pub known: crate::filter::Known,
+}
+
+impl App {
+    /// L: ask about what the filter is least sure of, or got wrong.
+    pub(super) fn ask_edges(&mut self) {
+        let now = jiff::Timestamp::now().as_second();
+        let (edges, known) = {
+            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            let known = index.known();
+            (index.edges(ASKED, now, &known), known)
+        };
+        if edges.is_empty() {
+            self.status = "nothing to ask: it is sure of what has come, or has not read it".into();
+            return;
+        }
+        self.dialog = Dialog::Asking(Box::new(Asking {
+            edges,
+            known,
+            ..Default::default()
+        }));
+    }
+
+    /// Close what is asked, saying how many were learnt.
+    fn leave_asking(&mut self, learnt: usize) {
+        self.dialog = Dialog::Closed;
+        self.status = format!("{learnt} learnt, nothing moved · L asks again");
+    }
+
+    /// A key in what is asked: x says the one picked is junk, n to keep
+    /// it, each learnt, nothing moved; space, or j and k, go on past it; any
+    /// other key leaves the rest.
+    pub(super) fn asking_key(&mut self, key: KeyEvent) {
+        let Dialog::Asking(asking) = &mut self.dialog else {
+            return;
+        };
+        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+        let last = asking.edges.len().saturating_sub(1);
+        let thrown = match (keymap::act(key), key.code) {
+            (_, KeyCode::Char('x')) if plain => true,
+            (_, KeyCode::Char('n')) if plain => false,
+            (Some(Act::Down), _) | (_, KeyCode::Char(' ')) => {
+                asking.at = (asking.at + 1).min(last);
+                return;
+            }
+            (Some(Act::Up), _) => {
+                asking.at = asking.at.saturating_sub(1);
+                return;
+            }
+            _ => {
+                let learnt = asking.learnt;
+                return self.leave_asking(learnt);
+            }
+        };
+        let Some(picked) = asking.edges.get(asking.at).map(|e| e.key.clone()) else {
+            let learnt = asking.learnt;
+            return self.leave_asking(learnt);
+        };
+        let taught = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .teach_asked(&picked, thrown, &asking.known);
+        match taught {
+            // Left as it is, to be answered when it can be learnt.
+            Err(e) => self.status = format!("not learnt: {}", first_line(&format!("{e:#}"))),
+            Ok(known) => {
+                asking.edges.remove(asking.at);
+                asking.learnt += usize::from(known);
+                asking.at = asking.at.min(asking.edges.len().saturating_sub(1));
+                let (done, learnt) = (asking.edges.is_empty(), asking.learnt);
+                // Answered, it is no more held as junk.
+                self.junk.retain(|j| j.key != picked);
+                if done {
+                    self.leave_asking(learnt);
+                }
+            }
         }
     }
 }

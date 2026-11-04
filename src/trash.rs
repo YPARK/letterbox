@@ -48,32 +48,50 @@ pub struct Ledger {
     fault: Option<String>,
     /// How many times the file was written, as tests count it.
     saves: usize,
+    /// When the file was last changed, and how long it was, as it was read:
+    /// read again only once either is not.
+    seen: Option<(std::time::SystemTime, u64)>,
+}
+
+/// When the file at `path` was last changed, and how long it is.
+fn stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 impl Ledger {
     /// The ledger at `path`, empty when there is no file yet. A file that
     /// cannot be read is kept as it is: nothing is written until it can.
     pub fn open(path: PathBuf) -> Self {
-        let (entries, fault) = match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str::<File>(&text) {
-                Ok(file) => (file.message, None),
-                Err(e) => (
-                    Vec::new(),
-                    Some(format!("cannot read {}: {e}", path.display())),
-                ),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
-            Err(e) => (
-                Vec::new(),
-                Some(format!("cannot read {}: {e}", path.display())),
-            ),
-        };
+        let (entries, fault) = read(&path);
         Ledger {
+            seen: stamp(&path),
             path,
             entries,
             fault,
             saves: 0,
         }
+    }
+
+    /// Read the file again before it is looked in, as another letterbox,
+    /// or an agent's, may have recorded what it moved since; kept as it was
+    /// if it cannot be read now.
+    fn refresh(&mut self) {
+        let now = stamp(&self.path);
+        if self.fault.is_none()
+            && now != self.seen
+            && let (entries, None) = read(&self.path)
+        {
+            self.entries = entries;
+            self.seen = now;
+        }
+    }
+
+    /// Read the file again, as another may have changed it.
+    fn fresh(&mut self) -> anyhow::Result<()> {
+        (self.entries, self.fault) = read(&self.path);
+        self.seen = stamp(&self.path);
+        self.writable()
     }
 
     /// `$LETTERBOX_TRASH`, else `trash.toml` in the vault's directory.
@@ -88,12 +106,13 @@ impl Ledger {
 
     /// Where this message was, if letterbox moved it to `folder`.
     pub fn origin(
-        &self,
+        &mut self,
         account: &str,
         folder: &str,
         message_id: &str,
         uid: u32,
     ) -> Option<String> {
+        self.refresh();
         self.entries
             .iter()
             .rev()
@@ -116,10 +135,11 @@ impl Ledger {
 
     /// Where the message of `account` by `message_id` is in a Trash, if
     /// letterbox moved it there.
-    pub fn find(&self, account: &str, message_id: &str) -> Option<Entry> {
+    pub fn find(&mut self, account: &str, message_id: &str) -> Option<Entry> {
         if message_id.is_empty() {
             return None;
         }
+        self.refresh();
         self.entries
             .iter()
             .rev()
@@ -128,24 +148,25 @@ impl Ledger {
     }
 
     pub fn record(&mut self, entry: Entry) -> anyhow::Result<()> {
-        self.writable()?;
-        self.entries.retain(|e| {
-            !(e.account == entry.account && e.folder == entry.folder && e.uid == entry.uid)
-        });
-        self.entries.push(entry);
-        self.save()
+        self.record_many(vec![entry])
+    }
+
+    /// Record each of `entries`, written once.
+    pub fn record_many(&mut self, entries: Vec<Entry>) -> anyhow::Result<()> {
+        self.change(|all| {
+            for entry in entries {
+                all.retain(|e| {
+                    !(e.account == entry.account && e.folder == entry.folder && e.uid == entry.uid)
+                });
+                all.push(entry);
+            }
+            true
+        })
     }
 
     /// Forget the message `uid` in `folder`: it was put back, or removed.
     pub fn forget(&mut self, account: &str, folder: &str, uid: u32) -> anyhow::Result<()> {
-        self.writable()?;
-        let n = self.entries.len();
-        self.entries
-            .retain(|e| !(e.account == account && e.folder == folder && e.uid == uid));
-        if self.entries.len() == n {
-            return Ok(());
-        }
-        self.save()
+        self.forget_many(&[(account.to_string(), folder.to_string(), uid)])
     }
 
     /// Those moved to Trash from `since` to `until`, both included, of
@@ -162,10 +183,11 @@ impl Ledger {
     /// Those moved to Trash before `now` by at least [`RECORD`], for
     /// `account`: their records to let go. None when the file could not be
     /// read.
-    pub fn stale(&self, account: &str, now: i64) -> Vec<Entry> {
+    pub fn stale(&mut self, account: &str, now: i64) -> Vec<Entry> {
         if self.fault.is_some() {
             return Vec::new();
         }
+        self.refresh();
         self.entries
             .iter()
             .filter(|e| e.account == account && now.saturating_sub(e.at) >= RECORD)
@@ -175,17 +197,38 @@ impl Ledger {
 
     /// Forget each of `gone`, by account, folder and UID, written once.
     pub fn forget_many(&mut self, gone: &[(String, String, u32)]) -> anyhow::Result<()> {
-        self.writable()?;
-        let n = self.entries.len();
-        self.entries.retain(|e| {
-            !gone
-                .iter()
-                .any(|(a, f, u)| e.account == *a && e.folder == *f && e.uid == *u)
-        });
-        if self.entries.len() == n {
-            return Ok(());
+        self.change(|all| {
+            let n = all.len();
+            all.retain(|e| {
+                !gone
+                    .iter()
+                    .any(|(a, f, u)| e.account == *a && e.folder == *f && e.uid == *u)
+            });
+            all.len() != n
+        })
+    }
+
+    /// Change what is recorded as `change` does, held against another
+    /// letterbox, or an agent's, changing it too: read again first, what
+    /// they recorded kept, and written if `change` says it changed.
+    fn change(&mut self, change: impl FnOnce(&mut Vec<Entry>) -> bool) -> anyhow::Result<()> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
         }
-        self.save()
+        let lock = self.path.with_extension("toml.lock");
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock)
+            .with_context(|| format!("cannot open {}", lock.display()))?;
+        held.lock()
+            .with_context(|| format!("cannot hold {}", lock.display()))?;
+        self.fresh()?;
+        if change(&mut self.entries) {
+            self.save()?;
+        }
+        Ok(())
     }
 
     /// Date every entry as moved at `at`: a test, ageing one past seven days.
@@ -202,6 +245,15 @@ impl Ledger {
             anyhow::bail!("{why}");
         }
         Ok(())
+    }
+
+    /// Whether the message of `account` by `message_id` is recorded, as
+    /// it was last read: a test's look, changing nothing.
+    #[cfg(test)]
+    pub fn records(&self, account: &str, message_id: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.account == account && e.message_id == message_id)
     }
 
     /// How many times the file was written.
@@ -223,7 +275,27 @@ impl Ledger {
         let tmp = self.path.with_extension("toml.new");
         std::fs::write(&tmp, text).with_context(|| format!("cannot write {}", tmp.display()))?;
         std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("cannot write {}", self.path.display()))
+            .with_context(|| format!("cannot write {}", self.path.display()))?;
+        self.seen = stamp(&self.path);
+        Ok(())
+    }
+}
+
+/// What the file at `path` records, and why it cannot be read, if not.
+fn read(path: &std::path::Path) -> (Vec<Entry>, Option<String>) {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match toml::from_str::<File>(&text) {
+            Ok(file) => (file.message, None),
+            Err(e) => (
+                Vec::new(),
+                Some(format!("cannot read {}: {e}", path.display())),
+            ),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
+        Err(e) => (
+            Vec::new(),
+            Some(format!("cannot read {}: {e}", path.display())),
+        ),
     }
 }
 

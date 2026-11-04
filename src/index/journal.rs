@@ -116,20 +116,7 @@ impl<T: Serialize> Journal<T> {
     /// Its files: each one's generation, its number if it is a log, and
     /// where it is.
     fn files(&self) -> std::io::Result<Vec<(u64, Option<u64>, PathBuf)>> {
-        let entries = match std::fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e),
-        };
-        let mut out = Vec::new();
-        for entry in entries {
-            let entry = entry?;
-            let file = entry.file_name();
-            if let Some((g, n)) = parse(self.name, &file.to_string_lossy()) {
-                out.push((g, n, entry.path()));
-            }
-        }
-        Ok(out)
+        files(&self.dir, self.name)
     }
 
     /// Why it could not be read, if it could not.
@@ -232,6 +219,119 @@ impl<T: Serialize> Drop for Journal<T> {
         // quitting, and this is for a journal let go otherwise.
         let _ = self.flush();
     }
+}
+
+/// Each event of the journal `name` in `dir`, oldest first, read with
+/// `identity` and given to `take`: a journal another program writes and
+/// this one takes in. Its files are removed only once `take` has their
+/// events; a file that cannot be read is set aside, as `….unread`, and
+/// said, never in the way of the rest. It is held, as `name.lock`, while it
+/// is read, as the other holds it while it writes.
+pub fn drain<T: DeserializeOwned>(
+    dir: &Path,
+    name: &str,
+    identity: &Identity,
+    take: impl FnOnce(Vec<T>) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let sorted = || -> anyhow::Result<Vec<(u64, Option<u64>, PathBuf)>> {
+        let mut found =
+            files(dir, name).with_context(|| format!("cannot read {}", dir.display()))?;
+        found.sort();
+        Ok(found)
+    };
+    // Held, and looked at again, only once there is something to read.
+    if sorted()?.is_empty() {
+        return Ok(());
+    }
+    let _held = hold(dir, name)?;
+    let mut events = Vec::new();
+    let mut read_whole = Vec::new();
+    let mut unread = None;
+    for (_, _, path) in sorted()? {
+        match read(&path, identity) {
+            Ok(mut more) => {
+                events.append(&mut more);
+                read_whole.push(path);
+            }
+            Err(e) => {
+                // Named apart, never over one set aside before.
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos());
+                let aside = path.with_extension(format!("age.{at}.unread"));
+                std::fs::rename(&path, &aside)
+                    .with_context(|| format!("cannot set aside {}", path.display()))?;
+                unread.get_or_insert(format!("{e:#}; set aside as {}", aside.display()));
+            }
+        }
+    }
+    take(events)?;
+    for path in read_whole {
+        std::fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
+    }
+    match unread {
+        Some(why) => anyhow::bail!("{why}"),
+        None => Ok(()),
+    }
+}
+
+/// Each event of the journal `name` in `dir` that can be read, oldest first,
+/// and nothing removed: a look at what another program takes in.
+pub fn peek<T: DeserializeOwned>(dir: &Path, name: &str, identity: &Identity) -> Vec<T> {
+    let mut found = files(dir, name).unwrap_or_default();
+    found.sort();
+    found
+        .iter()
+        .filter_map(|(_, _, path)| read::<T>(path, identity).ok())
+        .flatten()
+        .collect()
+}
+
+/// Write `events` to the journal `name` in `dir`, with the key's public
+/// half alone, as a log of its own: for the program that drains it.
+pub fn append<T: Serialize + DeserializeOwned>(
+    dir: &Path,
+    name: &'static str,
+    recipient: &Recipient,
+    events: Vec<T>,
+) -> anyhow::Result<()> {
+    let _held = hold(dir, name)?;
+    let (mut journal, _) = Journal::<T>::open(dir, name, recipient.clone(), None);
+    journal.unwritten = events;
+    journal.flush()
+}
+
+/// The files of the journal `name` in `dir`: each one's generation, its
+/// number if it is a log, and where it is.
+fn files(dir: &Path, name: &str) -> std::io::Result<Vec<(u64, Option<u64>, PathBuf)>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if let Some((g, n)) = parse(name, &entry.file_name().to_string_lossy()) {
+            out.push((g, n, entry.path()));
+        }
+    }
+    Ok(out)
+}
+
+/// The lock of the journal `name` in `dir`, held until it is let go.
+fn hold(dir: &Path, name: &str) -> anyhow::Result<std::fs::File> {
+    create_private(dir)?;
+    let path = dir.join(format!("{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("cannot hold {}", path.display()))?;
+    Ok(file)
 }
 
 /// The events of the file at `path`, decrypted with `identity`.

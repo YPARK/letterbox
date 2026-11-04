@@ -2,6 +2,7 @@
 //! from its own thread; what it answers is taken in between keys, so the
 //! screen is never kept waiting by a server.
 
+mod agent;
 mod bringing;
 mod bulk;
 mod checking;
@@ -28,6 +29,7 @@ mod signing;
 mod trashing;
 mod undoing;
 mod writing;
+pub use self::agent::*;
 use self::bringing::*;
 pub use self::bulk::*;
 pub use self::checking::*;
@@ -447,6 +449,15 @@ pub struct App {
     untaught: std::collections::HashSet<crate::index::Key>,
     /// What looked like junk and was asked about, not to be asked again.
     junk_asked: std::collections::HashSet<crate::index::Key>,
+    /// The agent started as letterbox opened, while it runs.
+    pub agent: Option<AgentRun>,
+    /// Your agent, if one is set: how it is started, and where it says
+    /// what it did; whether it is to start once new mail has come.
+    pub agent_set: Option<AgentSet>,
+    /// What agents reported, held until it can be shown, and when it was
+    /// last looked for.
+    pub reports: Vec<crate::report::Report>,
+    pub reports_looked: Instant,
     /// What looked like junk, held for J to show.
     junk: Vec<Junk>,
     /// What was thrown away, as last told of beside it, while tab goes
@@ -772,6 +783,10 @@ impl App {
             refiling: Refiling::default(),
             untaught: Default::default(),
             junk_asked: Default::default(),
+            agent: None,
+            agent_set: None,
+            reports: Vec::new(),
+            reports_looked: Instant::now(),
             junk: Vec::new(),
             parked: None,
             wheeled: None,
@@ -947,7 +962,7 @@ impl App {
             self.refresh();
             any = true;
         }
-        any
+        self.take_reports() || any
     }
 
     fn run_due(&mut self, due: Due) {

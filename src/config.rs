@@ -80,6 +80,66 @@ pub struct Account {
 struct File {
     #[serde(default)]
     account: Vec<Account>,
+    #[serde(default)]
+    agent: Option<Agent>,
+}
+
+/// An AI agent of your own, started as letterbox opens, to look through new
+/// mail and report what it found: `[agent]`, with the `command` to run, as
+/// the shell runs it; and how an agent opens letterbox in a terminal of its
+/// own, `open`, `{lbx}` in it where letterbox is.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Agent {
+    command: Option<String>,
+    open: Option<String>,
+}
+
+/// `command`, as the system's shell runs it.
+#[cfg(windows)]
+pub fn shell(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    // Raw: cmd takes the outer quotes off, and knows nothing of the
+    // backslashes the usual quoting would put before those within.
+    let mut c = Command::new("cmd");
+    c.arg("/C").raw_arg(format!("\"{command}\""));
+    c
+}
+
+/// `command`, as the system's shell runs it.
+#[cfg(not(windows))]
+pub fn shell(command: &str) -> Command {
+    let mut c = Command::new("sh");
+    c.args(["-c", command]);
+    c
+}
+
+/// `word`, as one word to the shell `shell` runs.
+pub fn shell_quote(word: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{word}\"")
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+/// The command of the agent started as letterbox opens, if one is set in
+/// the file at `path`.
+pub fn agent(path: &Path) -> anyhow::Result<Option<String>> {
+    Ok(set(read_file(path)?.agent.and_then(|a| a.command)))
+}
+
+/// How an agent opens letterbox in a terminal, if it is set in the file
+/// at `path`.
+pub fn opener(path: &Path) -> anyhow::Result<Option<String>> {
+    Ok(set(read_file(path)?.agent.and_then(|a| a.open)))
+}
+
+/// A command, unless it is empty.
+fn set(command: Option<String>) -> Option<String> {
+    command
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
 }
 
 impl Account {
@@ -124,12 +184,9 @@ impl Account {
         let Some(command) = &self.password_command else {
             return secret::find(self.keep, &self.host, self.user());
         };
-        let out = if cfg!(windows) {
-            Command::new("cmd").args(["/C", command]).output()
-        } else {
-            Command::new("sh").args(["-c", command]).output()
-        }
-        .with_context(|| format!("cannot run {command}"))?;
+        let out = shell(command)
+            .output()
+            .with_context(|| format!("cannot run {command}"))?;
         if !out.status.success() {
             bail!(
                 "{command} gave no password: {}",
@@ -160,15 +217,19 @@ pub fn default_path() -> PathBuf {
     base.join("letterbox/accounts.toml")
 }
 
-/// The accounts in the file at `path`; none if there is no file.
-pub fn load(path: &Path) -> anyhow::Result<Vec<Account>> {
+/// What the file at `path` holds; nothing if there is no file.
+fn read_file(path: &Path) -> anyhow::Result<File> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(File::default()),
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
     };
-    let file: File =
-        toml::from_str(&text).with_context(|| format!("cannot read {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("cannot read {}", path.display()))
+}
+
+/// The accounts in the file at `path`; none if there is no file.
+pub fn load(path: &Path) -> anyhow::Result<Vec<Account>> {
+    let file = read_file(path)?;
     for a in &file.account {
         if a.security == Security::None && !local(&a.host) {
             bail!(

@@ -179,14 +179,6 @@ fn an_account_folded_with_folders_in_its_inbox_opens_again_by_space() {
 fn a_folder_holds_only_what_is_within_it_by_its_path() {
     let mut app = nested();
     let all = side(&app);
-    // Whatever comes before 2020 in the list holds it not: Archive does.
-    let at = all.iter().position(|n| n == "2020").unwrap();
-    let before = all[at - 1].clone();
-    if before != "Archive" {
-        pick(&mut app, &before);
-        let screen = app::screen(&mut app, 120, 40);
-        assert!(!screen.contains(&format!("{before} +")), "{screen}");
-    }
     pick(&mut app, "Archive");
     press(&mut app, &["<space>"]);
     let folded = side(&app);
@@ -251,4 +243,15 @@ fn what_is_folded_of_a_folder_or_account_no_more_is_let_go() {
         .flat_map(|(a, ps)| ps.iter().map(move |p| (a.clone(), p.clone())))
         .collect();
     assert_eq!(kept, [("Demo".to_string(), "Projects".to_string())]);
+}
+
+#[test]
+fn a_folder_is_within_another_only_by_its_delimiter() {
+    let within = |path, delimiter, of| Folder::new(path, delimiter, None, true).is_within(of);
+    assert!(within("Foo.bar", Some("."), "Foo"));
+    assert!(within("Foo/bar", None, "Foo"));
+    assert!(!within("Foobar", None, "Foo"));
+    assert!(!within("Foo", None, "Foo"));
+    // A server that says its delimiter is nothing: not every name is under.
+    assert!(!within("Foobar", Some(""), "Foo"));
 }
