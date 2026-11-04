@@ -461,12 +461,9 @@ fn attachments_are_saved_under_a_name_of_their_own() {
         place.ends_with(&format!("-{uid}")),
         "its message's own: {place}"
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&text).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "only yours");
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&text).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "only yours");
     press(&mut app, &["<esc>"]);
     assert!(app.dialog.files().is_none());
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
@@ -873,29 +870,23 @@ fn a_path_typed_to_save_in_is_saved_in_and_a_name_new_there_made() {
     std::fs::create_dir_all(dir.path().join("docs/archive")).unwrap();
     let docs = dir.path().join("docs");
 
-    // A path typed to its folder's `/` stays on saving there: a path is
-    // typed from `/`, as no Windows one begins.
-    if cfg!(unix) {
-        let mut p = Picker::folder(dir.path().to_path_buf());
-        key(&mut p, &format!("{}/", docs.display()));
-        assert_eq!(p.dir, docs);
-        assert_eq!(p.current(), Some(&Entry::Here));
-        assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.clone()));
-    }
+    // A path typed to its folder's `/` stays on saving there.
+    let mut p = Picker::folder(dir.path().to_path_buf());
+    key(&mut p, &format!("{}/", docs.display()));
+    assert_eq!(p.dir, docs);
+    assert_eq!(p.current(), Some(&Entry::Here));
+    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.clone()));
 
     // A name no folder there has is a new folder, made as it is saved in.
     let mut p = Picker::folder(docs.clone());
     key(&mut p, "newproj");
     assert_eq!(p.current(), Some(&Entry::Here));
     assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newproj")));
-    if cfg!(unix) {
-        let mut p = Picker::folder(dir.path().to_path_buf());
-        key(&mut p, &format!("{}/newer", docs.display()));
-        assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newer")));
-    }
+    let mut p = Picker::folder(dir.path().to_path_buf());
+    key(&mut p, &format!("{}/newer", docs.display()));
+    assert_eq!(key(&mut p, "<enter>"), Picked::Folder(docs.join("newer")));
 }
 
-#[cfg(unix)]
 #[test]
 fn a_folder_that_could_not_be_saved_in_is_not_begun_in_next() {
     use std::os::unix::fs::PermissionsExt;

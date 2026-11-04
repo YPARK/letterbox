@@ -76,11 +76,10 @@ pub(super) fn capital(key: KeyEvent) -> KeyEvent {
 /// their paths, each quoted or its spaces escaped, or their `file://`
 /// addresses; none unless each is a file named from the root or home.
 pub(super) fn dropped(text: &str) -> Vec<PathBuf> {
-    let windows = cfg!(windows);
-    let paths: Vec<PathBuf> = dropped_words(text, windows)
+    let paths: Vec<PathBuf> = dropped_words(text)
         .iter()
         .map(|w| match w.strip_prefix("file://") {
-            Some(rest) => PathBuf::from(file_address(rest, windows)),
+            Some(rest) => PathBuf::from(unescaped(rest)),
             None => compose::path_of(w),
         })
         .collect();
@@ -92,9 +91,8 @@ pub(super) fn dropped(text: &str) -> Vec<PathBuf> {
 }
 
 /// The words of `text` as a terminal pastes paths: each quoted, or its
-/// spaces escaped by a backslash; on `windows`, where a backslash parts
-/// folders, quoted only.
-pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
+/// spaces escaped by a backslash.
+pub(crate) fn dropped_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote: Option<char> = None;
@@ -103,7 +101,7 @@ pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
         match quote {
             Some(q) if c == q => quote = None,
             Some(_) => word.push(c),
-            None if c == '\\' && !windows => word.extend(chars.next()),
+            None if c == '\\' => word.extend(chars.next()),
             None if c == '\'' || c == '"' => quote = Some(c),
             None if c.is_whitespace() => {
                 if !word.is_empty() {
@@ -117,20 +115,6 @@ pub(crate) fn dropped_words(text: &str, windows: bool) -> Vec<String> {
         words.push(word);
     }
     words
-}
-
-/// The path of a `file://` address, after its `file://`: its escapes
-/// read; on `windows`, the drive's, without the root's slash before it,
-/// its folders parted by backslashes.
-pub(crate) fn file_address(rest: &str, windows: bool) -> String {
-    let path = unescaped(rest);
-    if !windows {
-        return path;
-    }
-    let b = path.as_bytes();
-    let drive = b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':';
-    let path = if drive { &path[1..] } else { &path[..] };
-    path.replace('/', "\\")
 }
 
 /// `s` with each `%` and two hex digits the byte they stand for.

@@ -882,12 +882,9 @@ fn a_private_file_replaced_is_never_found_gone_nor_half_there() {
             assert!(read.iter().all(|&b| b == read[0]), "whole");
         }
     });
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
     let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
     assert_eq!(left.len(), 1, "{left:?}");
 }

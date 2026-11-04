@@ -612,7 +612,7 @@ fn carry_out(launch: &Launch, terminal: &mut DefaultTerminal) -> String {
         Launch::Ohp(path, presenting) => {
             give_back();
             if let Some(dir) = presenting.as_ref().and_then(|p| p.report.parent()) {
-                let _ = private_dir(dir);
+                let _ = crate::index::journal::create_private(dir);
             }
             let ran = std::process::Command::new("ohp")
                 .arg(path)

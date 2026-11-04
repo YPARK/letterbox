@@ -355,10 +355,7 @@ fn read<T: DeserializeOwned>(path: &Path, identity: &Identity) -> anyhow::Result
 pub fn create_private(dir: &Path) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
+    use std::os::unix::fs::DirBuilderExt;
+    builder.mode(0o700);
     builder.create(dir)
 }

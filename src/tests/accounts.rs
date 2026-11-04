@@ -655,12 +655,9 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
     let sealed = std::fs::read(&vault_at).unwrap();
     assert!(sealed.starts_with(b"age-encryption.org/v1\n"));
     assert!(!String::from_utf8_lossy(&sealed).contains("secret"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&vault_at).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&vault_at).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
 
     // Opened again, as letterbox does as it starts.
     crate::vault::lock();
@@ -715,15 +712,11 @@ fn the_vault_keeps_passwords_encrypted_with_a_passphrase() {
         std::fs::read_to_string(crate::vault::key_path()).unwrap(),
         key
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(crate::vault::key_path())
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
+    let mode = std::fs::metadata(crate::vault::key_path())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
     crate::vault::lock();
     unsafe { std::env::remove_var("LETTERBOX_VAULT") };
 }

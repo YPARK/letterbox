@@ -905,7 +905,6 @@ fn the_prefixes_the_app_reads_itself_are_no_key_of_the_table() {
 
 /// A program being started holds a copy of what the one starting it holds,
 /// until it begins, on whichever thread started it: this is that copy.
-#[cfg(unix)]
 #[test]
 fn an_index_let_go_is_free_though_a_program_being_started_has_its_lock_still() {
     let dir = tempfile::tempdir().unwrap();

@@ -554,28 +554,16 @@ fn a_forward_s_files_are_attach_lines_that_can_be_let_go() {
 }
 
 #[test]
-fn a_dropped_path_is_read_as_the_terminal_of_each_system_writes_it() {
-    // Elsewhere a backslash escapes what follows it, as a space.
+fn a_dropped_path_is_read_as_a_terminal_writes_it() {
+    // Double quotes too; within quotes a backslash is itself.
     assert_eq!(
-        crate::app::dropped_words("/tmp/a\\ draft.txt '/tmp/plain.txt'", false),
+        crate::app::dropped_words(r#""/tmp/a draft.txt" "/tmp/a\b.txt""#),
+        ["/tmp/a draft.txt", r"/tmp/a\b.txt"]
+    );
+    // Unquoted, a backslash escapes what follows it, as a space.
+    assert_eq!(
+        crate::app::dropped_words("/tmp/a\\ draft.txt '/tmp/plain.txt'"),
         ["/tmp/a draft.txt", "/tmp/plain.txt"]
-    );
-    // On Windows it is what folders are parted by: kept, and a path with a
-    // space is quoted.
-    assert_eq!(
-        crate::app::dropped_words(r#"C:\Users\a\plain.txt "C:\Users\a\a draft.txt""#, true),
-        [r"C:\Users\a\plain.txt", r"C:\Users\a\a draft.txt"]
-    );
-    // An address: its path, the drive's after the root's slash.
-    assert_eq!(
-        crate::app::file_address("/Users/a/a%20draft.txt", false),
-        "/Users/a/a draft.txt"
-    );
-    // On Windows, its folders parted as Windows parts them, so that it is
-    // the same path as the file dropped.
-    assert_eq!(
-        crate::app::file_address("/C:/Users/a/a%20draft.txt", true),
-        r"C:\Users\a\a draft.txt"
     );
 }
 
@@ -588,25 +576,15 @@ fn files_dropped_on_the_terminal_are_attached_and_other_text_written() {
     std::fs::write(&plain, b"plain").unwrap();
     let mut app = demo();
     press(&mut app, &["c"]);
-    // As terminals paste dropped files: escaped, quoted, or as addresses;
-    // on Windows, a path with a space quoted.
-    let spaced_said = if cfg!(windows) {
-        format!("\"{}\"", spaced.display())
-    } else {
-        spaced.display().to_string().replace(' ', "\\ ")
-    };
+    // As terminals paste dropped files: escaped, quoted, or as addresses.
+    let spaced_said = spaced.display().to_string().replace(' ', "\\ ");
     app.paste(&format!("{spaced_said} '{}'", plain.display()));
     let text = app.compose.as_ref().unwrap().buffer.text();
     assert!(text.contains("a draft.txt\n"), "{text}");
     assert!(text.contains("plain.txt\n"), "{text}");
     let address = format!(
-        "file://{}{}",
-        if cfg!(windows) { "/" } else { "" },
-        spaced
-            .display()
-            .to_string()
-            .replace(' ', "%20")
-            .replace('\\', "/")
+        "file://{}",
+        spaced.display().to_string().replace(' ', "%20")
     );
     app.paste(&address);
     assert_eq!(app.status, "attached already");

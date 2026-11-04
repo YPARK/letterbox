@@ -1,5 +1,6 @@
 //! A message's files and links: opened or presented; saved, in `saving`.
 use super::*;
+use crate::index::journal::create_private;
 
 /// The message's attachments and links, listed to open, the one picked,
 /// and what came of the last opened.
@@ -184,7 +185,7 @@ pub(super) fn page_html(m: &Message) -> String {
 pub(super) fn write_html(uid: u32, html: &str) -> anyhow::Result<PathBuf> {
     let dir = cache().join("html");
     let path = dir.join(format!("{uid}.html"));
-    private_dir(&dir)?;
+    create_private(&dir)?;
     vault::replace_private(&path, html.as_bytes())?;
     Ok(path)
 }
@@ -206,7 +207,7 @@ pub(super) fn keep_file(
     name: &str,
     bytes: &[u8],
 ) -> anyhow::Result<PathBuf> {
-    private_dir(dir)?;
+    create_private(dir)?;
     let path = dir.join(safe_name(name));
     vault::replace_private(&path, bytes)?;
     Ok(path)
@@ -243,18 +244,6 @@ pub(super) fn cache() -> PathBuf {
         .join("letterbox")
 }
 
-/// `dir`, made if it is not there, only you may look in, where it is made.
-pub(super) fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
 /// Write `bytes` to a file not yet at `path`: nothing there is written
 /// over, nor a link there followed.
 pub(super) fn write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -270,12 +259,7 @@ pub(super) fn write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result
 /// try, nothing hidden, and none of the marks that turn text around, as
 /// `invoice\u{202e}fdp.exe` shown as `invoiceexe.pdf`.
 pub(super) fn safe_name(name: &str) -> String {
-    let folders: &[char] = if cfg!(windows) {
-        &['/', '\\', ':']
-    } else {
-        &['/', '\\']
-    };
-    let base = name.rsplit(folders).next().unwrap_or_default();
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let base: String = base
         .chars()
         .filter(|c| {

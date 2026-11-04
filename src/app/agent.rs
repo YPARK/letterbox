@@ -104,7 +104,6 @@ impl App {
         let started = (|| -> anyhow::Result<std::process::Child> {
             let mut open = std::fs::OpenOptions::new();
             open.create(true).write(true).truncate(true);
-            #[cfg(unix)]
             std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
             let out = open.open(&set.log)?;
             let err = out.try_clone()?;
