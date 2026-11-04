@@ -601,8 +601,9 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
         app.looked_now();
     }
     app.remember_look();
+    let kept = app.keep_reports();
     let written = app.index.lock().unwrap_or_else(|e| e.into_inner()).flush();
-    result.and(written)
+    result.and(kept).and(written)
 }
 
 /// Do what `launch` asks, outside the screen; what to say of it.

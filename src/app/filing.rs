@@ -35,27 +35,35 @@ impl App {
             self.focus = Focus::Reader;
             return;
         }
-        if label.is_empty() || keys.is_empty() {
-            self.status = "not filed".to_string();
-            return;
-        }
-        let Some(s) = self.map.snapshot.clone() else {
-            return;
-        };
-        // Filed alone, it is kept: learnt as not thrown away. Filed with
-        // others, nothing is said of each.
-        if teach {
-            self.teach(&keys, false);
-        }
-        let at = jiff::Timestamp::now().as_second();
-        let mut filed = 0;
-        let mut pending = Vec::new();
-        let mut asks = Vec::new();
         // Filed from a folder's list, it is moved from that folder.
         let listed = match self.listing.as_ref().map(|l| &l.view) {
             Some(View::Folder(a, path)) => Some((*a, path.clone())),
             _ => None,
         };
+        self.file_under(keys, &label, teach, listed);
+    }
+
+    /// File the messages `keys` under `label`, moved from the folder `listed`
+    /// of its account; how many were.
+    pub(super) fn file_under(
+        &mut self,
+        keys: Vec<crate::index::Key>,
+        label: &str,
+        teach: bool,
+        listed: Option<(usize, String)>,
+    ) -> usize {
+        let label = label.trim().to_string();
+        if label.is_empty() || keys.is_empty() {
+            self.status = "not filed".to_string();
+            return 0;
+        }
+        let Some(s) = self.map.snapshot.clone() else {
+            return 0;
+        };
+        let at = jiff::Timestamp::now().as_second();
+        let mut pending = Vec::new();
+        let mut asks = Vec::new();
+        let mut taught = Vec::new();
         for key in &keys {
             let Some(i) = s.find(key) else { continue };
             let dot = &s.dots[i];
@@ -82,8 +90,9 @@ impl App {
                         .map(|(_, path)| path.clone()),
                 },
             ));
-            filed += 1;
+            taught.push(key.clone());
         }
+        let filed = taught.len();
         let kept = self
             .index
             .lock()
@@ -91,7 +100,12 @@ impl App {
             .keep(pending);
         if let Err(e) = kept {
             self.status = format!("cannot file it: {e:#}");
-            return;
+            return 0;
+        }
+        // Filed alone, it is kept: learnt as not thrown away. Filed with
+        // others, nothing is said of each.
+        if teach {
+            self.teach(&taught, false);
         }
         // Out of the Inbox, out of its list, and no longer read, before
         // the server has said so, as archived mail is.
@@ -123,6 +137,7 @@ impl App {
                 ""
             }
         );
+        filed
     }
 
     /// Select the rows of the list from `a` to `b`, both: what is marked
@@ -180,10 +195,12 @@ impl App {
     /// read it.
     pub(super) fn listed_key(&self, l: &Listed) -> Option<crate::index::Key> {
         let ident = &self.accounts.get(l.account)?.ident;
-        self.index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .key_at(ident, &l.folder, l.summary.uid)
+        self.index.lock().unwrap_or_else(|e| e.into_inner()).key_of(
+            ident,
+            &l.folder,
+            l.summary.uid,
+            &l.summary.message_id,
+        )
     }
 
     /// What a key does to what is marked in the list; whether it was its
@@ -242,12 +259,7 @@ impl App {
             .shown
             .iter()
             .filter_map(|l| {
-                let ident = &self.accounts.get(l.account)?.ident;
-                let key = self
-                    .index
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .key_at(ident, &l.folder, l.summary.uid)?;
+                let key = self.listed_key(l)?;
                 let j = s.find(&key)?;
                 (s.suggestion(j) == Some(label.as_str())).then_some(key)
             })
@@ -260,16 +272,7 @@ impl App {
     /// The message picked in the list, by its place in the map.
     pub(super) fn listed_on_map(&self) -> Option<usize> {
         let l = self.current()?;
-        let ident = &self.accounts.get(l.account)?.ident;
-        let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        // On Gmail the map reads All Mail, not the Inbox listed: there the
-        // message is found by its Message-ID.
-        let key = index.key_at(ident, &l.folder, l.summary.uid).or_else(|| {
-            index
-                .by_message_id(ident, &l.summary.message_id)
-                .map(|r| r.key.clone())
-        })?;
-        drop(index);
+        let key = self.listed_key(l)?;
         self.map.snapshot.as_ref()?.find(&key)
     }
 

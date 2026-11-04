@@ -1241,3 +1241,78 @@ fn a_body_that_is_not_ascii_is_quoted_when_the_server_cannot_take_it() {
     assert!(text.contains("=C3=A9"), "{text}");
     assert_eq!(crate::smtp::for_transfer(raw, true), raw);
 }
+
+#[test]
+fn an_answer_that_is_not_yes_moves_nothing() {
+    use serde_json::json;
+    for answer in [
+        json!({ "action": "accept" }),
+        json!({ "action": "accept", "content": {} }),
+        json!({ "action": "accept", "content": { "confirm": "false" } }),
+    ] {
+        let mut server = demo_server(true);
+        let before = inbox(&mut server);
+        let script = vec![
+            json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": { "name": "trash_messages", "arguments": { "uids": [before[0].0] } } })
+            .to_string(),
+            json!({ "jsonrpc": "2.0", "id": "letterbox-1", "result": answer }).to_string(),
+        ];
+        server
+            .serve(crate::mcp::Io {
+                lines: Box::new(script.into_iter().map(Ok)),
+                out: Box::new(Written::default()),
+            })
+            .unwrap();
+        assert_eq!(inbox(&mut server), before, "{answer}");
+    }
+}
+
+#[test]
+fn an_agent_letterbox_started_changes_no_flag() {
+    use serde_json::json;
+    let mut server = demo_server(true);
+    server.background = true;
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .unwrap();
+    assert!(
+        !listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "mark_message"),
+        "not offered"
+    );
+    let uid = inbox(&mut server)[0].0;
+    let r = call(
+        &mut server,
+        "mark_message",
+        json!({ "uid": uid, "seen": true }),
+    );
+    assert_eq!(r["isError"], true, "{r}");
+}
+
+#[test]
+fn a_flagged_or_answered_message_proposed_says_so_whatever_the_agent_says() {
+    use serde_json::json;
+    let mut server = demo_server(false);
+    let uid = inbox(&mut server)[0].0 as u32;
+    server
+        .first_store()
+        .set("INBOX", uid, Flag::Flagged, true)
+        .unwrap();
+    let r = call(
+        &mut server,
+        "report_triage",
+        json!({ "summary": "s", "proposals": [
+            { "uid": uid, "action": "trash", "why": "a newsletter" }
+        ] }),
+    );
+    assert_ne!(r["isError"], true, "{r}");
+    let why = &server.reports[0].proposals[0].why;
+    assert!(
+        why.contains("flagged") && why.contains("a newsletter"),
+        "{why}"
+    );
+}

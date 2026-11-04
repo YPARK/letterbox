@@ -15,6 +15,8 @@ pub struct AgentRun {
     pub child: std::process::Child,
     /// Whether a report came while it ran.
     pub reported: bool,
+    /// When it started: said to have run from then, once it has.
+    pub started: i64,
 }
 
 /// Your agent, as set: the command, where what it says is written, and
@@ -34,6 +36,12 @@ pub struct AgentSet {
 }
 
 impl AgentSet {
+    /// Say it last ran at `when`.
+    fn ran_at(&mut self, when: i64) {
+        self.last_ran = when;
+        let _ = std::fs::write(&self.ran, when.to_string());
+    }
+
     /// Your agent, as `command` starts it, its files beside `config`; to
     /// start on its own as letterbox opens, if new mail has come.
     pub fn beside(command: String, config: &std::path::Path) -> Self {
@@ -109,11 +117,10 @@ impl App {
         })();
         match started {
             Ok(child) => {
-                set.last_ran = jiff::Timestamp::now().as_second();
-                let _ = std::fs::write(&set.ran, set.last_ran.to_string());
                 self.agent = Some(AgentRun {
                     child,
                     reported: false,
+                    started: jiff::Timestamp::now().as_second(),
                 });
                 self.status = "your agent is looking through new mail".to_string();
             }
@@ -179,6 +186,13 @@ impl App {
         if let Some(run) = &mut self.agent {
             run.reported |= self.reports.len() > held;
             if let Ok(Some(done)) = run.child.try_wait() {
+                // One that failed, or that you quit before it ended, has
+                // not looked through the mail: the next one does.
+                if (done.success() || run.reported)
+                    && let Some(set) = &mut self.agent_set
+                {
+                    set.ran_at(run.started);
+                }
                 if !run.reported {
                     let log = self
                         .agent_set
@@ -197,13 +211,31 @@ impl App {
         self.show_reports() || any
     }
 
+    /// Put back, to be shown as letterbox next opens, what was reported and
+    /// not dealt with as you quit.
+    pub fn keep_reports(&mut self) -> anyhow::Result<()> {
+        let mut left = std::mem::take(&mut self.reports);
+        if let Dialog::Report(view) = std::mem::replace(&mut self.dialog, Dialog::Closed) {
+            left.insert(0, view.report);
+        }
+        self.index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put_back_written(crate::report::JOURNAL, left)
+    }
+
+    /// Whether a report may come up: not over what is being asked or typed.
+    fn can_show_report(&self) -> bool {
+        matches!(self.dialog, Dialog::Closed)
+            && self.compose.is_none()
+            && !self.searching
+            && self.menu.is_none()
+    }
+
     /// Show the first report held, once nothing else is asked over the
     /// screen; whether one was.
     pub fn show_reports(&mut self) -> bool {
-        if self.reports.is_empty()
-            || !matches!(self.dialog, Dialog::Closed)
-            || self.compose.is_some()
-        {
+        if self.reports.is_empty() || !self.can_show_report() {
             return false;
         }
         let report = self.reports.remove(0);
@@ -217,8 +249,8 @@ impl App {
 
     /// A key in a report: ↑ ↓ go along it; space chooses the proposal
     /// picked, or lets it go; a chooses them all; ⏎ does those chosen; c
-    /// copies the question picked, as ⏎ does with none chosen; any other
-    /// key leaves it, nothing done.
+    /// copies the question picked, as ⏎ does with none chosen; esc or C-g
+    /// leaves it, nothing done; any other key, taken by mistake, nothing.
     pub(super) fn report_key(&mut self, key: KeyEvent) {
         let Dialog::Report(view) = &mut self.dialog else {
             return;
@@ -268,10 +300,11 @@ impl App {
                 self.dialog = Dialog::Closed;
                 self.do_proposed(chosen);
             }
-            _ => {
+            (_, KeyCode::Esc) => {
                 self.dialog = Dialog::Closed;
                 self.status = "left as they are: nothing done".to_string();
             }
+            _ => {}
         }
     }
 
@@ -286,7 +319,7 @@ impl App {
             match self.live().find(|&a| self.accounts[a].ident == p.account) {
                 None => not.push(format!("{}: its account is not open", p.subject)),
                 Some(a) if p.action == Action::Trash => trashed.push((a, p)),
-                Some(_) => filed.push(p),
+                Some(a) => filed.push((a, p)),
             }
         }
         for (a, p) in trashed {
@@ -304,21 +337,30 @@ impl App {
             self.move_to_trash(a, p.folder, p.uid, p.message_id, trash);
             done += 1;
         }
-        // Each label's together, the index asked of once.
-        let mut filing: std::collections::BTreeMap<String, Vec<crate::index::Key>> =
-            Default::default();
+        // Each label's together, from each folder, the index asked of once.
+        let mut filing: std::collections::BTreeMap<
+            (usize, String, String),
+            Vec<crate::index::Key>,
+        > = Default::default();
         {
             let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-            for p in filed {
-                match index.key_at(&p.account, &p.folder, p.uid) {
-                    Some(key) => filing.entry(p.to).or_default().push(key),
+            for (a, p) in filed {
+                match index.key_of(&p.account, &p.folder, p.uid, &p.message_id) {
+                    Some(key) => filing.entry((a, p.folder, p.to)).or_default().push(key),
                     None => not.push(format!("{}: not on the map yet", p.subject)),
                 }
             }
         }
-        for (label, keys) in filing {
-            done += keys.len();
-            self.file_now(keys, &label, true);
+        for ((a, folder, label), keys) in filing {
+            let asked = keys.len();
+            let filed = self.file_under(keys, &label, true, Some((a, folder)));
+            done += filed;
+            if filed < asked {
+                not.push(format!(
+                    "{} for {label}: not on the map yet, or not filed",
+                    asked - filed
+                ));
+            }
         }
         self.status = match not.first() {
             None => format!("{done} done, as you chose, and learnt so"),

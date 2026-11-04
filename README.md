@@ -721,8 +721,8 @@ calls `report_triage`,
 and letterbox pops up what it found, a moment before a key acts on it, so
 a key pressed as it came is not taken. There, space chooses what it would
 trash or file, `a` all of them, `⏎` does those chosen, learnt as your own;
-`c` copies a question it suggests asking next, to paste to your agent; any
-other key leaves it all as it is. A report written while letterbox is shut
+`c` copies a question it suggests asking next, to paste to your agent; `esc`
+leaves it all as it is. A report written while letterbox is shut
 is shown as it next opens.
 
 ## In Emacs

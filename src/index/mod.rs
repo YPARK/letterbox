@@ -470,6 +470,20 @@ impl Index {
         }
     }
 
+    /// Write `items` again, as `take_written` took them, for the next to take.
+    pub fn put_back_written<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        name: &'static str,
+        items: Vec<T>,
+    ) -> anyhow::Result<()> {
+        match &self.advised {
+            Some((dir, identity)) if self.taught.is_some() && !items.is_empty() => {
+                journal::append(dir, name, &identity.to_public(), items)
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Learn what you confirmed through an agent, as it wrote it down, and
     /// write it down as letterbox's own at once: the agent's is gone once
     /// read. Nothing is taken in while what was learnt could not be read.
@@ -1036,6 +1050,33 @@ impl Index {
             .find(|r| {
                 r.key.account == account
                     && r.places.iter().any(|p| p.folder == folder && p.uid == uid)
+            })
+            .map(|r| r.key.clone())
+    }
+
+    /// The message of `account` at `uid` in `folder`; or, as on Gmail the
+    /// map reads All Mail and not the Inbox listed, as `key_in_all` finds it.
+    pub fn key_of(&self, account: &str, folder: &str, uid: u32, id: &str) -> Option<Key> {
+        self.key_at(account, folder, uid)
+            .or_else(|| self.key_in_all(account, id))
+    }
+
+    /// The message of `account` with `Message-ID` `id`, in a folder holding
+    /// all its mail. Only there: elsewhere a message found so has been moved,
+    /// and what was asked of it where it was is not asked of it now.
+    pub fn key_in_all(&self, account: &str, id: &str) -> Option<Key> {
+        if id.is_empty() {
+            return None;
+        }
+        let holds_all = |p: &Place| {
+            self.folders
+                .get(&(account.to_string(), p.folder.clone()))
+                .is_some_and(|f| f.all)
+        };
+        self.records
+            .values()
+            .find(|r| {
+                r.key.account == account && r.message_id == id && r.places.iter().any(holds_all)
             })
             .map(|r| r.key.clone())
     }

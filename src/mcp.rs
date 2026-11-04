@@ -109,6 +109,13 @@ impl Mapped {
             .get(&(ident.to_string(), folder.to_string(), uid))
     }
 
+    /// The message `s` of `folder` of the account known as `ident`.
+    fn key_of(&self, ident: &str, folder: &str, s: &Summary) -> Option<crate::index::Key> {
+        self.key(ident, folder, s.uid)
+            .cloned()
+            .or_else(|| self.index.key_in_all(ident, &s.message_id))
+    }
+
     /// How likely the message `key` is to be thrown away, as letterbox has
     /// learnt; whether it is sure enough to say so; and why.
     fn junk(&self, key: &crate::index::Key) -> Option<(f32, bool, Vec<String>)> {
@@ -208,9 +215,10 @@ impl Server {
     fn confirm(&mut self, message: &str, yes: &str) -> anyhow::Result<Said> {
         let schema = json!({ "confirm": { "type": "boolean", "title": yes, "default": true } });
         let result = self.elicit(message, schema, "confirm")?;
-        Ok(match result["action"].as_str() {
-            Some("accept") if result["content"]["confirm"].as_bool() != Some(false) => Said::Yes,
-            Some("accept" | "decline") => Said::No,
+        let confirm = result["content"]["confirm"].as_bool();
+        Ok(match (result["action"].as_str(), confirm) {
+            (Some("accept"), Some(true)) => Said::Yes,
+            (Some("accept"), Some(false)) | (Some("decline"), _) => Said::No,
             _ => Said::Unanswered,
         })
     }
@@ -341,6 +349,12 @@ impl Server {
         self.store(None).expect("an account").as_mut()
     }
 
+    /// The first account's mail kept by `store`, as a test would have it.
+    #[cfg(test)]
+    pub fn use_store(&mut self, store: Box<dyn Store>) {
+        self.accounts[0].store = Some(store);
+    }
+
     /// The store of the account named, or of the first; opened if it is
     /// not yet.
     fn store(&mut self, name: Option<&str>) -> anyhow::Result<&mut Box<dyn Store>> {
@@ -459,10 +473,29 @@ impl Server {
     /// the map.
     fn on_map(&mut self, account: Option<&str>, folder: &str, uid: u32) -> anyhow::Result<usize> {
         let ident = self.store(account)?.ident();
+        if self.mapped()?.key(&ident, folder, uid).is_none() {
+            let s = self.moving(account, folder, &[uid])?;
+            return self.summary_on_map(account, folder, &s[0]);
+        }
+        let s = Summary {
+            uid,
+            ..Default::default()
+        };
+        self.summary_on_map(account, folder, &s)
+    }
+
+    /// As `on_map`, the message listed already.
+    fn summary_on_map(
+        &mut self,
+        account: Option<&str>,
+        folder: &str,
+        s: &Summary,
+    ) -> anyhow::Result<usize> {
+        let ident = self.store(account)?.ident();
         let m = self.mapped()?;
-        m.key(&ident, folder, uid)
-            .and_then(|k| m.snapshot.find(k))
-            .with_context(|| format!("message {uid} of {folder} is not on the map yet"))
+        m.key_of(&ident, folder, s)
+            .and_then(|k| m.snapshot.find(&k))
+            .with_context(|| format!("message {} of {folder} is not on the map yet", s.uid))
     }
 
     /// The account named for the store known as `ident`.
@@ -572,13 +605,15 @@ impl Server {
     /// away, and where it would be filed; or why it cannot say.
     fn assessed(&mut self, account: &str, s: &Summary) -> Value {
         let mut v = summary(s);
-        let weighed = self.on_map(Some(account), "INBOX", s.uid).and_then(|i| {
-            let m = self.mapped()?;
-            let junk = m
-                .junk(&m.snapshot.dots[i].key)
-                .context("not in the index")?;
-            Ok((junk, m.snapshot.suggestion(i).map(str::to_string)))
-        });
+        let weighed = self
+            .summary_on_map(Some(account), "INBOX", s)
+            .and_then(|i| {
+                let m = self.mapped()?;
+                let junk = m
+                    .junk(&m.snapshot.dots[i].key)
+                    .context("not in the index")?;
+                Ok((junk, m.snapshot.suggestion(i).map(str::to_string)))
+            });
         match weighed {
             Ok(((odds, sure, why), go)) => {
                 v["junk_odds"] = json!(odds);
@@ -722,10 +757,13 @@ impl Server {
             .into_iter()
             .map(|(account, p)| {
                 let s = &read[&(account, p.folder.clone(), p.uid)];
+                // Said as it is, whatever the agent says of it.
+                let why = format!("{}{}", p.why, marks(s)).trim().to_string();
                 Proposal {
                     message_id: s.message_id.clone(),
                     from: mail::clean(&s.from),
                     subject: mail::clean(&s.subject),
+                    why,
                     ..p
                 }
             })
@@ -771,10 +809,16 @@ impl Server {
     }
 
     /// Write down that the user said yes to throwing away, or keeping, the
-    /// messages `uids` of `folder`, as the map read them, for letterbox to
+    /// `messages` of `folder`, as the map read them, for letterbox to
     /// learn; how many were, or why none could be.
-    fn advise(&mut self, account: Option<&str>, folder: &str, uids: &[u32], thrown: bool) -> Value {
-        match self.written_down(account, folder, uids, thrown, false) {
+    fn advise(
+        &mut self,
+        account: Option<&str>,
+        folder: &str,
+        messages: &[&Summary],
+        thrown: bool,
+    ) -> Value {
+        match self.written_down(account, folder, messages, thrown, false) {
             Ok(n) => json!(n),
             Err(e) => json!(format!("none: {}", said(&e))),
         }
@@ -786,17 +830,17 @@ impl Server {
         &mut self,
         account: Option<&str>,
         folder: &str,
-        uids: &[u32],
+        messages: &[&Summary],
         thrown: bool,
         asked: bool,
     ) -> anyhow::Result<usize> {
         let ident = self.store(account)?.ident();
         let m = self.mapped()?;
         let at = jiff::Timestamp::now().as_second();
-        let taught: Vec<crate::filter::Taught> = uids
+        let taught: Vec<crate::filter::Taught> = messages
             .iter()
-            .filter_map(|uid| m.key(&ident, folder, *uid))
-            .filter_map(|key| m.index.lesson(key, thrown, &m.known))
+            .filter_map(|s| m.key_of(&ident, folder, s))
+            .filter_map(|key| m.index.lesson(&key, thrown, &m.known))
             .map(|t| crate::filter::Taught {
                 agent: true,
                 asked,
@@ -883,8 +927,8 @@ impl Server {
                 break;
             }
             match result["content"]["answer"].as_str() {
-                Some("junk") => junk.push(s.uid),
-                Some("keep") => keep.push(s.uid),
+                Some("junk") => junk.push(s),
+                Some("keep") => keep.push(s),
                 _ => passed += 1,
             }
         }
@@ -1083,7 +1127,9 @@ impl Server {
                     .then(|| crate::trash::Ledger::load().record_many(trashed).err())
                     .flatten()
                     .map(|e| said(&e));
-                let learnt = self.advise(account.as_deref(), &folder, &moved, thrown);
+                let gone: Vec<&Summary> =
+                    moving.iter().filter(|s| moved.contains(&s.uid)).collect();
+                let learnt = self.advise(account.as_deref(), &folder, &gone, thrown);
                 Ok(json!({
                     "moved": moved.len(),
                     "not_recorded_to_put_back": unrecorded,
@@ -1275,6 +1321,9 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
         ),
         "trash_messages" | "file_messages" if !asks => Some(CANNOT_ASK),
         "open_letterbox" if background => Some("letterbox started this agent: it is open"),
+        "mark_message" if background => {
+            Some("letterbox started this agent: mark mail only as the user asks")
+        }
         _ => None,
     }
 }
@@ -1336,21 +1385,27 @@ fn uids(args: &Value) -> anyhow::Result<Vec<u32>> {
 
 /// What the user is asked: `what`, and each message, by who sent it and
 /// what about, flagged or answered said.
+/// What is marked on `s` that a move would go against, after a space, in
+/// brackets; nothing if nothing is.
+fn marks(s: &Summary) -> String {
+    let mut marks = Vec::new();
+    if s.flags.flagged {
+        marks.push("flagged");
+    }
+    if s.flags.answered {
+        marks.push("answered");
+    }
+    if marks.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", marks.join(", "))
+    }
+}
+
 fn listing(what: &str, moving: &[Summary]) -> String {
     let mut text = what.to_string();
     for s in moving {
-        let mut marks = Vec::new();
-        if s.flags.flagged {
-            marks.push("flagged");
-        }
-        if s.flags.answered {
-            marks.push("answered");
-        }
-        let marks = if marks.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", marks.join(", "))
-        };
+        let marks = marks(s);
         text.push_str(&format!(
             "\n· {}: {}{marks}",
             mail::clean(&s.from),
