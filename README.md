@@ -254,8 +254,7 @@ The same guide is under the message as you write, `F1` lists every key,
 and the foot says what each key did and what to press next. The file
 picker says how to narrow and mark under what is typed.
 
-`C-c C-a` attaches files, picked a folder at a time as
-[senna](https://github.com/causalpathlab/senna-rs) picks them: it begins where you
+`C-c C-a` attaches files, picked a folder at a time: it begins where you
 last attached from, else in Downloads, on the newest file, starred.
 Typing narrows to the names that hold what is typed, and from a `/` it is
 a path, followed as you type; `⏎` or `→` goes into a folder, `←` or

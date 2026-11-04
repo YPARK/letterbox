@@ -20,7 +20,6 @@ fn apply(app: &mut App) {
         app.status
     );
     press(app, &["y"]);
-    app.settle(Duration::from_secs(5));
     if matches!(app.dialog, app::Dialog::Applied(_)) {
         press(app, &["x"]);
     }

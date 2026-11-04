@@ -49,7 +49,6 @@ fn below_the_message_read_is_under_the_list_and_follows_it() {
     assert!(sidebar(&screen), "{screen}");
     // The next one picked is read, as beside.
     press(&mut app, &["<s-tab>", "j"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(
         app.message().unwrap().subject,
         "[letterbox] Issue #41: a map of the inbox"
@@ -155,7 +154,7 @@ fn hidden_n_reads_the_next_and_shows_it() {
     for key in ["\\", "j"] {
         app.key(app::keys(key)[0]);
     }
-    app.settle(Duration::from_secs(2));
+    app.settle(PATIENCE);
     assert!(app.reading.is_none());
 }
 

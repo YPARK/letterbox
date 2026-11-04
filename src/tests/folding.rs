@@ -160,7 +160,7 @@ fn nested() -> App {
         PathBuf::from("/nowhere/accounts.toml"),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app
 }
 
@@ -218,10 +218,9 @@ fn folding_another_account_leaves_the_one_picked_and_one_folded_away_opens_its_i
     assert_eq!(app.folder_name(), "Sent");
     app.focus = Focus::Side;
     press(&mut app, &["<space>"]);
-    app.settle(Duration::from_secs(2));
     std::thread::sleep(Duration::from_millis(600));
     app.tick();
-    app.settle(Duration::from_secs(2));
+    app.settle(PATIENCE);
     assert_eq!(app.folder_name(), "Inbox", "{}", app.status);
 }
 

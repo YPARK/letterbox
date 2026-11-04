@@ -260,7 +260,7 @@ pub(super) fn demo() -> App {
     );
     // A ledger of this test's own, not the one letterbox keeps for itself.
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app
 }
 
@@ -273,11 +273,34 @@ pub(super) fn scratch_ledger() -> crate::trash::Ledger {
     crate::trash::Ledger::open(path)
 }
 
+/// Each of `keys` pressed on the screen as drawn, and its answers waited for:
+/// failing there, by the key, if they do not come.
+#[track_caller]
 pub(super) fn press(app: &mut App, keys: &[&str]) {
+    press_within(app, keys, PATIENCE);
+}
+
+/// As `press`, waiting for each key's answers for no longer than `limit`.
+#[track_caller]
+pub(super) fn press_within(app: &mut App, keys: &[&str], limit: Duration) {
     for key in keys.iter().flat_map(|k| app::keys(k)) {
         let _ = app::screen(app, 140, 40);
         app.key(key);
-        app.settle(Duration::from_secs(5));
+        app.settle(limit);
+        assert_eq!(
+            app.pending(),
+            0,
+            "{key:?} not answered within {limit:?}: {}",
+            app.status
+        );
+    }
+}
+
+/// Each of `keys` as `press` presses it, its answers not waited for.
+pub(super) fn press_unsettled(app: &mut App, keys: &[&str]) {
+    for key in keys.iter().flat_map(|k| app::keys(k)) {
+        let _ = app::screen(app, 140, 40);
+        app.key(key);
     }
 }
 
@@ -727,7 +750,7 @@ fn the_screen_fits_any_size_and_wraps_what_is_read() {
                 for key in keys.iter().flat_map(|k| app::keys(k)) {
                     let _ = app::screen(&mut app, width, height);
                     app.key(key);
-                    app.settle(Duration::from_secs(5));
+                    app.settle(PATIENCE);
                 }
                 let screen = app::screen(&mut app, width, height);
                 assert_eq!(screen.lines().count(), height as usize);

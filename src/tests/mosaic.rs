@@ -252,20 +252,23 @@ fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
     // The wheel: up over a block goes into it; down, out again, and no
     // farther than all of it.
     let _ = app::screen(&mut app, 150, 45);
-    // The biggest other cluster, as it has parts to go into; a small one's
-    // threads the wheel goes along.
+    // A block by whether its cluster has parts to go into, or threads that
+    // the wheel goes along, and where it is its own: a later target may lie
+    // over a corner.
     let s = app.map.snapshot.clone().unwrap();
-    let (r, other) = app
-        .targets
-        .iter()
-        .filter_map(|&(r, t)| match t {
-            app::Target::Anchor(g) if g != id => Some((r, g)),
+    let all = app.map.shown(now);
+    let block = |app: &App, parts: bool| {
+        app.targets.iter().find_map(|&(r, t)| match t {
+            app::Target::Anchor(g) if app.target_at(r.x, r.y) == Some(t) => {
+                let (tree, _) = crate::forest::grow(&s, g, &all, None)?;
+                (tree.parts == parts).then_some((r, g))
+            }
             _ => None,
         })
-        .max_by_key(|&(_, g)| s.group(g).map_or(0, |g| g.members.len()))
-        .unwrap();
+    };
+    let (r, parted) = block(&app, true).expect("a cluster with parts, as Grant has");
     app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
-    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(other));
+    assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(parted));
     // Down over the map as it is drawn now, wherever the block was.
     let on_map = |app: &mut App| {
         let _ = app::screen(app, 150, 45);
@@ -282,6 +285,16 @@ fn the_map_is_a_mosaic_alone_its_levels_gone_into_and_out_of_by_zooming() {
     assert!(app.map.tree.is_none());
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("its clusters"), "{screen}");
+    // Into one with only threads, if the mail fell into one this time, and
+    // down goes along them, not out.
+    if let Some((r, threaded)) = block(&app, false) {
+        app.mouse(mouse(MouseEventKind::ScrollUp, r.x, r.y));
+        assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(threaded));
+        let _ = app::screen(&mut app, 150, 45);
+        let r = on_map(&mut app);
+        app.mouse(mouse(MouseEventKind::ScrollDown, r.x, r.y));
+        assert_eq!(app.map.tree.as_ref().map(|t| t.id), Some(threaded));
+    }
 }
 
 #[test]

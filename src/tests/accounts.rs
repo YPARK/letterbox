@@ -481,7 +481,7 @@ pub(super) fn click_at(app: &mut App, target: app::Target) {
         rect.x,
         rect.y,
     ));
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
 }
 
 pub(super) fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {

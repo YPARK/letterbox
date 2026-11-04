@@ -72,7 +72,6 @@ fn in_the_list_a_message_is_filed_as_in_the_map() {
     };
     press(&mut app, &["<enter>"]);
     assert!(app.menu.is_none());
-    app.settle(Duration::from_secs(5));
     let (labels, inbox) = dot_labels(&app, &subject);
     assert!(labels.contains(&first) && !inbox, "{labels:?}");
     assert!(
@@ -95,7 +94,6 @@ fn in_the_list_a_message_is_filed_as_in_the_map() {
         app.key(KeyEvent::new(KeyCode::Char(c), shift));
     }
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     let (labels, inbox) = dot_labels(&app, &next);
     assert!(
         labels.contains(&"Engines".to_string()) && !inbox,
@@ -117,7 +115,6 @@ fn in_the_list_a_message_is_filed_as_in_the_map() {
     let label = s.suggestion(i).unwrap().to_string();
     app.list.select(Some(going));
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     let (labels, inbox) = dot_labels(&app, &subject);
     assert!(labels.contains(&label) && !inbox, "{labels:?}");
 }
@@ -313,7 +310,6 @@ pub(super) fn reading_the_alert() -> App {
         })
         .unwrap();
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     let at = app
         .shown
         .iter()
@@ -322,7 +318,6 @@ pub(super) fn reading_the_alert() -> App {
     app.list.select(Some(at));
     app.focus = app::Focus::List;
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.message().is_some(), "{}", app.status);
     app
 }
@@ -347,7 +342,6 @@ fn p_lists_the_papers_of_the_message_read_and_adds_one_to_paperstack_starred() {
     }));
     *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
     press(&mut app, &["P"]);
-    app.settle(Duration::from_secs(5));
     let app::Dialog::Papers(p) = &app.dialog else {
         panic!("no papers: {}", app.status);
     };
@@ -374,7 +368,6 @@ fn p_lists_the_papers_of_the_message_read_and_adds_one_to_paperstack_starred() {
     // ⏎ on the new one: added, and starred, for you liked it; the list
     // put away, and what was done said below.
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     {
         let shelf = shelf.lock().unwrap();
         assert_eq!(shelf.added, ["arXiv:2410.01234"]);
@@ -390,7 +383,6 @@ fn without_paperstack_p_says_how_to_have_it() {
     // SAFETY: this test alone reads it.
     unsafe { std::env::set_var("LETTERBOX_PAPERSTACK", "no-such-paperstack-program") };
     press(&mut app, &["P"]);
-    app.settle(Duration::from_secs(5));
     unsafe { std::env::remove_var("LETTERBOX_PAPERSTACK") };
     let app::Dialog::Papers(p) = &app.dialog else {
         panic!("no papers: {}", app.status);
@@ -492,7 +484,6 @@ fn in_the_list_what_is_selected_with_the_mouse_is_acted_on_together() {
     assert!(screen.contains('▪'), "marked rows marked: {screen}");
     // u marks them read, together.
     press(&mut app, &["u"]);
-    app.settle(Duration::from_secs(5));
     for subject in [&first, &second] {
         let l = app
             .shown
@@ -515,7 +506,6 @@ fn in_the_list_what_is_selected_with_the_mouse_is_acted_on_together() {
         app.status
     );
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     for subject in [&first, &second] {
         let (labels, inbox) = dot_labels(&app, subject);
         assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");
@@ -531,7 +521,6 @@ fn in_the_list_what_is_selected_with_the_mouse_is_acted_on_together() {
     press(&mut app, &["d"]);
     assert!(matches!(app.dialog, app::Dialog::Bulk(_)));
     press(&mut app, &["i", "y"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(app.shown.len(), count - 2);
 }
 
@@ -551,7 +540,6 @@ fn in_the_list_what_the_mouse_selects_is_acted_on_together_and_no_key_selects() 
     // three, Inbox mail as they are.
     let count = app.shown.len();
     press(&mut app, &["d", "i", "y"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(app.shown.len(), count - 3);
 }
 
@@ -610,11 +598,10 @@ fn in_the_list_a_message_filed_is_out_of_it_at_once_and_the_next_picked() {
     let uid = app.shown[at].summary.uid;
     let next = app.shown[at + 1].summary.subject.clone();
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.reading.is_some());
     // Filed while read: out of the list, and the next picked, before the
     // server has said so.
-    press(&mut app, &["m", "<enter>"]);
+    press_unsettled(&mut app, &["m", "<enter>"]);
     assert!(
         !app.shown.iter().any(|l| l.summary.subject == subject),
         "still listed"
@@ -625,7 +612,7 @@ fn in_the_list_a_message_filed_is_out_of_it_at_once_and_the_next_picked() {
         "still read"
     );
     // And once it has, still out of it.
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     assert!(!app.shown.iter().any(|l| l.summary.subject == subject));
 }
 
@@ -665,7 +652,6 @@ fn in_the_list_y_capital_files_all_like_the_one_picked_once_asked() {
     assert_eq!(bulk.keys.len(), like.len());
     assert!(bulk.said.title.contains(&label), "{}", bulk.said.title);
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     for subject in &like {
         let (labels, inbox) = dot_labels(&app, subject);
         assert!(labels.contains(&label) && !inbox, "{subject}: {labels:?}");

@@ -567,6 +567,16 @@ impl App {
         }
     }
 
+    /// What a click or a turn of the wheel at this place lands on: of what
+    /// is there, the last drawn.
+    pub(crate) fn target_at(&self, x: u16, y: u16) -> Option<Target> {
+        self.targets
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(Position::new(x, y)))
+            .map(|&(_, t)| t)
+    }
+
     /// Take a click or a turn of the wheel at where it lands.
     pub fn mouse(&mut self, m: MouseEvent) {
         if matches!(m.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_)) {
@@ -577,12 +587,7 @@ impl App {
         if !matches!(m.kind, MouseEventKind::Up(_) | MouseEventKind::Moved) {
             self.pick_back = None;
         }
-        let at = self
-            .targets
-            .iter()
-            .rev()
-            .find(|(r, _)| r.contains(Position::new(m.column, m.row)))
-            .map(|&(_, t)| t);
+        let at = self.target_at(m.column, m.row);
         // Writing, its keys are clicked, and nothing behind it; the files
         // being picked, or the help, as they are elsewhere.
         if self.compose.is_some() && !matches!(self.dialog, Dialog::Attach(_) | Dialog::Help(_)) {

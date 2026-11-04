@@ -1,6 +1,6 @@
-//! Files picked to be sent with a message, one folder at a time, as senna
-//! browses them: `..`, the folder's folders, then its files with their
-//! sizes, the newest starred and begun on. Typing narrows to the names
+//! Files picked to be sent with a message, one folder at a time: `..`, the
+//! folder's folders, then its files with their sizes, the newest starred
+//! and begun on. Typing narrows to the names
 //! that hold what is typed; typed from a `/`, it is a path, followed as
 //! soon as its folder is there, and into a folder its name alone begins.
 //! Space marks a file, `C-a` all those shown, and enter takes the marked,

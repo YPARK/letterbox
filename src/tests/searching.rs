@@ -194,7 +194,6 @@ fn what_was_found_in_a_cluster_stays_of_it_when_the_map_is_drawn_again() {
     // Grant's label removed: the map drawn again, its clusters numbered anew.
     app.ask_remove_label("Grant");
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     assert!(
         app.map
             .snapshot

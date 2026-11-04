@@ -150,7 +150,7 @@ pub(super) fn demo_taught() -> App {
             index.teach(&rest[k % 25].0, false).unwrap();
         }
     }
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app
 }
 
@@ -173,7 +173,7 @@ fn new_mail_it_is_sure_of_is_asked_about_never_thrown_away_unasked() {
         debriefed: 0,
     };
     app.throw_away_on_its_own();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     // Said, never a pop-up of its own: a key pressed as it comes must not
     // act on it. Nothing moved.
     assert!(!app.dialog.is_open(), "no pop-up unasked");
@@ -255,7 +255,6 @@ fn d_in_the_junk_pop_up_throws_those_listed_away_never_learnt() {
     app.throw_away_on_its_own();
     choose_all_junk(&mut app);
     press(&mut app, &["d"]);
-    app.settle(Duration::from_secs(5));
     let gone = auto(&app);
     assert!(!gone.is_empty());
     assert!(
@@ -296,7 +295,6 @@ fn letterbox_opens_with_a_debrief_and_j_opens_it_again() {
     app.throw_away_on_its_own();
     choose_all_junk(&mut app);
     press(&mut app, &["d"]);
-    app.settle(Duration::from_secs(5));
     app.debrief_on_start();
     let app::Dialog::Debrief(d) = &app.dialog else {
         panic!("no debrief: {}", app.status);
@@ -315,7 +313,6 @@ fn letterbox_opens_with_a_debrief_and_j_opens_it_again() {
     // ⏎ puts the one picked back: learnt as kept.
     let kept = app.index.lock().unwrap().filter.kept;
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(app.index.lock().unwrap().filter.kept, kept + 1);
     assert!(dot_labels(&app, &first).1, "{first} back in the Inbox");
     let screen = app::screen(&mut app, 120, 40);
@@ -334,7 +331,6 @@ fn letterbox_opens_with_a_debrief_and_j_opens_it_again() {
     assert_eq!(d.thrown.len(), n);
     assert_eq!(d.thrown.iter().filter(|t| t.back).count(), 1);
     press(&mut app, &["u"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(app.index.lock().unwrap().filter.kept, kept + n as u32);
 }
 
@@ -473,7 +469,6 @@ fn d_in_the_junk_list_with_nothing_chosen_throws_nothing() {
     );
     // One chosen: that one alone.
     press(&mut app, &[" ", "d"]);
-    app.settle(Duration::from_secs(5));
     let n = app
         .index
         .lock()

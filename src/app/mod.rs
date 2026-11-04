@@ -949,6 +949,12 @@ impl App {
         }
     }
 
+    /// How many answers are waited for still.
+    #[cfg(test)]
+    pub fn pending(&self) -> usize {
+        self.pending
+    }
+
     /// Do what has waited long enough; whether anything was done.
     pub fn tick(&mut self) -> bool {
         let mut any = self.tick_held();

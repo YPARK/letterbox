@@ -47,7 +47,7 @@ fn the_map_and_the_list_are_clicked_at_the_top() {
         KeyCode::Char('G'),
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     ));
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     assert_eq!(app.map.mode, crate::map::Mode::List);
 }
 
@@ -239,7 +239,7 @@ fn the_map_says_why_it_is_not_there() {
         Err("the map's key would be kept in the vault, which is locked".to_string()),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     press(&mut app, &["M"]);
     assert!(
         app.status.contains("vault, which is locked"),
@@ -258,7 +258,7 @@ fn the_map_is_begun_only_once_it_is_asked_for_and_agreed_to() {
     );
     app.open_map = || Ok(Index::memory());
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     // Nothing is read for it until then.
     assert!(app.index.lock().unwrap().records.is_empty());
     press(&mut app, &["M"]);
@@ -342,7 +342,7 @@ fn m_r_is_kept_though_mail_comes_while_it_is_laid_out() {
         .unwrap()
         .cache(vec![Cached::Upsert(Box::new(r))])
         .unwrap();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     let _ = app::screen(&mut app, 150, 45);
     let newer = app.map.snapshot.clone().unwrap();
     assert_eq!(newer.dots.len(), s.dots.len() + 1);

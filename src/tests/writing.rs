@@ -28,7 +28,7 @@ pub(super) fn two_accounts() -> App {
         PathBuf::from("/nowhere/accounts.toml"),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app
 }
 

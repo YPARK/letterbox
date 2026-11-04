@@ -98,7 +98,6 @@ fn m_dollar_checks_what_is_written_and_each_change_is_taken_or_not() {
         })))
     };
     press(&mut app, &["<m-$>"]);
-    app.settle(Duration::from_secs(5));
     // Each change said in turn, as Emacs's query-replace says it.
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     assert!(app.status.contains("1 of 3"), "{}", app.status);
@@ -117,7 +116,6 @@ fn m_dollar_checks_what_is_written_and_each_change_is_taken_or_not() {
     // Checked again, nothing to change but what was left; q stops.
     app.grammar_open = |_| Ok(Box::new(grammar::Using(|s: &str| Ok(s.to_string()))));
     press(&mut app, &["<m-$>"]);
-    app.settle(Duration::from_secs(5));
     // The model read once stays: what it says is as before.
     assert!(app.status.contains("take out “has”"), "{}", app.status);
     press(&mut app, &["q"]);
@@ -125,13 +123,11 @@ fn m_dollar_checks_what_is_written_and_each_change_is_taken_or_not() {
     // Any other key: the checking let go, and the key written, where the
     // change was.
     press(&mut app, &["<m-$>"]);
-    app.settle(Duration::from_secs(5));
     press(&mut app, &["x"]);
     assert!(app.checking.is_none());
     assert!(written(&app).contains("I xhas went"), "{}", written(&app));
     // ! takes all that is left.
     press(&mut app, &["<backspace>", "<m-$>"]);
-    app.settle(Duration::from_secs(5));
     press(&mut app, &["!"]);
     assert!(written(&app).contains("I went home"), "{}", written(&app));
 }
@@ -147,7 +143,6 @@ fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
     let mut app = writing("Thank you for you time.");
     app.grammar_open = fix;
     press(&mut app, &["<c-c>", "<c-s>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     // The Grammar button on the message's top edge, clicked.
     let mut app = writing("Thank you for you time.");
@@ -168,7 +163,7 @@ fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
         rect.x + 1,
         rect.y,
     ));
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
 }
 
@@ -177,7 +172,6 @@ fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
 fn without_the_grammar_feature_m_dollar_says_how_to_have_it() {
     let mut app = writing("Thank you for you time.");
     press(&mut app, &["<m-$>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.status.contains("--features grammar"), "{}", app.status);
 }
 
@@ -219,12 +213,10 @@ fn sending_checks_the_grammar_first_and_asks_once_it_is_gone_through() {
     // Nothing to change: sent at once.
     let mut app = sending("All is well.");
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_none(), "{}", app.status);
     // Something: gone through first, then asked; y sends it.
     let mut app = sending("Thank you for you time.");
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_some());
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     press(&mut app, &["y"]);
@@ -236,12 +228,11 @@ fn sending_checks_the_grammar_first_and_asks_once_it_is_gone_through() {
         "{screen}"
     );
     click_key(&mut app, 'y');
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     assert!(app.compose.is_none(), "{}", app.status);
     // Stopped, and any key but y: not sent, the message kept as it is.
     let mut app = sending("Thank you for you time.");
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     press(&mut app, &["q"]);
     assert!(app.status.contains("Send it now?"), "{}", app.status);
     press(&mut app, &["x"]);
@@ -250,9 +241,7 @@ fn sending_checks_the_grammar_first_and_asks_once_it_is_gone_through() {
     // C-c C-c while it is gone through: sent as it is, at once.
     let mut app = sending("Thank you for you time.");
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_none(), "{}", app.status);
 }
 
@@ -262,7 +251,6 @@ fn a_grammar_that_cannot_be_checked_does_not_keep_a_message_from_going() {
     app.check_on_send = true;
     app.grammar_open = |_| anyhow::bail!("no network");
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_none(), "{}", app.status);
     assert!(app.status.contains("grammar not checked"), "{}", app.status);
 }
@@ -294,7 +282,6 @@ fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
         })))
     };
     press(&mut app, &["<c-c>", "<c-s>"]);
-    app.settle(Duration::from_secs(5));
     let screen = app::screen(&mut app, 150, 40);
     for said in [
         "Grammar · 1 of 3",
@@ -323,7 +310,6 @@ fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
     assert!(!screen.contains("Grammar ·"), "{screen}");
     // Ignore all: none taken.
     press(&mut app, &["<c-c>", "<c-s>"]);
-    app.settle(Duration::from_secs(5));
     let _ = app::screen(&mut app, 150, 40);
     click_key(&mut app, 'i');
     assert!(app.checking.is_none());

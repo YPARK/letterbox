@@ -71,7 +71,7 @@ fn a_message_held_is_sent_once_its_time_is_up() {
     assert!(app.compose.is_some());
     std::thread::sleep(Duration::from_millis(60));
     app.tick();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     assert!(app.compose.is_none(), "{}", app.status);
     assert!(sent(&mut app, "Later"));
 }
