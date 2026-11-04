@@ -289,7 +289,7 @@ fn n_files_what_is_moving_under_a_new_label_named_by_its_commonest_word() {
     for subject in [
         "Build failed: letterbox main (clippy)",
         "Build passed: letterbox main",
-        "Build failed: faba (test timeout)",
+        "Build failed: parser (test timeout)",
     ] {
         assert_eq!(dot_labels(&app, subject).0, ["Builds"]);
     }

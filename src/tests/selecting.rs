@@ -44,7 +44,7 @@ pub(super) fn drag(app: &mut App, from: app::Target, to: app::Target) {
         b,
         KeyModifiers::NONE,
     ));
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
 }
 
 /// The list's rows from `a` to `b` selected, dragged over.
@@ -63,7 +63,7 @@ fn click_with(app: &mut App, at: app::Target, held: KeyModifiers) {
     let p = spot(app, at);
     app.mouse(event(MouseEventKind::Down(MouseButton::Left), p, held));
     app.mouse(event(MouseEventKind::Up(MouseButton::Left), p, held));
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
 }
 
 fn selected(app: &App) -> usize {

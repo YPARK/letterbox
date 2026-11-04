@@ -288,7 +288,6 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
         .expect("Noether's letter, in HTML");
     app.list.select(Some(noether));
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     // Not asked of the terminal as letterbox starts: only once V is.
     assert!(app.picker.is_none(), "not asked yet");
     // A terminal that draws no images: said, and O offered.
@@ -299,7 +298,6 @@ fn v_shows_the_message_read_as_its_pages_and_v_again_its_text() {
     // One that does: typeset, and shown a page at a time.
     app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
     press(&mut app, &["V"]);
-    app.settle(Duration::from_secs(60));
     let paged = app.paged.as_ref().expect("its pages");
     assert!(!paged.is_empty());
     let screen = app::screen(&mut app, 120, 40);
@@ -326,14 +324,11 @@ fn i_shows_the_pages_with_the_pictures_from_elsewhere() {
         .expect("Noether's letter, in HTML");
     app.list.select(Some(noether));
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
     press(&mut app, &["I"]);
-    app.settle(Duration::from_secs(60));
     assert!(app.paged.is_some(), "{}", app.status);
     // Shown so, I again draws them again, not its text.
     press(&mut app, &["I"]);
-    app.settle(Duration::from_secs(60));
     assert!(app.paged.is_some(), "{}", app.status);
     // V, its text.
     press(&mut app, &["V"]);
@@ -386,10 +381,8 @@ pub(super) fn noether_paged() -> App {
         .expect("Noether's letter, in HTML");
     app.list.select(Some(noether));
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
     press(&mut app, &["V"]);
-    app.settle(Duration::from_secs(60));
     assert!(app.paged.is_some(), "{}", app.status);
     app
 }
@@ -412,7 +405,6 @@ fn pages_are_of_the_message_read_and_let_go_once_another_is() {
     let mut app = noether_paged();
     let uid = app.reading.as_ref().unwrap().uid;
     press(&mut app, &["n"]);
-    app.settle(Duration::from_secs(5));
     assert_ne!(
         app.reading.as_ref().map(|r| r.uid),
         Some(uid),
@@ -422,7 +414,6 @@ fn pages_are_of_the_message_read_and_let_go_once_another_is() {
     assert!(app.paged.is_none());
     press(&mut app, &["V"]);
     assert!(!app.status.starts_with("its text"), "{}", app.status);
-    app.settle(Duration::from_secs(60));
     assert_eq!(
         app.paged.as_ref().map(|p| p.place.clone()),
         app.read_place(),
@@ -446,13 +437,14 @@ fn v_while_its_pages_are_typeset_lets_them_go() {
         .unwrap();
     app.list.select(Some(noether));
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     app.picker = Some(Some(ratatui_image::picker::Picker::halfblocks()));
-    press(&mut app, &["V", "V"]);
-    assert!(app.status.contains("its text"), "{}", app.status);
-    app.settle(Duration::from_secs(60));
+    // The second while the first is being typeset: no answer is taken yet.
+    press_unsettled(&mut app, &["V", "V"]);
+    assert!(app.status.contains("let go"), "{}", app.status);
+    let said = app.status.clone();
+    app.settle(PATIENCE);
     assert!(app.paged.is_none(), "shown after all");
-    assert!(!app.status.contains("pages"), "{}", app.status);
+    assert_eq!(app.status, said, "nor said");
 }
 
 #[cfg(feature = "pages")]
@@ -510,14 +502,15 @@ fn a_late_answer_of_paperstack_never_lands_on_another_list_of_papers() {
     *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
     // paperstack slow: P asked, let go, and asked again.
     let held = shelf.lock().unwrap();
-    press(&mut app, &["P", "<esc>", "P"]);
+    // No answer can come while it is held, so none is waited for.
+    press_unsettled(&mut app, &["P", "<esc>", "P"]);
     // As if another message's, of fewer papers, were listed now.
     if let app::Dialog::Papers(p) = &mut app.dialog {
         p.papers.truncate(1);
         p.standing.truncate(1);
     }
     drop(held);
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     let _ = app::screen(&mut app, 120, 40);
     let app::Dialog::Papers(p) = &app.dialog else {
         panic!("closed: {}", app.status);
@@ -525,6 +518,23 @@ fn a_late_answer_of_paperstack_never_lands_on_another_list_of_papers() {
     assert_eq!(p.standing.len(), p.papers.len());
     press(&mut app, &["<enter>"]);
     let _ = app::screen(&mut app, 120, 40);
+}
+
+#[test]
+fn a_key_whose_answer_never_comes_fails_at_the_key_and_says_so() {
+    let mut app = reading_the_alert();
+    let shelf = Arc::new(Mutex::new(Shelf::default()));
+    *app.library.lock().unwrap() = Some(Box::new(Shared(shelf.clone())));
+    let held = shelf.lock().unwrap();
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        press_within(&mut app, &["P"], Duration::from_millis(50));
+    }));
+    let said = failed.expect_err("a key left unanswered goes unnoticed");
+    let said = said.downcast_ref::<String>().expect("said in words");
+    assert!(said.contains("not answered"), "{said}");
+    drop(held);
+    app.settle(PATIENCE);
+    assert_eq!(app.pending(), 0);
 }
 
 #[test]
@@ -568,7 +578,6 @@ fn what_is_marked_in_the_list_is_let_go_as_another_folder_is_opened() {
         })
         .unwrap();
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.map.region.is_none(), "marked in the Inbox, let go");
 }
 
@@ -614,7 +623,7 @@ fn mail_read_is_never_thrown_away_on_its_own() {
         debriefed: 0,
     };
     app.throw_away_on_its_own();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     let auto = app
         .index
         .lock()
@@ -650,12 +659,10 @@ fn paperstack_gone_is_run_again_and_paperstack_saying_no_is_kept() {
     let mut app = reading_the_alert();
     *app.library.lock().unwrap() = Some(Box::new(Failing("no such paper")));
     press(&mut app, &["P"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.library.lock().unwrap().is_some(), "it answered");
     press(&mut app, &["<esc>"]);
     *app.library.lock().unwrap() = Some(Box::new(Failing("pipe")));
     press(&mut app, &["P"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.library.lock().unwrap().is_none(), "run again next time");
 }
 
@@ -782,7 +789,7 @@ pub(super) fn demo_refusing(subject: &str) -> App {
         PathBuf::from("/nowhere/accounts.toml"),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app
 }
 
@@ -808,7 +815,6 @@ fn what_the_inbox_looked_through_does_is_confirmed_and_what_failed_is_said() {
             .insert(s.dots[i].key.clone(), app::Choice::Discard);
     }
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
-    app.settle(Duration::from_secs(5));
     // A pop-up says how it went: the one done, the one not, and why.
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("1 of 2 confirmed · 1 failed"), "{screen}");
@@ -837,7 +843,6 @@ fn what_is_done_in_the_list_is_confirmed_by_a_pop_up() {
     // Inbox mail, marked: asked first, and taken only with i.
     super::selecting::select_rows(&mut app, 0, 1);
     press(&mut app, &["d", "i", "y"]);
-    app.settle(Duration::from_secs(5));
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("2 of 2 confirmed"), "{screen}");
     press(&mut app, &["x"]);
@@ -870,7 +875,6 @@ fn a_failure_is_said_at_once_with_why_while_the_rest_is_waited_for() {
         .unwrap();
     app.list.select(Some(at));
     press(&mut app, &["d"]);
-    app.settle(Duration::from_secs(5));
     let screen = app::screen(&mut app, 170, 40);
     assert!(screen.contains("1 failed"), "{screen}");
     assert!(

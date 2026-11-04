@@ -16,6 +16,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// How long a test waits for work on other threads, which ends the wait as
+/// soon as it is done: long enough that a machine busy with other things
+/// is never taken for a failure.
+const PATIENCE: Duration = Duration::from_secs(120);
+
 mod accounts;
 mod agents;
 mod asking;

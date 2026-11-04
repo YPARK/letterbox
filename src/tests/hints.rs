@@ -9,7 +9,7 @@ fn at(width: u16, height: u16, keys: &[&str]) -> (App, String) {
     for key in keys.iter().flat_map(|k| app::keys(k)) {
         let _ = app::screen(&mut app, width, height);
         app.key(key);
-        app.settle(Duration::from_secs(5));
+        app.settle(PATIENCE);
     }
     let screen = app::screen(&mut app, width, height);
     (app, screen)
@@ -102,7 +102,6 @@ fn new_mail_is_not_claimed_of_an_inbox_not_counted_before() {
         .expect("an Inbox");
     app.accounts[0].folders[inbox].total = None;
     press(&mut app, &["U"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.accounts[0].folders[inbox].total.is_some(), "counted");
     assert_eq!(app.status, "no new mail");
 }

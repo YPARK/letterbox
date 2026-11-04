@@ -13,14 +13,18 @@ fn foot_of(app: &mut App, width: u16, height: u16) -> String {
 #[test]
 fn space_pages_the_message_read_beside_the_map() {
     let mut app = demo_map();
-    press(&mut app, &["<enter>", "<enter>"]);
+    down_subject(
+        &mut app,
+        "Notes on the engine, and a table of Bernoulli numbers",
+    );
+    press(&mut app, &["<enter>"]);
     assert!(app.reading.is_some(), "one read beside the map");
     assert_eq!(app.focus, Focus::List, "the map keeps the focus");
     // Small enough that it does not fit.
     let small = |app: &mut App, key: &str| {
         let _ = app::screen(app, 120, 35);
         app.key(app::keys(key)[0]);
-        app.settle(Duration::from_secs(5));
+        app.settle(PATIENCE);
     };
     let before = app.scroll;
     small(&mut app, "<space>");
@@ -89,7 +93,7 @@ fn the_foot_on_the_clusters_offers_no_key_refused_there() {
     }
     assert!(foot.contains("⏎ read"), "{foot}");
     // Down at a message, they act, and are offered.
-    press(&mut app, &["<enter>"]);
+    super::filing::down_subject(&mut app, "Aims page, third pass");
     let foot = foot_of(&mut app, 170, 45);
     for offered in [" d trash", " e archive", " m move to"] {
         assert!(foot.contains(offered), "{offered}: {foot}");
@@ -130,7 +134,7 @@ fn the_cluster_narrowed_to_is_said_first() {
 #[test]
 fn m_in_a_clusters_tree_goes_out_to_the_clusters() {
     let mut app = demo_map();
-    press(&mut app, &["<enter>"]);
+    super::filing::down_subject(&mut app, "Aims page, third pass");
     assert!(app.map.tree.is_some());
     press(&mut app, &["m"]);
     assert!(app.map.moving.is_some(), "{}", app.status);
@@ -182,11 +186,8 @@ fn no_nearer_is_not_said_of_the_map_turned_after() {
 #[test]
 fn a_word_is_cut_from_what_is_typed_in_a_prompt() {
     let mut app = demo_map();
-    press(&mut app, &["k", "k", "R"]);
-    let app::Dialog::RenameLabel(old, _) = &app.dialog else {
-        panic!("asked: {:?}", app.status);
-    };
-    let old = old.clone();
+    let old = "Grant".to_string();
+    app.dialog = app::Dialog::RenameLabel(old.clone(), old.clone());
     press(&mut app, &["<c-w>", "Big Funding"]);
     app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
     press(&mut app, &["Fund"]);
@@ -218,6 +219,7 @@ fn the_foot_asks_whether_the_map_is_down_at_a_message_without_changing_it() {
     let mut app = demo_map();
     let now = jiff::Timestamp::now().as_second();
     assert!(!app.map_down(), "on the clusters");
+    pick_subject(&mut app, "Aims page, third pass");
     press(&mut app, &["<enter>"]);
     // Gone into a cluster but not yet grown: asked, it is grown for the
     // asking alone, and nothing is kept.
@@ -243,27 +245,25 @@ fn the_foot_asks_whether_the_map_is_down_at_a_message_without_changing_it() {
         s.group_of(s.find(&d.key).unwrap())
             .is_some_and(|g| g.id != here)
     });
-    if let Some(d) = other {
-        app.map.cursor = Some(d.key.clone());
-        let down = app.map_down();
-        assert_eq!(app.map.tree.as_ref().unwrap().id, here, "nothing opened");
-        assert_eq!(down, app.map.at_message(now));
-    }
+    app.map.cursor = Some(other.expect("another cluster").key.clone());
+    let down = app.map_down();
+    assert_eq!(app.map.tree.as_ref().unwrap().id, here, "nothing opened");
+    assert_eq!(down, app.map.at_message(now));
 }
 
 #[test]
 fn whether_the_map_refuses_a_key_changes_nothing_of_it() {
     let mut app = demo_map();
+    pick_subject(&mut app, "Aims page, third pass");
     press(&mut app, &["<enter>"]);
     let s = app.map.snapshot.clone().unwrap();
     let here = app.map.tree.as_ref().unwrap().id;
     // The message picked in another cluster, the tree not yet grown.
-    if let Some(d) = s.dots.iter().find(|d| {
+    let other = s.dots.iter().find(|d| {
         s.group_of(s.find(&d.key).unwrap())
             .is_some_and(|g| g.id != here)
-    }) {
-        app.map.cursor = Some(d.key.clone());
-    }
+    });
+    app.map.cursor = Some(other.expect("another cluster").key.clone());
     if let Some(t) = &mut app.map.tree {
         t.grown = None;
     }

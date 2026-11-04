@@ -902,3 +902,33 @@ fn the_prefixes_the_app_reads_itself_are_no_key_of_the_table() {
         assert_eq!(crate::keymap::act(key), None, "{name}");
     }
 }
+
+/// A program being started holds a copy of what the one starting it holds,
+/// until it begins, on whichever thread started it: this is that copy.
+#[cfg(unix)]
+#[test]
+fn an_index_let_go_is_free_though_a_program_being_started_has_its_lock_still() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = crate::index::lock(dir.path()).unwrap().expect("a lock");
+    let starting = held.0.try_clone().unwrap();
+    drop(held);
+    assert!(crate::index::lock(dir.path()).is_ok(), "let go");
+    drop(starting);
+}
+
+#[test]
+fn an_index_held_all_along_is_open_elsewhere_and_not_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let writing = Index::open_with(dir.path(), &id);
+    let index = Index::open_with(dir.path(), &id);
+    assert!(
+        index
+            .fault
+            .as_deref()
+            .is_some_and(|f| f.contains("another letterbox")),
+        "{:?}",
+        index.fault
+    );
+    drop(writing);
+}

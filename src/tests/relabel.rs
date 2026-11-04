@@ -28,7 +28,7 @@ fn right_click(app: &mut App, target: app::Target) {
         row: rect.y,
         modifiers: KeyModifiers::NONE,
     });
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
 }
 
 #[test]

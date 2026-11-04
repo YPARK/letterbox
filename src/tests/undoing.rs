@@ -19,7 +19,6 @@ fn in_inbox(app: &App, subject: &str) -> bool {
 /// C-x u, and its servers' answers, and the map drawn again after.
 fn undo(app: &mut App) {
     press(app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
 }
 
 #[test]
@@ -30,7 +29,6 @@ fn c_slash_and_c_underscore_undo_as_c_x_u_does() {
         press(&mut app, &["e"]);
         assert!(!in_inbox(&app, AIMS), "archived: {}", app.status);
         press(&mut app, &[key]);
-        app.settle(Duration::from_secs(5));
         assert!(in_inbox(&app, AIMS), "{key}: {}", app.status);
     }
 }
@@ -92,7 +90,6 @@ fn what_the_inbox_looked_through_did_is_put_back_together() {
     // offered: each chosen alone.
     press(&mut app, &["d", "m", "<enter>"]);
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
-    app.settle(Duration::from_secs(5));
     if matches!(app.dialog, app::Dialog::Applied(_)) {
         press(&mut app, &["x"]);
     }
@@ -115,7 +112,7 @@ fn c_x_u_before_the_server_has_answered_says_so_and_puts_it_back_after() {
         app.key(key);
     }
     assert!(app.status.contains("C-x u again"), "{}", app.status);
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     undo(&mut app);
     assert!(in_inbox(&app, AIMS), "back: {}", app.status);
 }
@@ -138,7 +135,6 @@ fn what_was_put_back_from_trash_is_not_trashed_again_by_c_x_u() {
     assert!(app.status.contains("put back"), "{}", app.status);
     // C-x u: nothing of the putting back is undone into Trash again.
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     assert!(
         app.shown.iter().all(|l| l.summary.subject != subject),
         "not in Trash again: {}",
@@ -158,7 +154,6 @@ fn what_was_brought_to_another_account_is_not_left_in_both_by_c_x_u() {
     choose_elsewhere(&mut app, to, "Projects/Grant");
     assert!(stores[from].holds("Trash", &id).unwrap());
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     // The original stays in its Trash: never in both accounts at once.
     assert!(
         !stores[from].holds("INBOX", &id).unwrap(),
@@ -177,10 +172,8 @@ fn one_archived_from_the_list_is_picked_again_once_put_back() {
     let mut app = demo();
     let subject = app.current().unwrap().summary.subject.clone();
     press(&mut app, &["e"]);
-    app.settle(Duration::from_secs(5));
     // The next read meanwhile: it is the one put back that is read after.
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert_ne!(app.current().unwrap().summary.subject, subject);
     undo(&mut app);
     assert_eq!(
@@ -223,7 +216,6 @@ fn after_several_are_trashed_and_put_back_the_one_the_key_was_pressed_on_is_pick
     if matches!(app.dialog, app::Dialog::Applied(_)) {
         press(&mut app, &["x"]);
     }
-    app.settle(Duration::from_secs(5));
     assert_ne!(app.current().unwrap().summary.subject, picked);
     undo(&mut app);
     let at = app.list.selected().unwrap();

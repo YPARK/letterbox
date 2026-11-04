@@ -28,10 +28,10 @@ pub(super) fn microsoft() -> &'static str {
 /// The pages the tests' browser was shown, coming back to letterbox.
 pub(super) static PAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Whether the browser was shown `said`, within a second or two: it reads
-/// the page on a thread of its own.
+/// Whether the browser was shown `said`: it reads the page on a thread of
+/// its own.
 pub(super) fn shown(said: &str) -> bool {
-    let until = std::time::Instant::now() + Duration::from_secs(2);
+    let until = std::time::Instant::now() + PATIENCE;
     loop {
         if PAGES.lock().unwrap().iter().any(|p| p.contains(said)) {
             return true;

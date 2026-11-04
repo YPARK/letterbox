@@ -608,7 +608,7 @@ fn hues_follow_the_angle_and_procrustes_undoes_a_turn() {
     let hues = m.hues();
     assert!(hues.iter().all(|h| (0.0..360.0).contains(h)));
     let a = at_subject(&index, &m, "Build failed: letterbox main (clippy)");
-    let b = at_subject(&index, &m, "Build failed: faba (test timeout)");
+    let b = at_subject(&index, &m, "Build failed: parser (test timeout)");
     let apart = (hues[a] - hues[b]).abs();
     assert!(
         apart.min(360.0 - apart) < 60.0,

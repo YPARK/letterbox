@@ -54,7 +54,6 @@ fn removing_a_label_files_its_mail_where_the_map_would_and_c_x_u_puts_it_back() 
     // y: filed elsewhere, and the folder deleted once empty.
     app.ask_remove_label("Grant");
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     assert!(!has_folder(&app, "Projects/Grant"), "{}", app.status);
     assert!(
         !labels_of(&app, "Letter of support, signed").contains(&"Grant".to_string()),
@@ -64,7 +63,6 @@ fn removing_a_label_files_its_mail_where_the_map_would_and_c_x_u_puts_it_back() 
     assert!(app.status.contains("C-x u"), "{}", app.status);
     // C-x u: the folder made again, its mail moved back.
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     assert!(has_folder(&app, "Projects/Grant"), "{}", app.status);
     assert!(
         labels_of(&app, "Letter of support, signed").contains(&"Grant".to_string()),
@@ -123,7 +121,7 @@ fn splitting_a_label_parts_it_by_what_its_mail_is_about_and_c_x_u_puts_it_back()
             .collect();
         index.keep(events).unwrap();
     }
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     app.ask_split_label("Heap");
     let app::Dialog::Split(plan) = &app.dialog else {
         panic!("shown first: {}", app.status);
@@ -143,7 +141,6 @@ fn splitting_a_label_parts_it_by_what_its_mail_is_about_and_c_x_u_puts_it_back()
     let screen = app::screen(&mut app, 150, 45);
     assert!(screen.contains("Heap/Firstpart"), "{screen}");
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     let labels = |app: &App, k: &crate::index::Key| app.index.lock().unwrap().labels(k);
     let got = labels(&app, &first);
     assert!(
@@ -153,7 +150,6 @@ fn splitting_a_label_parts_it_by_what_its_mail_is_about_and_c_x_u_puts_it_back()
     );
     // C-x u: as it was.
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     let got = labels(&app, &first);
     assert!(!got.contains(&"Firstpart".to_string()), "{got:?}");
     assert!(got.contains(&"Heap".to_string()), "{got:?}");

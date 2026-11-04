@@ -16,7 +16,7 @@ pub(super) fn two_demos() -> (App, Demo, Demo) {
         PathBuf::from("/nowhere/accounts.toml"),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     (app, seen_home, seen_work)
 }
 
@@ -46,7 +46,6 @@ pub(super) fn choose_elsewhere(app: &mut App, a: usize, folder: &str) {
         press(app, &["<down>"]);
     }
     press(app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
 }
 
 #[test]
@@ -120,7 +119,6 @@ fn in_the_inbox_looked_through_a_message_may_go_to_another_account() {
     );
     assert!(!work.holds("Projects/Grant", &id).unwrap(), "not till $");
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
-    app.settle(Duration::from_secs(5));
     assert!(work.holds("Projects/Grant", &id).unwrap());
     assert!(home.holds("Trash", &id).unwrap());
 }

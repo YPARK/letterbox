@@ -268,7 +268,7 @@ pub struct Index {
     /// What went wrong reading the journals, to say on the screen.
     pub fault: Option<String>,
     /// Held while it is written to: one letterbox writes it at a time.
-    held: Option<std::fs::File>,
+    held: Option<Lock>,
     /// Where it is and its key, for the letterbox that writes it to take in
     /// what an agent wrote down.
     advised: Option<(PathBuf, Identity)>,
@@ -320,7 +320,7 @@ pub fn advise(
 /// The index's lock, as asked for.
 enum Hold {
     /// Held, by the file it is, or by none where it cannot be made.
-    Held(Option<std::fs::File>),
+    Held(Option<Lock>),
     /// Held by another.
     Busy,
 }
@@ -328,7 +328,7 @@ enum Hold {
 /// Hold the lock of the index in `dir` for as long as what is returned is
 /// kept, as a command that writes what letterbox open also writes does;
 /// an error if a letterbox open holds it.
-pub fn lock(dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
+pub fn lock(dir: &Path) -> anyhow::Result<Option<Lock>> {
     match hold(dir) {
         Hold::Held(file) => Ok(file),
         Hold::Busy => anyhow::bail!("letterbox is open: close it, then run this again"),
@@ -338,6 +338,19 @@ pub fn lock(dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
 /// Whether a letterbox open writes the index in `dir`.
 pub fn is_open(dir: &Path) -> bool {
     matches!(hold(dir), Hold::Busy)
+}
+
+/// The lock of an index, let go when this is dropped. Let go by saying so,
+/// and not only by closing the file: a program being started has a copy of
+/// the file until it begins, whichever thread started it, and the lock would
+/// stay until that copy was closed too.
+#[derive(Debug)]
+pub struct Lock(pub(crate) std::fs::File);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 /// Hold the lock of the index in `dir`, if no other letterbox does.
@@ -351,7 +364,7 @@ fn hold(dir: &Path) -> Hold {
         return Hold::Held(None);
     };
     match file.try_lock() {
-        Ok(()) => Hold::Held(Some(file)),
+        Ok(()) => Hold::Held(Some(Lock(file))),
         Err(std::fs::TryLockError::WouldBlock) => Hold::Busy,
         Err(_) => Hold::Held(None),
     }
@@ -393,6 +406,9 @@ impl Index {
     /// The index in `dir` read, its journals kept to be written to if
     /// `write`.
     fn opened(dir: &Path, identity: &Identity, write: bool) -> Index {
+        // Held before anything is read: what the last to hold it wrote is
+        // read then, and written after, never over.
+        let held = write.then(|| hold(dir));
         let recipient = identity.to_public();
         let (cache, cached) = Journal::open(dir, "cache", recipient.clone(), Some(identity));
         let (kept, keeps) = Journal::open(dir, "keep", recipient.clone(), Some(identity));
@@ -419,7 +435,7 @@ impl Index {
             faults.push(format!("{why}; nothing more is learnt until it can be"));
         }
         // Written by another letterbox, as open: read, not written.
-        let held = match write.then(|| hold(dir)) {
+        let held = match held {
             Some(Hold::Busy) => {
                 faults.push(
                     "open in another letterbox, which writes it; nothing is written here".into(),

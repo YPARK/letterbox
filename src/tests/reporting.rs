@@ -135,9 +135,9 @@ fn what_an_agent_reported_is_shown_and_only_what_you_choose_is_done_and_learnt()
     assert_eq!(thrown(&app), (before.0 + 1, before.1 + 1));
 }
 
-/// Tick until the agent started has ended, a few seconds at most.
+/// Tick until the agent started has ended.
 fn until_ended(app: &mut App) {
-    let until = std::time::Instant::now() + Duration::from_secs(5);
+    let until = std::time::Instant::now() + PATIENCE;
     while app.agent.is_some() && std::time::Instant::now() < until {
         app.reports_looked = std::time::Instant::now() - Duration::from_secs(10);
         app.tick();

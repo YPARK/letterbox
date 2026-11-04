@@ -30,7 +30,6 @@ fn quitting_while_mail_is_moved_asks_first() {
 fn quitting_with_nothing_being_changed_is_at_once() {
     let mut app = demo();
     press(&mut app, &["d"]);
-    app.settle(Duration::from_secs(5));
     keys_now(&mut app, &["<c-x>", "<c-c>"]);
     assert!(app.quit, "{}", app.status);
 }

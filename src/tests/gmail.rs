@@ -42,7 +42,7 @@ fn gmail_app_with(all_mail: bool, aims_in_inbox: bool) -> (App, Boxes) {
         PathBuf::from("/nowhere/accounts.toml"),
     );
     app.ledger = scratch_ledger();
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     (app, boxes)
 }
 
@@ -112,7 +112,6 @@ fn list_folder(app: &mut App, path: &str) {
         })
         .unwrap_or_else(|| panic!("no {path} in the sidebar"));
     press(app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     app.focus = app::Focus::List;
 }
 
@@ -151,7 +150,6 @@ fn in_a_label_alone_filed_from_its_list_it_loses_that_label() {
 fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back() {
     let (mut app, boxes) = gmail_app(true);
     press(&mut app, &["M"]);
-    app.settle(Duration::from_secs(5));
     let (labels, _) = on_server(&boxes, "Aims page, third pass");
     assert!(labels.contains(&"Projects/Grant".to_string()), "{labels:?}");
     app.ask_remove_label("Grant");
@@ -161,7 +159,6 @@ fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back
         app.status
     );
     press(&mut app, &["y"]);
-    app.settle(Duration::from_secs(5));
     let (labels, _) = on_server(&boxes, "Aims page, third pass");
     assert!(
         !labels.contains(&"Projects/Grant".to_string()),
@@ -169,7 +166,6 @@ fn removing_a_gmail_label_takes_it_off_by_its_whole_name_and_c_x_u_gives_it_back
         app.status
     );
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     let (labels, _) = on_server(&boxes, "Aims page, third pass");
     assert!(
         labels.contains(&"Projects/Grant".to_string()),
@@ -186,20 +182,15 @@ fn archived_or_filed_on_gmail_c_x_u_gives_its_labels_back() {
     // Archived: out of the Inbox, and back by C-x u.
     pick(&mut app, "R01 resubmission");
     press(&mut app, &["e"]);
-    app.settle(Duration::from_secs(5));
     assert!(!on_server(&boxes, "R01 resubmission").1, "{}", app.status);
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(on_server(&boxes, "R01 resubmission"), was, "{}", app.status);
     // Filed under a label: the label off again, the Inbox's back.
-    app.settle(Duration::from_secs(5));
     pick(&mut app, "R01 resubmission");
     press(&mut app, &["m"]);
     press(&mut app, &["Family", "<enter>"]);
-    app.settle(Duration::from_secs(5));
     assert_ne!(on_server(&boxes, "R01 resubmission"), was);
     press(&mut app, &["<c-x>", "u"]);
-    app.settle(Duration::from_secs(5));
     assert_eq!(on_server(&boxes, "R01 resubmission"), was, "{}", app.status);
 }
 
@@ -230,7 +221,6 @@ fn proposing(app: &App, subject: &str, action: crate::report::Action) -> crate::
 fn do_it(app: &mut App, report: crate::report::Report) {
     super::reporting::shown(app, report);
     press(app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
 }
 
 #[test]

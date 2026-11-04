@@ -288,9 +288,9 @@ fn trashing_teaches_and_the_inbox_looked_through_says_what_would_be_thrown_away(
             index.teach(&kept_keys[k], false).unwrap();
         }
     }
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     let _ = app::screen(&mut app, 170, 40);
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     press(&mut app, &["i"]);
     let s = app.map.snapshot.clone().unwrap();
     let rows = app.review_rows();
@@ -323,9 +323,9 @@ fn only_those_chosen_are_done_and_those_kept_come_last_next_time() {
     press(&mut app, &["<space>", "<c-c>", "<c-c>", "y"]);
     assert!(app.status.contains("1 kept"), "{}", app.status);
     assert_eq!(app.index.lock().unwrap().filter.kept, 1);
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     let _ = app::screen(&mut app, 170, 40);
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     // Still in the Inbox, all of them; the one kept after the rest.
     let rows = app.review_rows();
     assert_eq!(rows.len(), INBOX);
@@ -405,7 +405,6 @@ fn archiving_answering_and_putting_back_teach_that_it_was_kept() {
     let subject = app.current().unwrap().summary.subject.clone();
     press(&mut app, &["d"]);
     assert_eq!(thrown(&app), 1);
-    app.settle(Duration::from_secs(5));
     app.focus = app::Focus::Side;
     app.row = app
         .rows
@@ -416,7 +415,6 @@ fn archiving_answering_and_putting_back_teach_that_it_was_kept() {
         })
         .expect("a Trash in the sidebar");
     press(&mut app, &["<enter>"]);
-    app.settle(Duration::from_secs(5));
     let at = app
         .shown
         .iter()

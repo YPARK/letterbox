@@ -130,7 +130,7 @@ fn holding(raw: &[u8]) -> (App, Box<dyn Store>) {
     );
     app.ledger = scratch_ledger();
     app.send_hold = Duration::ZERO;
-    app.settle(Duration::from_secs(5));
+    app.settle(PATIENCE);
     (app, store)
 }
 
@@ -170,7 +170,6 @@ fn capital_e_in_drafts_takes_up_the_draft_picked_and_sent_it_goes_to_trash() {
     assert!(text.contains("Thursday suits me."), "{text}");
 
     press(&mut app, &["<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_none(), "{}", app.status);
     assert_eq!(app.shown.len(), drafts - 1, "out of Drafts: {}", app.status);
     let sent = store.page("Sent", 0, 1).unwrap().summaries;
@@ -287,7 +286,6 @@ fn a_reply_taken_up_and_sent_marks_what_it_answers_answered() {
         )
         .unwrap();
     press(&mut app, &["<enter>", "E", "<c-c>", "<c-c>"]);
-    app.settle(Duration::from_secs(5));
     assert!(app.compose.is_none(), "{}", app.status);
     let inbox = store.page("INBOX", 0, 50).unwrap().summaries;
     let answered = inbox.iter().find(|s| s.uid == first.summary.uid).unwrap();
