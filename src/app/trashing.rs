@@ -49,7 +49,7 @@ impl App {
             return;
         }
         // Archived, it is kept: learnt as not thrown away.
-        self.teach_at(account, &folder, summary.uid, false);
+        self.teach_of(account, &folder, summary.uid, &summary.message_id, false);
         self.drop_listed(account, &folder, summary.uid);
         let from = match self.folder_of(account, &folder) {
             Some(f) if f.role == Role::Inbox => "the Inbox".to_string(),
@@ -202,11 +202,22 @@ impl App {
     /// Learn from what was done with the message of `account` at `uid` in
     /// `folder`: thrown away, or kept.
     pub(super) fn teach_at(&mut self, account: usize, folder: &str, uid: u32, thrown: bool) {
+        let id = self
+            .shown
+            .iter()
+            .find(|l| l.is(account, folder, uid))
+            .map(|l| l.summary.message_id.clone())
+            .unwrap_or_default();
+        self.teach_of(account, folder, uid, &id, thrown);
+    }
+
+    /// As `teach_at`, its `Message-ID` known.
+    fn teach_of(&mut self, account: usize, folder: &str, uid: u32, id: &str, thrown: bool) {
         let Some(ident) = self.accounts.get(account).map(|a| a.ident.clone()) else {
             return;
         };
         let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(key) = index.key_at(&ident, folder, uid) {
+        if let Some(key) = index.key_of(&ident, folder, uid, id) {
             let _ = index.teach(&key, thrown);
         }
     }
@@ -229,7 +240,7 @@ impl App {
         trash: String,
     ) {
         // Thrown away: what is learnt of what you throw away.
-        self.teach_at(account, &from, uid, true);
+        self.teach_of(account, &from, uid, &message_id, true);
         let name = self.folder_label(account, &trash);
         self.status = format!("moved to {name} · d there puts it back");
         self.trash_quietly(account, from, uid, message_id, trash);

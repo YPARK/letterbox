@@ -49,7 +49,7 @@ fn reported(app: &App, subject: &str, label: &str) -> Report {
 }
 
 /// Shown, and long enough for a key to act on it.
-fn shown(app: &mut App, report: Report) {
+pub(super) fn shown(app: &mut App, report: Report) {
     app.reports.push(report);
     assert!(app.show_reports());
     let app::Dialog::Report(view) = &mut app.dialog else {
@@ -108,7 +108,7 @@ fn what_an_agent_reported_is_shown_and_only_what_you_choose_is_done_and_learnt()
     shown(&mut app, report.clone());
     press(&mut app, &["<enter>"]);
     assert!(app.status.contains("nothing chosen"), "{}", app.status);
-    press(&mut app, &["x"]);
+    press(&mut app, &["<esc>"]);
     assert!(!app.dialog.is_open());
     assert_eq!(app.shown[0].subject, first);
     assert_eq!(thrown(&app), before);
@@ -174,12 +174,7 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     assert!(app.status.contains("failing"), "{}", app.status);
     let said = std::fs::read_to_string(&log).unwrap();
     assert_eq!(said.lines().collect::<Vec<_>>(), ["looked at 1"]);
-    assert!(
-        std::fs::read_to_string(&ran)
-            .unwrap()
-            .parse::<i64>()
-            .is_ok()
-    );
+    assert!(!ran.exists(), "failing, it has not looked through the mail");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -378,4 +373,108 @@ fn a_report_of_a_summary_alone_is_shown() {
     assert!(screen.contains("Quiet day."), "{screen}");
     press(&mut app, &["<enter>", "c"]);
     assert!(app.status.contains("nothing chosen"), "{}", app.status);
+}
+
+#[test]
+fn a_report_waits_while_a_search_or_a_menu_is_being_used() {
+    let mut app = demo_map();
+    let report = reported(&app, "Aims page, third pass", "Grant");
+    app.reports.push(report);
+    app.searching = true;
+    assert!(!app.show_reports(), "not over a search being typed");
+    app.searching = false;
+    assert!(app.show_reports());
+}
+
+#[test]
+fn a_stray_key_leaves_a_report_there_and_esc_closes_it() {
+    let mut app = demo_map();
+    let report = reported(&app, "Aims page, third pass", "Grant");
+    shown(&mut app, report);
+    press(&mut app, &["z"]);
+    assert!(matches!(app.dialog, app::Dialog::Report(_)), "still there");
+    press(&mut app, &["<esc>"]);
+    assert!(matches!(app.dialog, app::Dialog::Closed));
+    assert!(app.status.contains("nothing done"), "{}", app.status);
+    let report = reported(&app, "Aims page, third pass", "Grant");
+    shown(&mut app, report);
+    press(&mut app, &["<c-g>"]);
+    assert!(matches!(app.dialog, app::Dialog::Closed), "C-g too");
+}
+
+#[test]
+fn what_was_reported_and_not_dealt_with_is_there_when_letterbox_next_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = identity();
+    let report = |summary: &str| Report {
+        summary: summary.to_string(),
+        ..Default::default()
+    };
+    let mut app = demo_map();
+    *app.index.lock().unwrap() = crate::index::Index::open_with(dir.path(), &id);
+    app.reports = vec![report("second"), report("third")];
+    app.dialog = app::Dialog::Report(Box::new(app::ReportView {
+        report: report("first"),
+        at: 0,
+        shown: std::time::Instant::now(),
+    }));
+    app.keep_reports().unwrap();
+    let mut read = Vec::new();
+    app.index
+        .lock()
+        .unwrap()
+        .take_written(crate::report::JOURNAL, |got: Vec<Report>| {
+            read = got;
+            Ok(())
+        })
+        .unwrap();
+    let said: Vec<&str> = read.iter().map(|r| r.summary.as_str()).collect();
+    assert_eq!(said, ["first", "second", "third"]);
+}
+
+#[test]
+fn an_agent_that_failed_leaves_the_mail_for_the_next_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(path.with_file_name("agent-ran"), "5").unwrap();
+    let mut app = demo_map();
+    let set = app::AgentSet::beside("exit 3".to_string(), &path);
+    let ran = set.ran.clone();
+    app.agent_set = Some(set);
+    press(&mut app, &["T"]);
+    until_ended(&mut app);
+    assert!(app.status.contains("failing"), "{}", app.status);
+    assert_eq!(app.agent_set.as_ref().unwrap().last_ran, 5);
+    assert_eq!(std::fs::read_to_string(&ran).unwrap(), "5");
+}
+
+#[test]
+fn an_agent_that_finished_has_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(path.with_file_name("agent-ran"), "5").unwrap();
+    let mut app = demo_map();
+    app.agent_set = Some(app::AgentSet::beside("exit 0".to_string(), &path));
+    press(&mut app, &["T"]);
+    until_ended(&mut app);
+    assert!(app.agent_set.as_ref().unwrap().last_ran > 5);
+}
+
+#[test]
+fn a_message_no_longer_where_it_was_proposed_from_is_left_where_it_is() {
+    let mut app = demo_map();
+    let subject = "Aims page, third pass";
+    let label = "Grant";
+    let mut report = reported(&app, subject, label);
+    // Moved since, as from a phone: its Message-ID still known to the map.
+    report.proposals.remove(0);
+    report.proposals[0].uid = 999_999;
+    let before = thrown(&app);
+    let was = dot_labels(&app, subject);
+    shown(&mut app, report);
+    press(&mut app, &["<space>", "<enter>"]);
+    assert!(app.status.contains("0 done"), "{}", app.status);
+    assert!(app.status.contains("not on the map"), "{}", app.status);
+    assert_eq!(dot_labels(&app, subject), was);
+    assert_eq!(thrown(&app), before, "nothing learnt");
 }

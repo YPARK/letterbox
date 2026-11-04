@@ -202,3 +202,86 @@ fn archived_or_filed_on_gmail_c_x_u_gives_its_labels_back() {
     app.settle(Duration::from_secs(5));
     assert_eq!(on_server(&boxes, "R01 resubmission"), was, "{}", app.status);
 }
+
+/// A report on the message `subject` of the Inbox, `action` done to it.
+fn proposing(app: &App, subject: &str, action: crate::report::Action) -> crate::report::Report {
+    let l = app
+        .shown
+        .iter()
+        .find(|l| l.summary.subject == subject)
+        .unwrap();
+    crate::report::Report {
+        proposals: vec![crate::report::Proposal {
+            account: app.accounts[0].ident.clone(),
+            folder: "INBOX".to_string(),
+            uid: l.summary.uid,
+            message_id: l.summary.message_id.clone(),
+            subject: subject.to_string(),
+            action,
+            to: "Family".to_string(),
+            chosen: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// `report` shown, and what is chosen of it done.
+fn do_it(app: &mut App, report: crate::report::Report) {
+    super::reporting::shown(app, report);
+    press(app, &["<enter>"]);
+    app.settle(Duration::from_secs(5));
+}
+
+#[test]
+fn filed_as_an_agent_proposed_from_the_gmail_inbox_and_learnt() {
+    let (mut app, boxes) = gmail_app(true);
+    let report = proposing(&app, "R01 resubmission", crate::report::Action::File);
+    do_it(&mut app, report);
+    let (labels, inbox) = on_server(&boxes, "R01 resubmission");
+    assert_eq!(labels, ["Family", "\\Important"], "{}", app.status);
+    assert!(!inbox, "out of the Inbox");
+    assert_eq!(app.index.lock().unwrap().filter.kept, 1);
+}
+
+#[test]
+fn thrown_away_as_an_agent_proposed_from_the_gmail_inbox_and_learnt() {
+    let (mut app, _boxes) = gmail_app(true);
+    let report = proposing(&app, "R01 resubmission", crate::report::Action::Trash);
+    do_it(&mut app, report);
+    assert_eq!(app.index.lock().unwrap().filter.thrown, 1, "{}", app.status);
+}
+
+#[test]
+fn trashed_by_hand_from_the_gmail_inbox_it_is_learnt() {
+    let (mut app, _boxes) = gmail_app(true);
+    pick(&mut app, "R01 resubmission");
+    press(&mut app, &["d"]);
+    assert_eq!(app.index.lock().unwrap().filter.thrown, 1, "{}", app.status);
+}
+
+#[test]
+fn what_could_not_be_filed_is_not_said_to_be_done() {
+    let (mut app, _boxes) = gmail_app(true);
+    let report = proposing(&app, "R01 resubmission", crate::report::Action::File);
+    app.map.snapshot = None;
+    do_it(&mut app, report);
+    assert!(app.status.contains("0 done"), "{}", app.status);
+    assert!(app.status.contains("not on the map"), "{}", app.status);
+    assert_eq!(app.index.lock().unwrap().filter.kept, 0, "nothing learnt");
+}
+
+#[test]
+fn filed_as_an_agent_proposed_from_its_folder_not_the_one_you_are_looking_at() {
+    let (mut app, boxes) = gmail_app(true);
+    let report = proposing(&app, "Aims page, third pass", crate::report::Action::File);
+    list_folder(&mut app, "Projects/Grant");
+    do_it(&mut app, report);
+    let (labels, inbox) = on_server(&boxes, "Aims page, third pass");
+    assert!(
+        labels.contains(&"Projects/Grant".to_string()),
+        "its other label kept: {labels:?}"
+    );
+    assert!(labels.contains(&"Family".to_string()), "{labels:?}");
+    assert!(!inbox, "out of the Inbox");
+}

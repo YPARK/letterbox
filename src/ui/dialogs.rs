@@ -789,12 +789,12 @@ pub(super) fn report_dialog(
     let mut foot = vec![Line::raw("")];
     let chosen = r.proposals.iter().filter(|p| p.chosen).count();
     let said = if r.proposals.is_empty() {
-        "c copies the question picked, to paste to your agent; any other key leaves this."
-            .to_string()
+        "c copies the question picked, to paste to your agent; esc leaves this.".to_string()
     } else {
         format!(
             "{chosen} chosen of {}. Nothing is done unless you choose it: space chooses the one \
-             picked, a all, ⏎ does those chosen, learnt as your own; c copies the question picked.",
+             picked, a all, ⏎ does those chosen, learnt as your own; c copies the question picked; esc \
+             leaves them.",
             r.proposals.len()
         )
     };
