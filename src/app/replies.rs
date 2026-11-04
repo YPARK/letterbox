@@ -258,6 +258,17 @@ impl App {
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
         }
+        if let Answer::Agenda(read) = reply.answer {
+            self.agenda_fault = match read {
+                Ok(coming) => {
+                    self.agenda = coming;
+                    None
+                }
+                // What was read last is shown still: it is likely right.
+                Err(why) => Some(why),
+            };
+            return;
+        }
         if let Answer::Drawn(snapshot) = reply.answer {
             return self.drawn_map(*snapshot);
         }
@@ -408,6 +419,7 @@ impl App {
             | Answer::Shelved { .. }
             | Answer::Mapping(_)
             | Answer::Drawn(_)
+            | Answer::Agenda(_)
             | Answer::Relaid { .. }
             | Answer::Checked { .. }
             | Answer::Raw { .. }

@@ -97,6 +97,11 @@ pub(super) enum Command {
         #[arg(value_enum)]
         to: secret::Keeper,
     },
+    /// A calendar to show what is coming up from, by its secret address
+    Calendar {
+        #[command(subcommand)]
+        action: CalendarAction,
+    },
     /// letterbox's vault: give it a new passphrase, or a key file instead
     Vault {
         #[command(subcommand)]
@@ -214,6 +219,16 @@ pub(super) enum VaultAction {
     /// A new passphrase for it, asked for as letterbox starts; or none, its
     /// key a file beside it only you may read, never asked for
     Passphrase,
+}
+
+#[derive(Subcommand)]
+pub(super) enum CalendarAction {
+    /// Read a calendar from its address, asked for, not given here, as it is
+    /// as good as a password: in Google Calendar, its settings, "Secret
+    /// address in iCal format"
+    Set,
+    /// Read none, and forget its address
+    Remove,
 }
 
 #[derive(Subcommand)]

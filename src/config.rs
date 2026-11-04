@@ -82,6 +82,17 @@ struct File {
     account: Vec<Account>,
     #[serde(default)]
     agent: Option<Agent>,
+    #[serde(default)]
+    calendar: Option<Calendar>,
+}
+
+/// A calendar to read: `[calendar]`, with where its address is kept, as a
+/// password is, as it is as good as one.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Calendar {
+    #[serde(default)]
+    keep: Keeper,
 }
 
 /// An AI agent of your own, started as letterbox opens, to look through new
@@ -209,6 +220,27 @@ fn read_file(path: &Path) -> anyhow::Result<File> {
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
     };
     toml::from_str(&text).with_context(|| format!("cannot read {}", path.display()))
+}
+
+/// Where the address of the calendar to read is kept; none if none is set.
+pub fn calendar(path: &Path) -> anyhow::Result<Option<Keeper>> {
+    Ok(read_file(path)?.calendar.map(|c| c.keep))
+}
+
+/// Set a calendar to read, its address kept in `keep`; or none.
+pub fn set_calendar(path: &Path, keep: Option<Keeper>) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    match keep {
+        Some(keep) => {
+            let mut table = toml_edit::Table::new();
+            table["keep"] = toml_edit::value(keep.name());
+            doc["calendar"] = toml_edit::Item::Table(table);
+        }
+        None => {
+            doc.remove("calendar");
+        }
+    }
+    write_doc(path, &doc)
 }
 
 /// The accounts in the file at `path`; none if there is no file.

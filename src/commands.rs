@@ -487,7 +487,9 @@ pub(super) fn stores_for_tui(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn
         return stores(args);
     }
     let mut accounts = config::load(&args.config)?;
-    if accounts.iter().any(in_vault)
+    let calendar_in_vault =
+        config::calendar(&args.config)?.is_some_and(|k| k == secret::Keeper::Vault);
+    if (accounts.iter().any(in_vault) || calendar_in_vault)
         && let Err(e) = open_vault(false)
     {
         eprintln!("letterbox: {e:#}");
@@ -728,5 +730,51 @@ pub(super) fn restore_trash(
     if failed > 0 {
         bail!("{failed} not put back, each said above: still in the ledger, to try again");
     }
+    Ok(())
+}
+
+/// Read a calendar from its address, typed where it is not seen and not left
+/// in the shell's history, kept only once it has given a calendar.
+pub(super) fn set_calendar(config: &std::path::Path) -> anyhow::Result<()> {
+    let given = ask_password("The calendar's secret address")?;
+    let address = crate::agenda::address(&given)?;
+    let (entries, unread) = crate::agenda::fetch(&address)?;
+    // Kept with the passwords, where they are.
+    let keepers = crate::secret::keepers();
+    let keeper = crate::config::load(config)?
+        .first()
+        .map(|a| a.keep)
+        .filter(|k| keepers.contains(k))
+        .or(keepers.first().copied())
+        .context("nowhere to keep its address")?;
+    if keeper == crate::secret::Keeper::Vault {
+        open_vault(true)?;
+    }
+    crate::secret::store(keeper, crate::agenda::HOST, crate::agenda::USER, &address)?;
+    crate::config::set_calendar(config, Some(keeper))?;
+    println!(
+        "{} events read; its address is kept {}",
+        entries.len(),
+        keeper.about()
+    );
+    if unread.rules + unread.events > 0 {
+        println!(
+            "{} left out, as what is not understood is not guessed at",
+            unread.rules + unread.events
+        );
+    }
+    Ok(())
+}
+
+/// Read no calendar, and forget its address.
+pub(super) fn remove_calendar(config: &std::path::Path) -> anyhow::Result<()> {
+    if let Some(keeper) = crate::config::calendar(config)? {
+        if keeper == crate::secret::Keeper::Vault {
+            open_vault(false)?;
+        }
+        crate::secret::remove(keeper, crate::agenda::HOST, crate::agenda::USER)?;
+    }
+    crate::config::set_calendar(config, None)?;
+    println!("no calendar is read");
     Ok(())
 }

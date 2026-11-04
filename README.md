@@ -655,6 +655,7 @@ have your shell's `PATH`.
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
 | `draft_reply` | a reply, threaded, quoting what it answers, kept in Drafts; never sent | writes a draft |
 | `draft_message` | a new letter, kept in Drafts; never sent | writes a draft |
+| `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |
 | `mark_message` | mark a message read or unread, flagged or not | changes |
@@ -723,6 +724,24 @@ trash or file, `a` all of them, `⏎` does those chosen, learnt as your own;
 `c` copies a question it suggests asking next, to paste to your agent; `esc`
 leaves it all as it is. A report written while letterbox is shut
 is shown as it next opens.
+
+## Your calendar
+
+Set a calendar, and what is coming up in it runs along the top, soonest first:
+
+```sh
+lbx calendar set
+```
+
+It asks for the calendar's address, not to be given on the command line: in
+Google Calendar, a calendar's settings, *Integrate calendar*, *Secret address
+in iCal format*. It takes no sign-in, and letterbox only reads it. The address
+is as good as a password, so it is kept as one; `lbx calendar remove` forgets
+it. A repeat a rule describes in a way letterbox does not understand is left
+out, and `lbx calendar set` says how many.
+
+An agent finds when you are free from `upcoming_events`, or a calendar tool of
+its own, and suggests times; see [how to triage](#how-to-triage).
 
 ## In Emacs
 

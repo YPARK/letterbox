@@ -97,6 +97,8 @@ const FOUND: usize = 200;
 const PAUSE: Duration = Duration::from_millis(150);
 /// How often the folder shown is looked in again, and the folders counted.
 const REFRESH: Duration = Duration::from_secs(120);
+/// How often the calendar is read again.
+const AGENDA_AGAIN: Duration = Duration::from_secs(15 * 60);
 /// How often answers are looked for, between keys.
 const POLL: Duration = Duration::from_millis(50);
 /// How many bytes of the messages read before are kept, to show again at
@@ -496,6 +498,14 @@ pub struct App {
     pub map: Map,
     /// What the map's model has read, between one snapshot and the next.
     map_corpus: Option<crate::model::Corpus>,
+    /// What is coming up in the calendar, shown along the top.
+    pub agenda: Vec<crate::agenda::Coming>,
+    /// Why it could not be read again.
+    pub agenda_fault: Option<String>,
+    /// When it was last asked for.
+    agenda_asked: Option<Instant>,
+    /// Whether it is read at all: the demo has its own.
+    pub reads_agenda: bool,
     /// The folder files were last attached from.
     pub attach_dir: Option<PathBuf>,
     /// The folder the message's files were last saved in.
@@ -804,6 +814,10 @@ impl App {
             mapping: String::new(),
             map: Map::default(),
             map_corpus: None,
+            agenda: Vec::new(),
+            agenda_fault: None,
+            agenda_asked: None,
+            reads_agenda: true,
             attach_dir: None,
             save_dir: None,
             reader_width: None,
@@ -955,6 +969,46 @@ impl App {
         self.pending
     }
 
+    /// What the demo has for itself, nothing of the user's read.
+    pub fn as_demo(&mut self) {
+        self.fix_accounts();
+        self.agenda = crate::agenda::demo();
+        self.reads_agenda = false;
+        *self.library.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Box::new(crate::demo::shelf()));
+    }
+
+    /// Read the calendar off this thread, as it starts and now and then.
+    fn read_agenda(&mut self) {
+        if !self.reads_agenda
+            || self
+                .agenda_asked
+                .is_some_and(|at| at.elapsed() < AGENDA_AGAIN)
+        {
+            return;
+        }
+        self.agenda_asked = Some(Instant::now());
+        // None set, nothing is ever asked of the store or the web.
+        if !matches!(crate::config::calendar(&self.config), Ok(Some(_))) {
+            self.agenda.clear();
+            self.agenda_fault = None;
+            return;
+        }
+        self.pending += 1;
+        let replies = self.replies_to.clone();
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let read = crate::agenda::read(&config, crate::agenda::AHEAD_DAYS);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Agenda(match read {
+                    Ok(read) => Ok(read.map_or_else(Vec::new, |(coming, _)| coming)),
+                    Err(e) => Err(format!("{e:#}")),
+                }),
+            });
+        });
+    }
+
     /// Do what has waited long enough; whether anything was done.
     pub fn tick(&mut self) -> bool {
         let mut any = self.tick_held();
@@ -969,6 +1023,7 @@ impl App {
             self.refresh();
             any = true;
         }
+        self.read_agenda();
         self.take_reports() || any
     }
 

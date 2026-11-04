@@ -95,6 +95,35 @@ pub fn map_panes(width: u16, focus: Focus) -> [u16; 3] {
     }
 }
 
+/// What is coming up, along the top, soonest first: as many whole events as
+/// fit, for the eye to take in at a glance.
+fn agenda_strip(f: &mut Frame, t: &Theme, area: Rect, coming: &[(String, String)]) {
+    if area.height == 0 {
+        return;
+    }
+    let (when, what) = (Style::new().fg(t.text), Style::new().fg(t.dim));
+    let mut spans = Vec::new();
+    let mut used = 0;
+    let room = usize::from(area.width);
+    for (i, (at, title)) in coming.iter().enumerate() {
+        let gap = if i == 0 { " " } else { "  ·  " };
+        let width = gap.width() + at.width() + 1 + title.width();
+        if used + width > room {
+            if i == 0 {
+                spans.push(Span::styled(format!(" {at} "), when));
+                let left = room.saturating_sub(at.width() + 2);
+                spans.push(Span::styled(clip(title, left), what));
+            }
+            break;
+        }
+        used += width;
+        spans.push(Span::styled(gap, what));
+        spans.push(Span::styled(format!("{at} "), when));
+        spans.push(Span::styled(title.clone(), what));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.keep_reading_in_view();
     let t = app.theme;
@@ -104,8 +133,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.area(),
     );
     let (foot_lines, spots) = foot(app, f.area().width);
-    let [top, main, foot_area] = Layout::vertical([
+    let now = jiff::Timestamp::now();
+    let mut coming = crate::agenda::strip(&app.agenda, now, &jiff::tz::TimeZone::system());
+    if let (true, Some(fault)) = (coming.is_empty(), &app.agenda_fault) {
+        coming.push(("Calendar:".to_string(), fault.clone()));
+    }
+    let [top, strip_area, main, foot_area] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(u16::from(!coming.is_empty())),
         Constraint::Min(3),
         Constraint::Length(foot_lines.len() as u16),
     ])
@@ -163,6 +198,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         read = over(main);
     }
     search(f, app, top);
+    agenda_strip(f, &t, strip_area, &coming);
     if side_w > 0 {
         sidebar(f, app, side);
     }

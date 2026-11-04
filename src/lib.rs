@@ -5,6 +5,7 @@
 #[cfg(not(unix))]
 compile_error!("letterbox runs on macOS and Linux");
 
+mod agenda;
 mod app;
 mod cli;
 mod commands;
@@ -103,9 +104,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             app.theme = theme::Theme::of(args.theme);
             app.grammar_model = args.grammar.clone();
             if args.demo {
-                app.fix_accounts();
-                *app.library.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(Box::new(demo::shelf()));
+                app.as_demo();
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
@@ -420,6 +419,10 @@ fn command(args: &Args) -> anyhow::Result<()> {
             println!("{}", map::rebuild(&mut index)?);
             Ok(())
         }
+        Some(Command::Calendar { action }) => match action {
+            CalendarAction::Set => commands::set_calendar(&args.config),
+            CalendarAction::Remove => commands::remove_calendar(&args.config),
+        },
         Some(Command::Vault {
             action: VaultAction::Passphrase,
         }) => {
@@ -451,7 +454,13 @@ fn command(args: &Args) -> anyhow::Result<()> {
             if *to == secret::Keeper::Keyring && !secret::keepers().contains(to) {
                 bail!("there is no system store here to keep them in");
             }
-            if *to == secret::Keeper::Vault || accounts.iter().any(in_vault) || map_in_vault {
+            let calendar_in_vault =
+                config::calendar(&args.config)?.is_some_and(|k| k == secret::Keeper::Vault);
+            if *to == secret::Keeper::Vault
+                || accounts.iter().any(in_vault)
+                || map_in_vault
+                || calendar_in_vault
+            {
                 open_vault(*to == secret::Keeper::Vault)?;
             }
             let said = setup::move_secrets(
@@ -502,9 +511,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             let mut app = app::App::new(stores(args)?, args.config.clone());
             app.theme = theme::Theme::of(args.theme);
             if args.demo {
-                app.fix_accounts();
-                *app.library.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(Box::new(demo::shelf()));
+                app.as_demo();
             }
             app.settle(Duration::from_secs(30));
             for key in keys.iter().flat_map(|k| app::keys(k)) {
