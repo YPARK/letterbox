@@ -1,9 +1,8 @@
 //! Passwords kept encrypted, never in the accounts file, by Rust in
 //! letterbox itself, with no program run for them: in the system's own
-//! store, by keyring-rs, which is the keychain on macOS, the Credential
-//! Manager on Windows and the Secret Service on Linux; or in letterbox's
-//! vault, a file encrypted with a passphrase, for a system without one, as
-//! a server reached over ssh.
+//! store, by keyring-rs, which is the keychain on macOS and the Secret
+//! Service on Linux; or in letterbox's vault, a file encrypted with a
+//! passphrase, for a system without one, as a server reached over ssh.
 
 use crate::config::Account;
 use crate::vault;
@@ -14,8 +13,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Keeper {
-    /// The system's own store: the keychain, the Credential Manager, or
-    /// the Secret Service.
+    /// The system's own store: the keychain, or the Secret Service.
     #[default]
     Keyring,
     /// letterbox's vault, encrypted with a passphrase.
@@ -34,7 +32,6 @@ impl Keeper {
     pub fn about(self) -> &'static str {
         match self {
             Keeper::Keyring if cfg!(target_os = "macos") => "in the macOS keychain",
-            Keeper::Keyring if cfg!(windows) => "in the Windows Credential Manager",
             Keeper::Keyring => "in the Secret Service, as GNOME's keyring or KWallet",
             Keeper::Vault => "in letterbox's vault, encrypted with a passphrase of yours",
         }

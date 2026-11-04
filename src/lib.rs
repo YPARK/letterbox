@@ -2,6 +2,9 @@
 //! as a mail app's, or from the shell, a folder or a message at a time. The
 //! program is `letterbox`, and `lbx` for short, each of them `run`.
 
+#[cfg(not(unix))]
+compile_error!("letterbox runs on macOS and Linux");
+
 mod app;
 mod cli;
 mod commands;

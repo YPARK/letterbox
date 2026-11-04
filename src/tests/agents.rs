@@ -472,11 +472,7 @@ fn inbox(server: &mut crate::mcp::Server) -> Vec<(u64, String)> {
 fn an_agent_opens_letterbox_in_a_terminal_as_set_and_the_demo_opens_nothing() {
     use serde_json::json;
     let lbx = PathBuf::from("/opt/it's/lbx");
-    let quoted = if cfg!(windows) {
-        "\"/opt/it's/lbx\""
-    } else {
-        "'/opt/it'\\''s/lbx'"
-    };
+    let quoted = "'/opt/it'\\''s/lbx'";
     assert_eq!(
         crate::mcp::open_command(Some("ghostty -e {lbx}"), &lbx),
         Some(format!("ghostty -e {quoted}"))

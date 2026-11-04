@@ -205,20 +205,16 @@ pub struct Waiting {
 /// Open `url` in the browser.
 pub fn browse(url: &str) {
     use std::process::{Command, Stdio};
-    let mut command = if cfg!(target_os = "macos") {
-        let mut c = Command::new("open");
-        c.arg(url);
-        c
-    } else if cfg!(windows) {
-        let mut c = Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c
+    let program = if cfg!(target_os = "macos") {
+        "open"
     } else {
-        let mut c = Command::new("xdg-open");
-        c.arg(url);
-        c
+        "xdg-open"
     };
-    let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let _ = Command::new(program)
+        .arg(url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 /// Sign in as `email`, with the client `client` of the tenant `tenant`:

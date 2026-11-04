@@ -155,11 +155,7 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     press(&mut app, &["T"]);
     assert!(app.status.contains("no agent is set"), "{}", app.status);
 
-    let script = if cfg!(windows) {
-        "echo looked at %LETTERBOX_AGENT%& exit 3"
-    } else {
-        "echo looked at $LETTERBOX_AGENT; exit 3"
-    };
+    let script = "echo looked at $LETTERBOX_AGENT; exit 3";
     std::fs::write(&path, format!("[agent]\ncommand = \"{script}\"\n")).unwrap();
     let command = crate::config::agent(&path).unwrap().unwrap();
     assert!(crate::config::load(&path).unwrap().is_empty(), "no account");
@@ -175,12 +171,9 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     let said = std::fs::read_to_string(&log).unwrap();
     assert_eq!(said.lines().collect::<Vec<_>>(), ["looked at 1"]);
     assert!(!ran.exists(), "failing, it has not looked through the mail");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&log).unwrap().permissions().mode();
-        assert_eq!(mode & 0o077, 0, "only you may read what it said");
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&log).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "only you may read what it said");
 }
 
 #[test]
@@ -202,8 +195,7 @@ fn an_agent_that_could_not_start_has_not_run() {
 fn a_quoted_word_reaches_the_shell_as_it_was_written() {
     let out = crate::config::shell("echo \"a  b\"").output().unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
-    // cmd's echo keeps the quotes, sh's does not; neither gains a backslash.
-    assert_eq!(said.trim().trim_matches('"'), "a  b");
+    assert_eq!(said.trim(), "a  b");
 }
 
 #[test]

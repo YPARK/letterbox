@@ -232,11 +232,8 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     let mut file = options
         .open(path)
         .with_context(|| format!("cannot write {}", path.display()))?;
