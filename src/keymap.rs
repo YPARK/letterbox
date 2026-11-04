@@ -238,7 +238,12 @@ pub const KEYS: &[Binding] = &[
         ],
         name: "space b C-v M-v",
         hint: "␣",
-        foot: &[(Reader, "page"), (Reviewing, "keep"), (Looked, "page")],
+        foot: &[
+            (Reader, "page"),
+            (Reviewing, "keep"),
+            (Looked, "page"),
+            (Side, "fold"),
+        ],
         help: "a page down, or up, in the message, from the map beside it too; in the Inbox looked through, keep it there. C-v and M-v, as the page keys, a page there",
     },
     Binding {
