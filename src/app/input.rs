@@ -342,6 +342,7 @@ impl App {
         let page = self.height.saturating_sub(2).max(1) as isize;
         match act {
             Act::Help => self.dialog = Dialog::Help(0),
+            Act::Calendar => self.dialog = Dialog::Calendar(0),
             Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
             Act::Search => {
@@ -535,7 +536,7 @@ impl App {
             Act::Save => self.list_to_save(),
             Act::SaveAll => self.save_all(),
             Act::Junk => self.show_junk(),
-            Act::Agent => self.run_agent(),
+            Act::Agent => self.agent_asked(),
             Act::Asking => self.ask_edges(),
             Act::Papers => self.list_papers(),
             Act::Pages => self.toggle_pages(),

@@ -53,6 +53,9 @@ pub struct Theme {
     pub flag: Color,
     /// What went wrong, as an account that would not sign in.
     pub error: Color,
+    /// When an event in the calendar strip is, and what it is.
+    pub when: Color,
+    pub event: Color,
     /// The accounts', in turn.
     accounts: [Color; 4],
 }
@@ -86,6 +89,8 @@ impl Theme {
                 on_accent: Color::Rgb(255, 253, 248),
                 flag: Color::Rgb(136, 64, 0),
                 error: Color::Rgb(156, 40, 36),
+                when: Color::Rgb(150, 28, 118),
+                event: Color::Rgb(26, 44, 120),
                 accounts: [
                     Color::Rgb(128, 58, 118),
                     Color::Rgb(22, 92, 74),
@@ -109,6 +114,8 @@ impl Theme {
                 on_accent: Color::Rgb(24, 22, 18),
                 flag: Color::Rgb(224, 160, 96),
                 error: Color::Rgb(238, 150, 140),
+                when: Color::Rgb(242, 140, 214),
+                event: Color::Rgb(160, 182, 245),
                 accounts: [
                     Color::Rgb(212, 156, 196),
                     Color::Rgb(124, 196, 174),

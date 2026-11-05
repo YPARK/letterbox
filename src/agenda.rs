@@ -75,7 +75,7 @@ pub struct Coming {
 
 impl Coming {
     /// Whether it is yet to begin, or going on, at `t`.
-    fn on_at(&self, t: Timestamp) -> bool {
+    pub(crate) fn on_at(&self, t: Timestamp) -> bool {
         if self.end == self.start {
             self.start >= t
         } else {
@@ -93,8 +93,7 @@ const STEPS: u32 = 200_000;
 
 /// The events in `text`, and how many could not be read.
 pub fn parse(text: &str) -> (Vec<Entry>, Unread) {
-    let unfolded = text.replace("\r\n", "\n");
-    let unfolded = unfolded.replace("\n ", "").replace("\n\t", "");
+    let unfolded = unfold(text);
     let mut entries = Vec::new();
     let mut unread = Unread::default();
     let mut event: Option<Vec<&str>> = None;
@@ -592,6 +591,23 @@ pub fn upcoming(entries: &[Entry], from: Timestamp, to: Timestamp, zone: &TimeZo
     out
 }
 
+/// What `shown` is called on `today`: its name, near, and from a week away,
+/// when its weekday alone would mislead, with its date.
+fn day_said(shown: jiff::civil::Date, today: jiff::civil::Date) -> String {
+    if shown == today {
+        "Today".to_string()
+    } else if today.tomorrow().is_ok_and(|t| t == shown) {
+        "Tomorrow".to_string()
+    } else {
+        let form = if (shown - today).get_days() < 7 {
+            "%a"
+        } else {
+            "%a %b %-d"
+        };
+        shown.strftime(form).to_string()
+    }
+}
+
 /// What the strip says of what is `coming` still at `now`: when, in `zone`,
 /// and what.
 pub fn strip(coming: &[Coming], now: Timestamp, zone: &TimeZone) -> Vec<(String, String)> {
@@ -604,16 +620,7 @@ pub fn strip(coming: &[Coming], now: Timestamp, zone: &TimeZone) -> Vec<(String,
             if !c.all_day && c.start <= now {
                 return ("Now".to_string(), c.title.clone());
             }
-            let shown = at.date().max(today);
-            let day = if shown == today {
-                "Today".to_string()
-            } else if today.tomorrow().is_ok_and(|t| t == shown) {
-                "Tomorrow".to_string()
-            } else {
-                let away = (shown - today).get_days();
-                let form = if away < 7 { "%a" } else { "%a %b %-d" };
-                shown.strftime(form).to_string()
-            };
+            let day = day_said(at.date().max(today), today);
             let when = if c.all_day {
                 day
             } else {
@@ -624,31 +631,308 @@ pub fn strip(coming: &[Coming], now: Timestamp, zone: &TimeZone) -> Vec<(String,
         .collect()
 }
 
-/// How far ahead is read for the strip: a week, and a day it may be
-/// looked at through before it is read again.
-pub const AHEAD_DAYS: i64 = 8;
+/// What the popup lists of what is `coming` still at `now`: the day, said
+/// only as it changes; when in it, in `zone`; and what.
+pub fn listing(
+    coming: &[Coming],
+    now: Timestamp,
+    zone: &TimeZone,
+) -> Vec<(String, String, String)> {
+    let today = now.to_zoned(zone.clone()).date();
+    let mut last = None;
+    coming
+        .iter()
+        .filter(|c| c.on_at(now))
+        .map(|c| {
+            let at: Zoned = c.start.to_zoned(zone.clone());
+            let shown = at.date().max(today);
+            let day = if last == Some(shown) {
+                String::new()
+            } else {
+                day_said(shown, today)
+            };
+            last = Some(shown);
+            let when = if c.all_day {
+                "all day".to_string()
+            } else if c.start <= now {
+                "now".to_string()
+            } else {
+                at.strftime("%-I:%M %p").to_string()
+            };
+            (day, when, c.title.clone())
+        })
+        .collect()
+}
 
-/// What is coming up for `days` from now in the calendar the accounts' file at
-/// `config` has set, in the user's zone, with how much of it could not be
-/// read; none if it has none set.
-pub fn read(config: &std::path::Path, days: i64) -> anyhow::Result<Option<(Vec<Coming>, Unread)>> {
-    let Some(keeper) = crate::config::calendar(config)? else {
-        return Ok(None);
-    };
+/// What is on still at `now` on each of `days` days from `first`, in `zone`,
+/// each said by when (nothing, all day) and what: an all-day event on every day it covers, a
+/// timed one where it begins, or the first shown if it began before.
+pub fn on_each_day(
+    coming: &[Coming],
+    now: Timestamp,
+    first: jiff::civil::Date,
+    days: usize,
+    zone: &TimeZone,
+) -> Vec<Vec<(String, String)>> {
+    let mut out = vec![Vec::new(); days];
+    for c in coming.iter().filter(|c| c.on_at(now)) {
+        let at = c.start.to_zoned(zone.clone());
+        let begins = (at.date() - first).get_days().max(0);
+        let (ends, when) = if c.all_day {
+            let ends = (c.end.to_zoned(zone.clone()).date() - first).get_days();
+            (ends.max(begins + 1), String::new())
+        } else {
+            let am = if at.hour() < 12 { "a" } else { "p" };
+            (begins + 1, format!("{}{am}", at.strftime("%-I:%M")))
+        };
+        for on in out
+            .iter_mut()
+            .take(usize::try_from(ends).unwrap_or(0))
+            .skip(usize::try_from(begins).unwrap_or(0))
+        {
+            on.push((when.clone(), c.title.clone()));
+        }
+    }
+    out
+}
+
+/// How far ahead is read, for the strip and the popup: the five weeks of its
+/// month, from the start of this one.
+pub const AHEAD_DAYS: i64 = 35;
+
+/// One calendar as it was read.
+pub struct Feed {
+    pub entries: Vec<Entry>,
+    pub unread: Unread,
+    pub name: Option<String>,
+}
+
+/// A calendar set, as it was last read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalendarRead {
+    /// What its address is kept under.
+    pub id: String,
+    /// What it calls itself, if it was read and says.
+    pub name: Option<String>,
+    /// Why it could not be read.
+    pub fault: Option<String>,
+}
+
+impl CalendarRead {
+    /// What to call it, the `place`th of those set, from one.
+    pub fn called(&self, place: usize) -> String {
+        match (&self.name, &self.fault) {
+            (Some(name), _) => name.clone(),
+            (None, Some(_)) => format!("calendar {place} (not read)"),
+            (None, None) => format!("calendar {place}"),
+        }
+    }
+}
+
+/// What every calendar set has coming up: what was read of them, together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Read {
+    pub coming: Vec<Coming>,
+    pub unread: Unread,
+    pub calendars: Vec<CalendarRead>,
+}
+
+/// What those of `calendars` read are called.
+pub fn names(calendars: &[CalendarRead]) -> Vec<String> {
+    calendars
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.fault.is_none())
+        .map(|(i, c)| c.called(i + 1))
+        .collect()
+}
+
+/// Those of `calendars` that could not be read, by their place, and why.
+pub fn faults(calendars: &[CalendarRead]) -> Vec<String> {
+    calendars
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| Some(format!("calendar {}: {}", i + 1, c.fault.as_ref()?)))
+        .collect()
+}
+
+/// `feeds`, each with what its address is kept under, as one, from `now` to
+/// `to`, in `zone`: soonest first, an event on two of them once; one that could
+/// not be read said, the others shown.
+pub fn together(
+    feeds: Vec<(String, Result<Feed, String>)>,
+    now: Timestamp,
+    to: Timestamp,
+    zone: &TimeZone,
+) -> Read {
+    let mut read = Read::default();
+    for (id, feed) in feeds {
+        let (name, fault) = match feed {
+            Ok(feed) => {
+                read.coming.extend(upcoming(&feed.entries, now, to, zone));
+                read.unread.rules += feed.unread.rules;
+                read.unread.events += feed.unread.events;
+                (feed.name, None)
+            }
+            Err(why) => (None, Some(why)),
+        };
+        read.calendars.push(CalendarRead { id, name, fault });
+    }
+    read.coming
+        .sort_by(|a, b| a.start.cmp(&b.start).then_with(|| a.title.cmp(&b.title)));
+    read.coming
+        .dedup_by(|a, b| a.start == b.start && a.end == b.end && a.title == b.title);
+    read
+}
+
+/// Open the vault, if `keeper` is it and its key is at hand.
+fn reach(keeper: crate::secret::Keeper) -> anyhow::Result<()> {
     if keeper == crate::secret::Keeper::Vault
         && !crate::vault::is_open()
         && !crate::vault::unlock_by_key().is_some_and(|r| r.is_ok())
     {
         bail!("the calendar's address is in the vault, which is locked");
     }
-    let address = address(&crate::secret::find(keeper, HOST, USER)?)?;
-    let (entries, unread) = fetch(&address)?;
+    Ok(())
+}
+
+/// What is coming up for `days` from now in the calendars the accounts' file
+/// at `config` has set, in the user's zone; none if it has none set. Their
+/// addresses are asked for in turn, as the system's store may ask the user; they
+/// are read at once, so one that does not answer holds up none of the others.
+pub fn read(config: &std::path::Path, days: i64) -> anyhow::Result<Option<Read>> {
+    let Some(keeper) = crate::config::calendar(config)? else {
+        return Ok(None);
+    };
+    reach(keeper)?;
+    let kept: Vec<_> = crate::config::calendar_ids(config)?
+        .into_iter()
+        .map(|id| {
+            let at = crate::secret::find(keeper, HOST, &id).and_then(|kept| address(&kept));
+            (id, at)
+        })
+        .collect();
+    let feeds = std::thread::scope(|scope| {
+        let reading: Vec<_> = kept
+            .into_iter()
+            .map(|(id, at)| (id, scope.spawn(move || fetch(&at?))))
+            .collect();
+        reading
+            .into_iter()
+            .map(|(id, read)| {
+                let feed = read
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("the calendar could not be read")));
+                (id, feed.map_err(|e| format!("{e:#}")))
+            })
+            .collect()
+    });
     let now = Timestamp::now();
     let to = now.checked_add(jiff::SignedDuration::from_hours(days.saturating_mul(24)))?;
-    Ok(Some((
-        upcoming(&entries, now, to, &TimeZone::system()),
-        unread,
-    )))
+    Ok(Some(together(feeds, now, to, &TimeZone::system())))
+}
+
+/// Where the calendars' addresses are kept: where they are, or, with none yet,
+/// with the passwords.
+pub fn keeper(config: &std::path::Path) -> anyhow::Result<crate::secret::Keeper> {
+    if let Some(keeper) = crate::config::calendar(config)? {
+        return Ok(keeper);
+    }
+    let keepers = crate::secret::keepers();
+    crate::config::load(config)?
+        .first()
+        .map(|a| a.keep)
+        .filter(|k| keepers.contains(k))
+        .or(keepers.first().copied())
+        .ok_or_else(|| anyhow::anyhow!("nowhere to keep its address"))
+}
+
+/// Keep `address` beside the others' or, `alone`, in their place, by `find`,
+/// `store` and `forget`, each of what an address is kept under: nothing is set
+/// until it is kept, and nothing forgotten till then.
+pub fn keep_address(
+    config: &std::path::Path,
+    address: &str,
+    keeper: crate::secret::Keeper,
+    alone: bool,
+    find: impl Fn(&str) -> anyhow::Result<String>,
+    store: impl Fn(&str, &str) -> anyhow::Result<()>,
+    forget: impl Fn(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let ids = crate::config::calendar_ids(config)?;
+    if !alone
+        && ids
+            .iter()
+            .any(|id| find(id).is_ok_and(|kept| kept == address))
+    {
+        bail!("that calendar is set already");
+    }
+    let id = crate::config::next_calendar_id(&ids);
+    store(&id, address)?;
+    crate::config::set_calendar(config, Some(keeper))?;
+    if alone {
+        crate::config::set_calendars(config, std::slice::from_ref(&id))?;
+        return ids.iter().try_for_each(|id| forget(id));
+    }
+    let mut all = ids;
+    all.push(id);
+    crate::config::set_calendars(config, &all)
+}
+
+/// One more calendar, at `given`, or, `alone`, this one only: read before it
+/// is kept. What was read, and where it is kept. What goes wrong never says
+/// the address.
+pub fn add(
+    config: &std::path::Path,
+    given: &str,
+    alone: bool,
+) -> anyhow::Result<(Feed, crate::secret::Keeper)> {
+    let address = address(given)?;
+    let feed = fetch(&address)?;
+    let keeper = keeper(config)?;
+    reach(keeper)?;
+    keep_address(
+        config,
+        &address,
+        keeper,
+        alone,
+        |id| crate::secret::find(keeper, HOST, id),
+        |id, address| crate::secret::store(keeper, HOST, id, address),
+        |id| crate::secret::remove(keeper, HOST, id),
+    )?;
+    Ok((feed, keeper))
+}
+
+/// Forget the calendars `gone`, by `forget`, each of what an address is kept
+/// under: the others stay as they are.
+pub fn keep_only(
+    config: &std::path::Path,
+    gone: &[String],
+    forget: impl Fn(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let ids = crate::config::calendar_ids(config)?;
+    let left: Vec<String> = ids
+        .iter()
+        .filter(|id| !gone.contains(id))
+        .cloned()
+        .collect();
+    if left.is_empty() {
+        crate::config::set_calendar(config, None)?;
+    } else {
+        crate::config::set_calendars(config, &left)?;
+    }
+    ids.iter()
+        .filter(|id| gone.contains(id))
+        .try_for_each(|id| forget(id))
+}
+
+/// Forget the calendars `gone`, as `keep_only` does, where they are kept.
+pub fn remove(config: &std::path::Path, gone: &[String]) -> anyhow::Result<()> {
+    let Some(keeper) = crate::config::calendar(config)? else {
+        return Ok(());
+    };
+    reach(keeper)?;
+    keep_only(config, gone, |id| crate::secret::remove(keeper, HOST, id))
 }
 
 /// `coming` for an agent: times with their offset in `zone`, as every message's
@@ -723,8 +1007,29 @@ pub fn address(given: &str) -> anyhow::Result<String> {
     bail!("a calendar's address begins with https://, as Google's secret address does");
 }
 
+/// `text` with each line that goes on over several as one.
+fn unfold(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace("\n ", "")
+        .replace("\n\t", "")
+}
+
+/// What the calendar in `text` calls itself, cleaned as an event's title is.
+pub fn named(given: &str) -> Option<String> {
+    // It comes before the events, which may be many.
+    unfold(given.split("BEGIN:VEVENT").next().unwrap_or(given))
+        .lines()
+        .find_map(|l| {
+            let (name, value) = name_and_value(l)?;
+            let name = name.split(';').next()?;
+            name.eq_ignore_ascii_case("X-WR-CALNAME")
+                .then(|| text(value))
+        })
+        .filter(|n| !n.is_empty())
+}
+
 /// Read the calendar at `address`. What goes wrong never says the address.
-pub fn fetch(address: &str) -> anyhow::Result<(Vec<Entry>, Unread)> {
+pub fn fetch(address: &str) -> anyhow::Result<Feed> {
     let agent = crate::net::agent();
     let Ok(mut resp) = agent.get(address).call() else {
         bail!("the calendar could not be reached");
@@ -738,5 +1043,10 @@ pub fn fetch(address: &str) -> anyhow::Result<(Vec<Entry>, Unread)> {
     if !text.contains("BEGIN:VCALENDAR") {
         bail!("that address does not give a calendar");
     }
-    Ok(parse(&text))
+    let (entries, unread) = parse(&text);
+    Ok(Feed {
+        entries,
+        unread,
+        name: named(&text),
+    })
 }

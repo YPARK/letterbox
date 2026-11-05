@@ -733,48 +733,51 @@ pub(super) fn restore_trash(
     Ok(())
 }
 
-/// Read a calendar from its address, typed where it is not seen and not left
-/// in the shell's history, kept only once it has given a calendar.
-pub(super) fn set_calendar(config: &std::path::Path) -> anyhow::Result<()> {
+/// Add a calendar from its address, typed where it is not seen and not left
+/// in the shell's history, kept only once it has given a calendar; `alone`,
+/// the others forgotten as it is.
+pub(super) fn add_calendar(config: &std::path::Path, alone: bool) -> anyhow::Result<()> {
     let given = ask_password("The calendar's secret address")?;
-    let address = crate::agenda::address(&given)?;
-    let (entries, unread) = crate::agenda::fetch(&address)?;
-    // Kept with the passwords, where they are.
-    let keepers = crate::secret::keepers();
-    let keeper = crate::config::load(config)?
-        .first()
-        .map(|a| a.keep)
-        .filter(|k| keepers.contains(k))
-        .or(keepers.first().copied())
-        .context("nowhere to keep its address")?;
-    if keeper == crate::secret::Keeper::Vault {
+    if crate::agenda::keeper(config)? == crate::secret::Keeper::Vault {
         open_vault(true)?;
     }
-    crate::secret::store(keeper, crate::agenda::HOST, crate::agenda::USER, &address)?;
-    crate::config::set_calendar(config, Some(keeper))?;
+    let (feed, keeper) = crate::agenda::add(config, &given, alone)?;
     println!(
-        "{} events read; its address is kept {}",
-        entries.len(),
+        "{}: {} events read; its address is kept {}",
+        feed.name.as_deref().unwrap_or("the calendar"),
+        feed.entries.len(),
         keeper.about()
     );
-    if unread.rules + unread.events > 0 {
+    if feed.unread.rules + feed.unread.events > 0 {
         println!(
             "{} left out, as what is not understood is not guessed at",
-            unread.rules + unread.events
+            feed.unread.rules + feed.unread.events
         );
     }
     Ok(())
 }
 
-/// Read no calendar, and forget its address.
+/// Have T start `command`, or Claude Code, by its whole path if it is found.
+pub(super) fn set_agent(config: &std::path::Path, command: Option<String>) -> anyhow::Result<()> {
+    let command = command.unwrap_or_else(|| {
+        let found = crate::config::shell("command -v claude")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        crate::config::claude_agent(found.as_deref().map(str::trim))
+    });
+    crate::config::set_agent(config, Some(&command))?;
+    println!("T in letterbox starts: {command}");
+    Ok(())
+}
+
+/// Read no calendar, and forget their addresses.
 pub(super) fn remove_calendar(config: &std::path::Path) -> anyhow::Result<()> {
-    if let Some(keeper) = crate::config::calendar(config)? {
-        if keeper == crate::secret::Keeper::Vault {
-            open_vault(false)?;
-        }
-        crate::secret::remove(keeper, crate::agenda::HOST, crate::agenda::USER)?;
+    if crate::config::calendar(config)? == Some(crate::secret::Keeper::Vault) {
+        open_vault(false)?;
     }
-    crate::config::set_calendar(config, None)?;
+    crate::agenda::remove(config, &crate::config::calendar_ids(config)?)?;
     println!("no calendar is read");
     Ok(())
 }

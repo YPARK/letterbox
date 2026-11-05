@@ -247,8 +247,10 @@ pub enum Answer {
     },
     /// The map made again from the index; not a store's answer.
     Drawn(Box<crate::map::Snapshot>),
-    /// What is coming up in the calendar.
-    Agenda(Result<Vec<crate::agenda::Coming>, String>),
+    /// What is coming up in the calendars.
+    Agenda(Result<crate::agenda::Read, String>),
+    /// Calendars added or forgotten: what to say of it; or why they were not.
+    CalendarsChanged(Result<String, String>),
 }
 
 pub struct Added {

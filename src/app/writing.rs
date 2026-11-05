@@ -377,6 +377,12 @@ impl App {
     /// files: attached, if the message being written takes them and each
     /// is a file; else written in, or typed into the search or the form.
     pub fn paste(&mut self, text: &str) {
+        // One line: what is typed may not be seen, so a break in it would go
+        // unnoticed.
+        if let Some(typed) = self.dialog.typed_mut() {
+            typed.extend(text.trim().chars().filter(|c| !matches!(c, '\r' | '\n')));
+            return;
+        }
         if self.dialog.form().is_some() {
             self.form_paste(text);
         } else if self.compose.is_some() && !self.dialog.is_open() {

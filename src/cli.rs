@@ -102,6 +102,11 @@ pub(super) enum Command {
         #[command(subcommand)]
         action: CalendarAction,
     },
+    /// The agent T starts to look through new mail
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
     /// letterbox's vault: give it a new passphrase, or a key file instead
     Vault {
         #[command(subcommand)]
@@ -223,11 +228,24 @@ pub(super) enum VaultAction {
 
 #[derive(Subcommand)]
 pub(super) enum CalendarAction {
-    /// Read a calendar from its address, asked for, not given here, as it is
+    /// Read this calendar alone, from its address, asked for, not given here, as it is
     /// as good as a password: in Google Calendar, its settings, "Secret
     /// address in iCal format"
     Set,
-    /// Read none, and forget its address
+    /// Read one more beside those set, its address asked for in the same way
+    Add,
+    /// Read none, and forget their addresses
+    Remove,
+}
+
+#[derive(Subcommand)]
+pub(super) enum AgentAction {
+    /// Have T start this command, or Claude Code if none is given
+    Set {
+        /// The command, as the shell runs it
+        command: Option<String>,
+    },
+    /// Have T start none
     Remove,
 }
 

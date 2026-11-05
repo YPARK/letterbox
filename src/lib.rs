@@ -419,8 +419,17 @@ fn command(args: &Args) -> anyhow::Result<()> {
             println!("{}", map::rebuild(&mut index)?);
             Ok(())
         }
+        Some(Command::Agent { action }) => match action {
+            AgentAction::Set { command } => commands::set_agent(&args.config, command.clone()),
+            AgentAction::Remove => {
+                config::set_agent(&args.config, None)?;
+                println!("T in letterbox starts no agent");
+                Ok(())
+            }
+        },
         Some(Command::Calendar { action }) => match action {
-            CalendarAction::Set => commands::set_calendar(&args.config),
+            CalendarAction::Set => commands::add_calendar(&args.config, true),
+            CalendarAction::Add => commands::add_calendar(&args.config, false),
             CalendarAction::Remove => commands::remove_calendar(&args.config),
         },
         Some(Command::Vault {

@@ -195,6 +195,7 @@ letterbox search grant report --account Work
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
+| `C` | what is coming up in [your calendars](#your-calendar), in a popup: `tab` goes from the week to the month to the list; `a` adds a calendar, `r` lists them with `[x]` beside each, where `space` unticks one and `⏎` forgets those unticked; `j`, `k` and the page keys scroll, `esc` or `C` closes |
 | `?`, `F1` | all the keys; `F1` while writing too, the keys of writing first |
 | `C-x` `u`, `C-/`, `C-_` | undo what was done last, as Emacs's three do: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `C-c C-c` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
 | `C-x` `C-c` | quit, as Emacs does; `q` and `C-c` alone say so, and do nothing more. While mail is still being moved, filed or sent, it asks first: `y` quits anyway, any other key waits |
@@ -705,7 +706,16 @@ what needs you out of the Inbox; and ends with what you might ask next.
 
 ### An agent as letterbox opens
 
-Name your own agent in `accounts.toml`, and `T` starts it, with
+`T` with no agent set pops up what to paste in a terminal, and `c` copies it.
+For Claude Code, the second line sets the command below:
+
+```sh
+claude mcp add --scope user letterbox -- "$(command -v lbx)" mcp
+lbx agent set
+```
+
+Or give your own, `lbx agent set "its command"`; `lbx agent remove` takes it
+away. It goes in `accounts.toml`, and `T` starts it, with
 `LETTERBOX_AGENT=1` set, what it says written to `agent.log` beside the
 file, only you able to read it. letterbox starts it on its own too, once
 as it opens, if new mail came since it last ran:
@@ -727,23 +737,27 @@ is shown as it next opens.
 
 ## Your calendar
 
-Set a calendar, one for now, and what is coming up in it runs along the top,
-soonest first:
+Add a calendar, and what is coming up in it runs along the top, soonest first.
+`C` shows them in a popup, as a table of the next seven days, `tab` going on to
+five weeks and to a list; `a` there adds a calendar, and `r`
+lists them with `[x]` beside each, to untick and forget. Or, in a terminal:
 
 ```sh
-lbx calendar set
+lbx calendar add
 ```
 
-It asks for the calendar's address, not to be given on the command line: in
+Each asks for the calendar's address, not to be given on the command line: in
 Google Calendar, a calendar's settings, *Integrate calendar*, *Secret address
 in iCal format*. It takes no sign-in, and letterbox only reads it. The address
-is as good as a password, so it is kept as one; `lbx calendar remove` forgets
-it. A repeat a rule describes in a way letterbox does not understand is left
-out, and `lbx calendar set` says how many.
+is as good as a password, so it is kept as one, and never shown. An event on two
+calendars is listed once, and one that cannot be read is said while the others
+are shown. `lbx calendar set` reads one alone, the others forgotten; `lbx
+calendar remove` forgets them all. A repeat a rule describes in a way letterbox
+does not understand is left out, and adding it says how many.
 
 An agent finds when you are free from `upcoming_events`, or a calendar tool of
 its own, and suggests times; see [how to triage](#how-to-triage).
-`upcoming_events` sees only the calendar set here, so an agent relying on it
+`upcoming_events` says which calendars it read, so an agent relying on it
 says that any other you count as busy was not checked.
 
 ## In Emacs
