@@ -740,8 +740,8 @@ fn calendars_are_read_together_soonest_first_each_event_once() {
     let b = "BEGIN:VEVENT\nUID:c\nDTSTART:20261110T090000Z\nDTEND:20261110T100000Z\nSUMMARY:Shared\nEND:VEVENT\nBEGIN:VEVENT\nUID:d\nDTSTART:20261111T090000Z\nDTEND:20261111T100000Z\nSUMMARY:Between\nEND:VEVENT\n";
     let read = crate::agenda::together(
         vec![
-            ("x".into(), Ok(feed("One", a))),
-            ("y".into(), Ok(feed("Two", b))),
+            crate::agenda::Reading::of("x", Ok(feed("One", a))),
+            crate::agenda::Reading::of("y", Ok(feed("Two", b))),
         ],
         at("2026-11-04T12:00:00Z"),
         at("2026-11-20T00:00:00Z"),
@@ -757,11 +757,8 @@ fn a_calendar_that_cannot_be_read_leaves_the_others_and_is_said() {
     let a = "BEGIN:VEVENT\nUID:a\nDTSTART:20261110T090000Z\nDTEND:20261110T100000Z\nSUMMARY:Still here\nEND:VEVENT\n";
     let read = crate::agenda::together(
         vec![
-            (
-                "x".into(),
-                Err("the calendar could not be reached".to_string()),
-            ),
-            ("y".into(), Ok(feed("One", a))),
+            crate::agenda::Reading::of("x", Err("the calendar could not be reached".to_string())),
+            crate::agenda::Reading::of("y", Ok(feed("One", a))),
         ],
         at("2026-11-04T12:00:00Z"),
         at("2026-11-20T00:00:00Z"),
@@ -869,6 +866,7 @@ fn calendar(id: &str, name: &str) -> crate::agenda::CalendarRead {
         id: id.to_string(),
         name: Some(name.to_string()),
         fault: None,
+        coming: Vec::new(),
     }
 }
 
@@ -990,8 +988,8 @@ fn the_demo_forgets_no_calendar_and_nothing_unticked_asks_nothing() {
 fn a_calendar_is_called_what_it_says_or_by_its_place() {
     let read = crate::agenda::together(
         vec![
-            ("x".into(), Err("no".to_string())),
-            ("y".into(), Ok(feed("One", ""))),
+            crate::agenda::Reading::of("x", Err("no".to_string())),
+            crate::agenda::Reading::of("y", Ok(feed("One", ""))),
         ],
         at("2026-11-04T12:00:00Z"),
         at("2026-11-20T00:00:00Z"),
@@ -1315,6 +1313,27 @@ fn what_is_pasted_in_a_line_typed_is_one_line() {
 }
 
 #[test]
+fn one_that_could_not_be_forgotten_stays_set_and_the_others_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    crate::config::set_calendar(&path, Some(crate::secret::Keeper::Vault)).unwrap();
+    let second = one_more(&path);
+    let third = one_more(&path);
+    let gone = vec![second.clone(), third.clone()];
+    let done = crate::agenda::keep_only(&path, &gone, |id| {
+        if id == second {
+            anyhow::bail!("the store said no");
+        }
+        Ok(())
+    });
+    assert!(done.is_err());
+    assert_eq!(
+        crate::config::calendar_ids(&path).unwrap(),
+        ["ical".to_string(), second]
+    );
+}
+
+#[test]
 fn a_calendars_id_is_never_one_in_use_and_a_file_without_ids_has_the_one() {
     use crate::config::next_calendar_id;
     let dir = tempfile::tempdir().unwrap();
@@ -1326,32 +1345,87 @@ fn a_calendars_id_is_never_one_in_use_and_a_file_without_ids_has_the_one() {
     assert_eq!(next_calendar_id(&["ical-2".to_string()]), "ical");
 }
 
+fn not_read(id: &str) -> crate::agenda::CalendarRead {
+    crate::agenda::CalendarRead {
+        id: id.to_string(),
+        name: None,
+        fault: Some("it could not be reached".to_string()),
+        coming: Vec::new(),
+    }
+}
+
+fn holding(id: &str, coming: Vec<Coming>) -> crate::agenda::CalendarRead {
+    crate::agenda::CalendarRead {
+        coming,
+        ..calendar(id, id)
+    }
+}
+
+fn answer(app: &mut crate::app::App, calendars: Vec<crate::agenda::CalendarRead>) {
+    app.given_reply(crate::worker::Reply {
+        account: usize::MAX,
+        answer: crate::worker::Answer::Agenda(Ok(crate::agenda::Read {
+            calendars,
+            ..Default::default()
+        })),
+    });
+}
+
 #[test]
 fn a_read_that_reaches_no_calendar_leaves_what_was_read_last() {
-    use crate::worker::{Answer, Reply};
     let mut app = super::demo();
-    app.agenda = sample();
-    let failed = crate::agenda::CalendarRead {
-        id: "x".into(),
-        name: None,
-        fault: Some("it could not be reached".into()),
-    };
-    app.given_reply(Reply {
-        account: usize::MAX,
-        answer: Answer::Agenda(Ok(crate::agenda::Read {
-            calendars: vec![failed],
-            ..Default::default()
-        })),
-    });
+    app.agenda_calendars = vec![holding("x", sample())];
+    answer(&mut app, vec![not_read("x")]);
     assert_eq!(titles(&app.agenda), ["Visitor talk", "Budget review"]);
     assert!(app.agenda_fault.is_some());
-    app.given_reply(Reply {
-        account: usize::MAX,
-        answer: Answer::Agenda(Ok(crate::agenda::Read {
-            calendars: vec![calendar("x", "One")],
-            ..Default::default()
-        })),
-    });
+    answer(&mut app, vec![calendar("x", "One")]);
     assert!(app.agenda.is_empty(), "read, and nothing there");
     assert!(app.agenda_fault.is_none());
+}
+
+#[test]
+fn what_could_not_be_read_stays_and_what_could_replaces_its_own_again_and_again() {
+    let mut app = super::demo();
+    let events = sample();
+    let moved = Coming {
+        title: "Moved".into(),
+        ..events[1].clone()
+    };
+    app.agenda_calendars = vec![
+        holding("well", vec![events[1].clone()]),
+        holding("ill", vec![events[0].clone()]),
+        holding("forgotten", vec![moved.clone()]),
+    ];
+    for _ in 0..3 {
+        answer(
+            &mut app,
+            vec![holding("well", vec![moved.clone()]), not_read("ill")],
+        );
+        let mut seen = titles(&app.agenda);
+        seen.sort_unstable();
+        assert_eq!(seen, ["Moved", "Visitor talk"], "no more of them each time");
+    }
+    assert!(app.agenda_fault.is_some());
+}
+
+#[test]
+fn google_not_read_at_all_keeps_each_of_its_calendars() {
+    let mut app = super::demo();
+    let events = sample();
+    app.agenda_calendars = vec![
+        holding("google:a", vec![events[0].clone()]),
+        holding("google:b", vec![events[1].clone()]),
+        holding("ical", Vec::new()),
+    ];
+    answer(&mut app, vec![calendar("ical", "One"), not_read("google")]);
+    assert_eq!(titles(&app.agenda), ["Visitor talk", "Budget review"]);
+}
+
+#[test]
+fn every_calendar_read_is_named_though_two_share_a_name() {
+    let read = |id: &str| calendar(id, "Team");
+    assert_eq!(
+        crate::agenda::names(&[read("ical"), read("google:a")]),
+        ["Team", "Team"]
+    );
 }

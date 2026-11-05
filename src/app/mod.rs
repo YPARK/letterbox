@@ -1071,7 +1071,12 @@ impl App {
     pub(super) fn pick_calendars(&mut self) {
         let ids = crate::config::calendar_ids(&self.config).unwrap_or_default();
         if ids.is_empty() {
-            self.status = "no calendar is set".to_string();
+            let google = matches!(crate::config::google_client(&self.config), Ok(Some(_)));
+            self.status = if google {
+                "those Google gives are chosen by what you see in Google Calendar".to_string()
+            } else {
+                "no calendar is set".to_string()
+            };
             return;
         }
         let items = ids

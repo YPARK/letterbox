@@ -16,6 +16,7 @@ mod demo;
 mod edit;
 mod filter;
 mod forest;
+mod google;
 mod grammar;
 mod imap;
 mod index;
@@ -430,6 +431,9 @@ fn command(args: &Args) -> anyhow::Result<()> {
         Some(Command::Calendar { action }) => match action {
             CalendarAction::Set => commands::add_calendar(&args.config, true),
             CalendarAction::Add => commands::add_calendar(&args.config, false),
+            CalendarAction::Google { app } => {
+                commands::sign_in_to_google(&args.config, app.as_deref())
+            }
             CalendarAction::Remove => commands::remove_calendar(&args.config),
         },
         Some(Command::Vault {

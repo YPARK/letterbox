@@ -97,6 +97,9 @@ struct Calendar {
     /// could be several has the one.
     #[serde(default)]
     ids: Option<Vec<String>>,
+    /// The client of the app the user signed in to Google with, if they did.
+    #[serde(default)]
+    google: Option<String>,
 }
 
 /// An AI agent of your own, started as letterbox opens, to look through new
@@ -294,6 +297,36 @@ pub fn calendar_ids(path: &Path) -> anyhow::Result<Vec<String>> {
             .unwrap_or_else(|| vec![crate::agenda::USER.to_string()]),
         None => Vec::new(),
     })
+}
+
+/// Read Google, by the client given, its secrets kept in `keep`. The addresses
+/// set stay as they are, and with none set, none is read.
+pub fn set_google(path: &Path, keep: Keeper, client: &str) -> anyhow::Result<()> {
+    let ids = calendar_ids(path)?;
+    let mut doc = read_doc(path)?;
+    let table = doc
+        .entry("calendar")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    table["keep"] = toml_edit::value(keep.name());
+    table["google"] = toml_edit::value(client);
+    let ids: toml_edit::Array = ids.iter().map(String::as_str).collect();
+    table["ids"] = toml_edit::value(ids);
+    write_doc(path, &doc)
+}
+
+/// The client of the app the user signed in to Google with, if any.
+pub fn google_client(path: &Path) -> anyhow::Result<Option<String>> {
+    Ok(read_file(path)?.calendar.and_then(|c| c.google))
+}
+
+/// All that is kept for the calendars, by what each is kept under.
+pub fn calendar_secrets(path: &Path) -> anyhow::Result<Vec<String>> {
+    let mut all = calendar_ids(path)?;
+    if google_client(path)?.is_some() {
+        all.push(crate::google::SECRET.to_string());
+        all.push(crate::google::REFRESH.to_string());
+    }
+    Ok(all)
 }
 
 /// What the next calendar's address is to be kept under, none of `ids`.

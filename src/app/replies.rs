@@ -266,12 +266,9 @@ impl App {
         }
         if let Answer::Agenda(read) = reply.answer {
             self.agenda_fault = match read {
-                Ok(read) => {
+                Ok(mut read) => {
+                    self.agenda = crate::agenda::carried_over(&self.agenda_calendars, &mut read);
                     let faults = crate::agenda::faults(&read.calendars);
-                    // None read, what was read last is shown still.
-                    if faults.is_empty() || faults.len() < read.calendars.len() {
-                        self.agenda = read.coming;
-                    }
                     self.agenda_calendars = read.calendars;
                     (!faults.is_empty()).then(|| faults.join("; "))
                 }
@@ -286,7 +283,6 @@ impl App {
                 Ok(said) => {
                     // Read again now, as they are.
                     self.agenda_asked = None;
-                    self.agenda_calendars.clear();
                     said
                 }
                 Err(why) => why,
