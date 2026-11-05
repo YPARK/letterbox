@@ -143,6 +143,18 @@ fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     let map = app.map.mode == crate::map::Mode::Map;
     let trash = app.picked_in_trash();
     list.retain(|h| h.act() != Some(keymap::Act::Wider) || app.resizable());
+    // What to press on a draft, where no key says what to do first: E, if
+    // anything is said at all.
+    if let Some(at) = list
+        .iter()
+        .position(|h| h.act() == Some(keymap::Act::TakeUp))
+    {
+        let mut edit = list.remove(at);
+        if app.picked_is_draft() {
+            edit.kept = true;
+            list.insert(0, edit);
+        }
+    }
     // A hint whose keys are all refused there offers nothing.
     if pane == Pane::Map {
         // Down at a message or not, asked once at most.
@@ -158,6 +170,7 @@ fn in_context(app: &App, pane: Pane, list: &mut Vec<keymap::Hint>) {
     }
     for h in list {
         match (h.act(), pane) {
+            (Some(keymap::Act::Together), _) => h.what = app.together_said(),
             (Some(keymap::Act::Trash), Pane::List | Pane::Reader) if trash => h.what = "put back",
             (Some(keymap::Act::Open), Pane::Searching) if map => h.what = "light it on the map",
             (Some(keymap::Act::Open), Pane::Searching) if !app.searches_everywhere() => {

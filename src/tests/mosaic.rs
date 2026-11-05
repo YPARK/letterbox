@@ -568,7 +568,7 @@ fn letterbox_opens_as_it_was_left_the_list_or_the_map_and_its_clusters() {
     press(&mut app, &["Z"]);
     app.look_file = Some(look.clone());
     app.remember_look();
-    assert_eq!(std::fs::read_to_string(&look).unwrap(), "map\n");
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), "map\nopen Demo\n");
     let mut again = demo();
     again.look_file = Some(look.clone());
     again.recall_look();

@@ -1313,3 +1313,102 @@ fn a_flagged_or_answered_message_proposed_says_so_whatever_the_agent_says() {
         "{why}"
     );
 }
+
+#[test]
+fn a_sent_folder_is_known_by_the_names_servers_give_it() {
+    use crate::mail::{Folder, Role};
+    let role = |path: &str| Folder::new(path, Some("/"), None, true).role;
+    for name in [
+        "sent-mail",
+        "Sent_Items",
+        "SENT-MESSAGES",
+        "sentmail",
+        "sent items",
+    ] {
+        assert_eq!(role(name), Role::Sent, "{name}");
+    }
+    assert_eq!(role("sent-for-review"), Role::Other);
+}
+
+#[test]
+fn gmail_files_a_copy_only_of_what_goes_through_gmail_to_gmail() {
+    use crate::imap::keeps_its_own_copy;
+    assert!(keeps_its_own_copy("imap.gmail.com", "smtp.gmail.com"));
+    assert!(!keeps_its_own_copy("imap.gmail.com", "smtp.example.com"));
+    assert!(!keeps_its_own_copy("imap.example.com", "smtp.gmail.com"));
+    assert!(!keeps_its_own_copy("imap.example.com", "smtp.example.com"));
+    assert!(keeps_its_own_copy(
+        "imap.googlemail.com",
+        "smtp.googlemail.com"
+    ));
+}
+
+#[test]
+fn a_sent_folder_made_is_tried_where_the_server_keeps_its_folders_first() {
+    use crate::imap::new_sent_paths;
+    use crate::mail::Folder;
+    let under = |d: &str| {
+        vec![
+            Folder::new("INBOX", Some(d), None, true),
+            Folder::new(&format!("INBOX{d}Drafts"), Some(d), None, true),
+        ]
+    };
+    assert_eq!(new_sent_paths(&under(".")), ["INBOX.Sent", "Sent"]);
+    assert_eq!(new_sent_paths(&under("/")), ["INBOX/Sent", "Sent"]);
+    let beside = vec![
+        Folder::new("INBOX", Some("/"), None, true),
+        Folder::new("Drafts", Some("/"), None, true),
+    ];
+    assert_eq!(new_sent_paths(&beside), ["Sent", "INBOX/Sent"]);
+    assert_eq!(
+        new_sent_paths(&[Folder::new("INBOX", Some("."), None, true)]),
+        ["Sent", "INBOX.Sent"]
+    );
+    assert_eq!(
+        new_sent_paths(&[Folder::new("INBOX", None, None, true)]),
+        ["Sent"]
+    );
+}
+
+#[test]
+fn the_folder_a_server_marks_as_sent_comes_before_one_only_so_named() {
+    use crate::mail::{Folder, Role, role_folder, trash_folder};
+    let folders = [
+        Folder::new("Sent", Some("/"), None, true),
+        Folder::new("Mail/Stuff", Some("/"), Some(Role::Sent), true),
+    ];
+    assert_eq!(
+        role_folder(&folders, Role::Sent).unwrap().path,
+        "Mail/Stuff"
+    );
+    assert_eq!(role_folder(&folders[..1], Role::Sent).unwrap().path, "Sent");
+    let bins = [
+        Folder::new("Trash", Some("/"), None, true),
+        Folder::new("Mail/Bin", Some("/"), Some(Role::Trash), true),
+    ];
+    assert_eq!(trash_folder(&bins, None).unwrap(), "Mail/Bin");
+}
+
+#[test]
+fn every_role_is_known_however_its_name_is_joined_where_such_folders_are_kept() {
+    use crate::mail::{Folder, Role};
+    let role = |path: &str| Folder::new(path, Some("/"), None, true).role;
+    assert_eq!(role("Junk E-mail"), Role::Junk);
+    assert_eq!(role("Deleted_Items"), Role::Trash);
+    assert_eq!(role("INBOX/sent-mail"), Role::Sent);
+    // Further down, a folder of the user's own.
+    assert_eq!(role("Clients/deleted_items"), Role::Other);
+    assert_eq!(role("News/bulk-mail"), Role::Other);
+    assert_eq!(role("Mail/Sent"), Role::Sent, "as ever");
+    assert_eq!(role("Mail/Junk E-mail"), Role::Junk, "as ever");
+}
+
+#[test]
+fn of_folders_only_so_named_the_nearest_the_top_is_the_one() {
+    use crate::mail::{Folder, Role, role_folder};
+    let folders = [
+        Folder::new("Archive/Sent", Some("/"), None, true),
+        Folder::new("Sent", Some("/"), None, true),
+    ];
+    assert_eq!(role_folder(&folders, Role::Sent).unwrap().path, "Sent");
+}

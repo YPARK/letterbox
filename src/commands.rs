@@ -313,11 +313,9 @@ pub(super) fn trash_seeds(
     now: i64,
     ours: &std::collections::HashSet<String>,
 ) -> anyhow::Result<Vec<(i64, filter::Taught)>> {
-    let trash = store
-        .folders()?
-        .into_iter()
-        .find(|f| f.role == mail::Role::Trash)
-        .map(|f| f.path)
+    let folders = store.folders()?;
+    let trash = mail::role_folder(&folders, mail::Role::Trash)
+        .map(|f| f.path.clone())
         .or_else(|| store.trash().map(str::to_string));
     let Some(trash) = trash else {
         return Ok(Vec::new());

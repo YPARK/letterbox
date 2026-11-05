@@ -382,7 +382,7 @@ impl Store for Imap {
     fn send(&mut self, raw: &[u8]) -> anyhow::Result<String> {
         let sent = crate::smtp::submit(&self.account, raw)?;
         let (host, _) = self.account.submission();
-        if crate::smtp::files_sent(&host) || gmail(&self.account.host) {
+        if keeps_its_own_copy(&self.account.host, &host) {
             return Ok("sent".to_string());
         }
         let folder = match self.sent_folder() {
@@ -411,11 +411,8 @@ impl Store for Imap {
             self.kind = Some(Kind::Gmail);
             return Ok(Kind::Gmail);
         }
-        let archive = self
-            .folders()?
-            .into_iter()
-            .find(|f| f.role == Role::Archive && f.selectable)
-            .map(|f| f.path);
+        let folders = self.folders()?;
+        let archive = mail::role_folder(&folders, Role::Archive).map(|f| f.path.clone());
         let keywords = self.run(|s, selected| {
             let mut all = true;
             for folder in std::iter::once("INBOX").chain(archive.as_deref()) {
@@ -546,10 +543,7 @@ impl Store for Imap {
                     on_server: true,
                 });
             }
-            let archive = match folders
-                .iter()
-                .find(|f| f.role == Role::Archive && f.selectable)
-            {
+            let archive = match mail::role_folder(&folders, Role::Archive) {
                 Some(f) => f.path.clone(),
                 None => {
                     self.create("Archive")?;
@@ -803,14 +797,45 @@ impl Imap {
     /// The Sent folder, made if the server has none.
     fn sent_folder(&mut self) -> anyhow::Result<String> {
         let folders = self.folders()?;
-        if let Some(folder) = folders
-            .into_iter()
-            .find(|f| f.role == Role::Sent && f.selectable)
-        {
-            return Ok(folder.path);
+        if let Some(folder) = mail::role_folder(&folders, Role::Sent) {
+            return Ok(folder.path.clone());
         }
-        self.create("Sent")?;
-        Ok("Sent".to_string())
+        let mut made = Err(anyhow::anyhow!("nowhere to make Sent"));
+        for path in new_sent_paths(&folders) {
+            made = self.create(&path).map(|()| path);
+            if made.is_ok() {
+                break;
+            }
+        }
+        made
+    }
+}
+
+/// Whether the server of `imap` files a copy of what goes through `smtp`, so
+/// none is added: Gmail's, of what its own submission server takes. Through
+/// another, or to another's folders, no one has filed it.
+pub fn keeps_its_own_copy(imap: &str, smtp: &str) -> bool {
+    gmail(imap) && crate::smtp::files_sent(smtp)
+}
+
+/// Where a Sent folder may be made on a server with none, the likeliest first:
+/// at the top, or under the Inbox, as some servers keep all there and refuse it
+/// anywhere else.
+pub fn new_sent_paths(folders: &[Folder]) -> Vec<String> {
+    let top = "Sent".to_string();
+    let Some((inbox, d)) = folders
+        .iter()
+        .find(|f| f.role == Role::Inbox)
+        .and_then(|i| Some((i, i.delimiter.as_deref().filter(|d| !d.is_empty())?)))
+    else {
+        return vec![top];
+    };
+    let under = format!("{}{d}Sent", inbox.path);
+    let others: Vec<_> = folders.iter().filter(|f| f.role != Role::Inbox).collect();
+    if !others.is_empty() && others.iter().all(|f| f.is_within(&inbox.path)) {
+        vec![under, top]
+    } else {
+        vec![top, under]
     }
 }
 

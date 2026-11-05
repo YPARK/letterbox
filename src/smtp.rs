@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 /// Whether `host` files a copy of what is sent, so letterbox does not
 /// append one to Sent as well. Gmail's submission server does.
 pub fn files_sent(host: &str) -> bool {
-    host.eq_ignore_ascii_case("smtp.gmail.com")
+    host.eq_ignore_ascii_case("smtp.gmail.com") || host.eq_ignore_ascii_case("smtp.googlemail.com")
 }
 
 /// Send `raw` as `account`. The bytes are what was accepted: rewritten as

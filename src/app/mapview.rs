@@ -388,15 +388,27 @@ impl App {
     /// wide as it was made. Never looked at, the list, and the map, when it
     /// is, from its clusters.
     pub fn recall_look(&mut self) {
-        let Some(said) = self
-            .look_file
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-        else {
+        let Some(path) = &self.look_file else {
             return;
         };
+        let said = std::fs::read_to_string(path).unwrap_or_default();
         let mut lines = said.lines();
         let look = lines.next().unwrap_or_default();
+        // Of several, every account folded, but those left open. One alone is
+        // open unless it was folded: its folders are all it has to go to.
+        let open: Vec<&str> = said
+            .lines()
+            .filter_map(|l| l.strip_prefix("open "))
+            .collect();
+        let several = self.live().count() > 1;
+        for account in &self.accounts {
+            if several && !open.contains(&account.name.as_str()) {
+                self.folded
+                    .entry(account.name.clone())
+                    .or_default()
+                    .insert(String::new());
+            }
+        }
         for line in lines {
             if let Some(w) = line.strip_prefix("reader ") {
                 self.reader_width = w.trim().parse().ok();
@@ -465,8 +477,15 @@ impl App {
             .filter(|(a, p)| !(a.contains(['\n', '\t']) || p.contains(['\n', '\t'])))
             .map(|(a, p)| format!("fold {a}\t{p}\n"))
             .collect();
+        let open: String = self
+            .live()
+            .filter(|&a| !self.is_folded(a, None))
+            .map(|a| &self.accounts[a].name)
+            .filter(|a| !a.contains('\n'))
+            .map(|a| format!("open {a}\n"))
+            .collect();
         // Only how it was left; nothing lost if it cannot be kept.
-        let _ = std::fs::write(path, format!("{look}\n{wide}{save}{folded}"));
+        let _ = std::fs::write(path, format!("{look}\n{wide}{save}{folded}{open}"));
     }
 
     /// Show the map in the middle pane, mail new since it was last looked

@@ -67,12 +67,21 @@ fn the_readme_names_every_key_the_help_does() {
 fn the_foot_and_the_help_come_from_the_table() {
     let mut app = demo();
     let foot = app::screen(&mut app, 120, 30);
-    for h in crate::keymap::foot(crate::keymap::Pane::List) {
+    // E is said only of a draft, and H of where it goes, as their tests have it.
+    for h in crate::keymap::foot(crate::keymap::Pane::List)
+        .into_iter()
+        .filter(|h| {
+            !matches!(
+                h.act(),
+                Some(crate::keymap::Act::TakeUp | crate::keymap::Act::Together)
+            )
+        })
+    {
         let hint = format!(" {} {}", h.key, h.what);
         assert!(foot.contains(&hint), "{hint} in {foot}");
     }
     press(&mut app, &["?"]);
-    let help = app::screen(&mut app, 100, 160);
+    let help = app::screen(&mut app, 100, 170);
     for (name, _) in crate::keymap::help() {
         assert!(help.contains(name), "{name} in {help}");
     }

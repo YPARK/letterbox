@@ -61,6 +61,8 @@ pub enum Act {
     Archive,
     /// The draft picked taken up, to go on writing it.
     TakeUp,
+    /// To every Inbox; there, on to every Sent, then every Drafts.
+    Together,
     NewMail,
     AddAccount,
     Rename,
@@ -515,10 +517,26 @@ pub const KEYS: &[Binding] = &[
         help: "in the map, a mosaic of the clusters, each a block as big as how many it holds, beside those it lies by: z, ⏎ or a click goes into the block picked, its parts a mosaic too, and theirs, down to the threads of a part too small to split, as a tree gone along by j and k, into by l or ⏎, out of by h; Z or esc goes out a level, 0 to all the clusters. The wheel up over a block goes into it, and down out a level",
     },
     Binding {
+        keys: &[("H", Together)],
+        name: "H",
+        hint: "H",
+        foot: &[
+            (Side, "every Inbox"),
+            (List, "every Inbox"),
+            (Map, "every Inbox"),
+        ],
+        help: "to the Inbox of every account; again, to their Sent, then their Drafts, then back. With one account, to its Inbox",
+    },
+    Binding {
         keys: &[("E", TakeUp)],
         name: "E",
         hint: "E",
-        foot: &[],
+        // Said only of a draft, first of all: `in_context`.
+        foot: &[
+            (Side, "edit this draft"),
+            (List, "edit this draft"),
+            (Reader, "edit this draft"),
+        ],
         help: "in Drafts, go on writing the draft picked: sent, it goes to Trash",
     },
     Binding {

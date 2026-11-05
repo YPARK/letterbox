@@ -121,7 +121,7 @@ pub fn named(path: &std::path::Path) -> String {
     }
 }
 
-fn home() -> std::path::PathBuf {
+pub(crate) fn home() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
 }
 
@@ -361,7 +361,13 @@ pub(crate) fn resume(message: &Message, folder: &str) -> Resumed {
 /// `body` above what a reply to `message` opens with, quoting it: as sent,
 /// from `me`, answering it, to all it went to if `all`. An error, if it
 /// cannot be addressed.
-pub fn reply_draft(message: &Message, me: &str, all: bool, body: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn reply_draft(
+    message: &Message,
+    me: &str,
+    all: bool,
+    body: &str,
+    files: &[File],
+) -> Result<Vec<u8>, String> {
     let (to, cc) = if all {
         to_all(message, me)
     } else {
@@ -375,18 +381,19 @@ pub fn reply_draft(message: &Message, me: &str, all: bool, body: &str) -> Result
         &draft,
         in_reply_to.as_deref(),
         references.as_deref(),
-        &[],
+        files,
     ))
 }
 
 /// A new letter, as sent from `me`. An error, if it cannot be addressed, or
 /// a line break in what goes in its headers would add one of its own.
-pub fn new_draft(
+pub(crate) fn new_draft(
     me: &str,
     to: &[String],
     cc: &[String],
     subject: &str,
     body: &str,
+    files: &[File],
 ) -> Result<Vec<u8>, String> {
     let (to, cc) = (to.join(", "), cc.join(", "));
     if [to.as_str(), cc.as_str(), subject]
@@ -396,7 +403,7 @@ pub fn new_draft(
         return Err("a line break in who it is to, or its subject".to_string());
     }
     let draft = parse(&format!("{}\n\n{body}\n", head(&to, &cc, subject)))?;
-    Ok(bytes(me, &draft, None, None, &[]))
+    Ok(bytes(me, &draft, None, None, files))
 }
 
 /// The buffer a reply opens with, and the row its point starts on: the

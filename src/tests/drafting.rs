@@ -311,3 +311,199 @@ fn capital_e_elsewhere_says_what_it_is_for() {
     assert!(app.compose.is_none());
     assert!(app.status.contains("pick one in Drafts"), "{}", app.status);
 }
+
+/// A file of a folder not hidden, as a temporary folder's own name would be.
+fn a_file(name: &str, says: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
+    let path = dir.path().join(name);
+    std::fs::write(&path, says).unwrap();
+    let path = path.to_str().unwrap().to_string();
+    (dir, path)
+}
+
+#[test]
+fn an_agent_attaches_a_file_the_user_named_to_a_new_letter_and_to_a_reply() {
+    let (_dir, path) = a_file("notes.txt", "the notes");
+    let mut server = demo_server(false);
+    let original = in_folder(&mut server, "INBOX")[0].clone();
+    let sent = in_folder(&mut server, "Sent").len();
+    for (tool, args) in [
+        (
+            "draft_message",
+            json!({ "to": ["a@b.example"], "subject": "New with a file", "body": "see it",
+                    "attachments": [path] }),
+        ),
+        (
+            "draft_reply",
+            json!({ "uid": original["uid"], "body": "see it", "attachments": [path] }),
+        ),
+    ] {
+        let r = call(&mut server, tool, args);
+        assert_eq!(r["isError"], false, "{r}");
+        assert_eq!(
+            r["structuredContent"]["attached"],
+            json!(["notes.txt"]),
+            "{r}"
+        );
+    }
+    assert_eq!(in_folder(&mut server, "Sent").len(), sent, "nothing sent");
+    let drafts = in_folder(&mut server, "Drafts");
+    for wanted in ["New with a file", "Re:"] {
+        let draft = drafts
+            .iter()
+            .find(|m| m["subject"].as_str().unwrap().contains(wanted))
+            .unwrap();
+        let read = call(
+            &mut server,
+            "read_message",
+            json!({ "folder": "Drafts", "uid": draft["uid"] }),
+        );
+        let got = read["structuredContent"]["attachments"].to_string();
+        assert!(got.contains("notes.txt"), "{read}");
+    }
+}
+
+#[test]
+fn an_agent_attaches_nothing_unsure_and_no_draft_is_kept_for_it() {
+    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
+    let hidden = dir.path().join(".ssh");
+    std::fs::create_dir(&hidden).unwrap();
+    let key = hidden.join("id");
+    std::fs::write(&key, "a key").unwrap();
+    let link = dir.path().join("looks-fine.txt");
+    std::os::unix::fs::symlink(&key, &link).unwrap();
+    let huge = dir.path().join("huge.bin");
+    std::fs::File::create(&huge)
+        .unwrap()
+        .set_len(crate::mcp::ATTACHED_AT_MOST + 1)
+        .unwrap();
+    let path = |p: &std::path::Path| p.to_str().unwrap().to_string();
+    let mut server = demo_server(false);
+    let drafts = in_folder(&mut server, "Drafts").len();
+    for (given, why) in [
+        (json!(["notes.txt"]), "whole path"),
+        (json!([path(&dir.path().join("none.txt"))]), "cannot"),
+        (json!([path(dir.path())]), "not a file"),
+        (json!([path(&key)]), "hidden"),
+        (json!([path(&link)]), "hidden"),
+        (json!([path(&huge)]), "too much"),
+        (json!("notes.txt"), "list"),
+    ] {
+        let r = call(
+            &mut server,
+            "draft_message",
+            json!({ "to": ["a@b.example"], "subject": "x", "body": "y", "attachments": given }),
+        );
+        assert_eq!(r["isError"], true, "{given}: {r}");
+        assert!(r.to_string().contains(why), "{why}: {r}");
+    }
+    assert_eq!(in_folder(&mut server, "Drafts").len(), drafts);
+}
+
+#[test]
+fn an_agent_attaches_nothing_of_what_the_machine_or_letterbox_keeps_to_itself() {
+    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
+    let config = dir.path().join("accounts.toml");
+    std::fs::write(&config, "").unwrap();
+    let mut server = crate::mcp::Server::new(&config, true).unwrap();
+    let draft = |server: &mut crate::mcp::Server, path: &std::path::Path| {
+        call(
+            server,
+            "draft_message",
+            json!({ "to": ["a@b.example"], "subject": "x", "body": "y",
+                    "attachments": [path.to_str().unwrap()] }),
+        )
+    };
+    let beside = dir.path().join("notes.txt");
+    std::fs::write(&beside, "kept beside it").unwrap();
+    let refused = draft(&mut server, &beside);
+    assert_eq!(refused["isError"], true, "{refused}");
+    let refused = draft(&mut server, &config);
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused.to_string().contains("keeps to itself"), "{refused}");
+    #[cfg(target_os = "linux")]
+    {
+        let r = draft(&mut server, std::path::Path::new("/proc/self/environ"));
+        assert_eq!(r["isError"], true, "{r}");
+        assert!(r.to_string().contains("keeps to itself"), "{r}");
+    }
+}
+
+#[test]
+fn a_file_attached_by_a_link_goes_by_the_name_the_user_gave_it() {
+    let (dir, target) = a_file("ab12cd", "the report");
+    let link = dir.path().join("report.pdf");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let mut server = demo_server(false);
+    let r = call(
+        &mut server,
+        "draft_message",
+        json!({ "to": ["a@b.example"], "subject": "x", "body": "y",
+                "attachments": [link.to_str().unwrap()] }),
+    );
+    assert_eq!(
+        r["structuredContent"]["attached"],
+        json!(["report.pdf"]),
+        "{r}"
+    );
+}
+
+#[test]
+fn a_draft_picked_says_first_of_all_that_e_edits_it() {
+    let mut app = demo();
+    let foot = |app: &mut App| app::screen(app, 200, 40);
+    let inbox = foot(&mut app);
+    assert!(!inbox.contains("edit this draft"), "{inbox}");
+    let drafts = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(*r, app::Row::Folder(0, i) if app.accounts[0].folders[i].name == "Drafts"),
+        )
+        .unwrap();
+    app.focus = Focus::Side;
+    app.row = drafts;
+    press(&mut app, &["<enter>"]);
+    app.settle(PATIENCE);
+    let screen = foot(&mut app);
+    let line = screen
+        .lines()
+        .find(|l| l.contains("edit this draft"))
+        .unwrap_or_else(|| panic!("{screen}"));
+    let at = line.find("E edit this draft").unwrap();
+    assert!(line[..at].trim().is_empty(), "first of the keys: {line}");
+}
+
+#[test]
+fn what_is_off_limits_is_known_by_any_of_its_names_and_the_cloud_is_not() {
+    use crate::mcp::off_limits;
+    use std::path::Path;
+    let config = Path::new("/nowhere/accounts.toml");
+    let home = crate::compose::home().canonicalize().unwrap();
+    let no = |p: &Path| assert!(off_limits(p, config), "{}", p.display());
+    no(&home.join("Library/Keychains/login.keychain-db"));
+    no(&Path::new("/System/Volumes/Data")
+        .join(home.strip_prefix("/").unwrap())
+        .join("Library/Keychains/x"));
+    no(Path::new("/System/Volumes/Data/private/etc/passwd"));
+    no(Path::new("/etc/passwd"));
+    for fine in [
+        "Library/CloudStorage/Dropbox/report.pdf",
+        "Library/Mobile Documents/com~apple~CloudDocs/report.pdf",
+        "Documents/report.pdf",
+    ] {
+        assert!(!off_limits(&home.join(fine), config), "{fine}");
+    }
+}
+
+#[test]
+fn a_tool_given_null_for_what_it_may_leave_out_leaves_it_out() {
+    let mut server = demo_server(false);
+    let r = call(
+        &mut server,
+        "draft_message",
+        json!({ "to": ["a@b.example"], "cc": null, "subject": "x", "body": "y",
+                "attachments": null }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+}
