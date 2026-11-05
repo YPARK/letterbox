@@ -758,13 +758,14 @@ does not understand is left out, and adding it says how many.
 ### Every calendar you see in Google Calendar
 
 A secret address reads one calendar you own. To read them all, those others
-share with you too, sign in to Google. **letterbox does not come with a Google
-app yet, so this takes one of your own**, and plain `lbx calendar google` says so
-and stops. Registering one needs no one else's leave, and you do it once:
+share with you too, sign in to Google. This takes a Google app of your own, as
+[Google's terms](https://developers.google.com/terms) do not let an open source
+project carry one. Registering it needs no one else's leave, and you do it once:
 
 1. In the [Google Cloud console](https://console.cloud.google.com), make a project, and enable the Google Calendar API in it.
-2. Under Google Auth Platform: give it a name and your address, and choose External. Add yourself as a test user, or publish it, as a sign-in in testing lasts seven days.
-3. Make a client, of the type Desktop app, and download its file.
+2. Under Google Auth Platform: give it a name and your address, and choose External.
+3. Under Branding, give a home page and a privacy policy link, with their domain as an authorised domain: your own, or this project's page and its [Privacy](#privacy). Under Audience, choose Publish app, with no need to submit it for verification for your own use. Or stay in testing and add yourself as a test user, where a sign-in lasts seven days.
+4. Make a client, of the type Desktop app, and download its file. Keep it safe, and out of any repository: Google gives its secret only as the client is made.
 
 ```sh
 lbx calendar google --app the-file.json
@@ -774,12 +775,30 @@ The browser opens, and nothing is asked for here. Google warns that the app is
 not verified, as no one has reviewed it: choose to go on. letterbox asks only to
 read. It reads the calendars you have chosen to see in Google Calendar, and leaves
 out what you said no to; `r` in the popup lists only those added by address.
-`lbx calendar remove` forgets the sign-in too.
+To sign in again, plain `lbx calendar google` uses the same app, and `--app`
+takes another. `lbx calendar remove` forgets the sign-in and the app too, so the
+next sign-in takes the file again.
 
 An agent finds when you are free from `upcoming_events`, or a calendar tool of
 its own, and suggests times; see [how to triage](#how-to-triage).
 `upcoming_events` says which calendars it read, so an agent relying on it
 says that any other you count as busy was not checked.
+
+## Privacy
+
+letterbox runs on your own machine, and has no server of its own. What it reads
+of your mail and calendars goes from the provider to your machine, and is kept
+there; nothing is sent to its authors. A sign-in to Google asks only to read your
+calendars, and what it gets is kept where you keep your passwords and goes to
+Google alone. `lbx calendar remove` forgets it, and your Google account's settings
+take back its access. A sign-in to Microsoft is kept the same way, and goes to
+Microsoft alone.
+
+Others see only that your machine asked, and for what: Hugging Face when the
+grammar model is fetched, and the site of a PDF linked in your mail, as arXiv, when
+you open it.
+An AI agent you connect yourself sees what you let it read, under that agent's
+own terms.
 
 ## In Emacs
 

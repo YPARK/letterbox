@@ -235,10 +235,10 @@ pub(super) enum CalendarAction {
     /// Read one more beside those set, its address asked for in the same way
     Add,
     /// Read every calendar you see in Google Calendar: signed in once, in the
-    /// browser. letterbox comes with no Google app yet, so this takes --app
+    /// browser, with a Google app of your own
     Google {
-        /// The file Google gives for a Desktop app you registered yourself: the
-        /// README says how
+        /// The file Google gives for the Desktop app you registered: the README
+        /// says how. Signing in again, the last one is used
         #[arg(long, value_name = "FILE")]
         app: Option<std::path::PathBuf>,
     },

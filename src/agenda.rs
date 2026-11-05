@@ -951,20 +951,30 @@ fn read_google(
     now: Timestamp,
     to: Timestamp,
 ) -> anyhow::Result<Vec<Reading>> {
-    let kept = |what| {
-        crate::secret::find(keeper, HOST, what).map_err(|_| {
-            anyhow::anyhow!(
-                "its sign-in could not be read from where it is kept: lbx calendar google \
-                 signs in again"
-            )
-        })
-    };
-    let app = crate::google::App {
-        client: client.to_string(),
-        secret: kept(crate::google::SECRET)?,
-    };
-    let refresh = kept(crate::google::REFRESH)?;
+    let app = app_kept(client, |what| crate::secret::find(keeper, HOST, what))?;
+    let refresh = crate::secret::find(keeper, HOST, crate::google::REFRESH).map_err(|_| {
+        anyhow::anyhow!(
+            "its sign-in could not be read from where it is kept: lbx calendar google \
+             signs in again"
+        )
+    })?;
     crate::google::read(&crate::google::Hosts::default(), &app, &refresh, now, to)
+}
+
+/// The app of the last sign-in, by its ID and by `find` for its secret, which
+/// comes only from there or from Google's file.
+pub fn app_kept(
+    client: &str,
+    find: impl FnOnce(&str) -> anyhow::Result<String>,
+) -> anyhow::Result<crate::google::App> {
+    let secret = find(crate::google::SECRET).context(
+        "the app of the last sign-in could not be read from where it is kept: \
+         lbx calendar google --app the-file signs in again",
+    )?;
+    Ok(crate::google::App {
+        client: client.to_string(),
+        secret,
+    })
 }
 
 /// Keep a sign-in to Google with `app`, once it has read: one that does not read

@@ -1,6 +1,6 @@
-//! Google's calendars, by a sign-in with an app registered with Google: one a
-//! build comes with, if any, or one the user registered, which needs no one's
-//! leave but theirs. It reads, and asks to do nothing more.
+//! Google's calendars, by a sign-in with an app the user registered with Google,
+//! which needs no one's leave but theirs, as an open source project may not carry
+//! one. It reads, and asks to do nothing more.
 
 use crate::agenda::{Entry, Feed, Reading, Unread};
 use crate::oauth::{Loopback, WAIT, encode, post};
@@ -66,11 +66,6 @@ impl App {
             );
         }
         Ok(App { client, secret })
-    }
-
-    /// The app letterbox comes with, if this build has one.
-    pub fn built_in() -> Option<App> {
-        App::from_json(include_str!("google_app.json")).ok()
     }
 }
 

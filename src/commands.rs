@@ -773,26 +773,42 @@ pub(super) fn set_agent(config: &std::path::Path, command: Option<String>) -> an
 }
 
 /// Read every calendar the user sees in Google Calendar: signed in once in the
-/// browser, with the app in the file `given`, or that letterbox comes with. What
+/// browser, with the app in the file `given`, or that of the last sign-in. What
 /// lets it read is kept only once it has read.
 pub(super) fn sign_in_to_google(
     config: &std::path::Path,
     given: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     use crate::google;
-    let app = match given {
-        Some(file) => google::App::from_json(
-            &std::fs::read_to_string(file).context("cannot read that file")?,
-        )?,
-        None => google::App::built_in().context(
-            "this build comes with no Google app: register one, and give the file \
-             Google gives for it, as --app the-file; the README says how",
-        )?,
-    };
     let keeper = crate::agenda::keeper(config)?;
-    if keeper == crate::secret::Keeper::Vault {
-        open_vault(true)?;
-    }
+    let open = |create| {
+        if keeper == crate::secret::Keeper::Vault {
+            open_vault(create)
+        } else {
+            Ok(())
+        }
+    };
+    let app = match given {
+        Some(file) => {
+            let app = google::App::from_json(
+                &std::fs::read_to_string(file).context("cannot read that file")?,
+            )?;
+            open(true)?;
+            app
+        }
+        None => {
+            let client = crate::config::google_client(config)?.context(
+                "this takes a Google app of your own: register one, and give the file \
+                 Google gives for it, as --app the-file; the README says how",
+            )?;
+            // A new vault could not hold the secret of an app already kept.
+            open(false)?;
+            println!("With the app of your last sign-in: --app the-file takes another.");
+            crate::agenda::app_kept(&client, |what| {
+                crate::secret::find(keeper, crate::agenda::HOST, what)
+            })?
+        }
+    };
     println!(
         "Sign in in your browser. Google may warn that the app is not verified: choose to go on."
     );
