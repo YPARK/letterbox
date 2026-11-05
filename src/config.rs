@@ -82,6 +82,21 @@ struct File {
     account: Vec<Account>,
     #[serde(default)]
     agent: Option<Agent>,
+    #[serde(default)]
+    calendar: Option<Calendar>,
+}
+
+/// A calendar to read: `[calendar]`, with where its address is kept, as a
+/// password is, as it is as good as one.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Calendar {
+    #[serde(default)]
+    keep: Keeper,
+    /// What each address is kept under, in order; a file from before there
+    /// could be several has the one.
+    #[serde(default)]
+    ids: Option<Vec<String>>,
 }
 
 /// An AI agent of your own, started as letterbox opens, to look through new
@@ -111,6 +126,44 @@ pub fn shell_quote(word: &str) -> String {
 /// the file at `path`.
 pub fn agent(path: &Path) -> anyhow::Result<Option<String>> {
     Ok(set(read_file(path)?.agent.and_then(|a| a.command)))
+}
+
+/// What Claude Code is told, to look through new mail.
+const CLAUDE_ARGS: &str = "-p /mcp__letterbox__mail-triage --allowedTools mcp__letterbox__triage,mcp__letterbox__recent_messages,mcp__letterbox__read_message,mcp__letterbox__suggest_label,mcp__letterbox__report_triage";
+
+/// Claude Code looking through new mail, as `lbx agent set` sets it unless
+/// told another: by the whole path `found` for it, if any, as a program opened
+/// from a launcher may not have the shell's `PATH`.
+pub fn claude_agent(found: Option<&str>) -> String {
+    let program = found.map_or_else(|| "claude".to_string(), shell_quote);
+    format!("{program} {CLAUDE_ARGS}")
+}
+
+/// Set the agent started as letterbox opens to `command`, or none, in the
+/// file at `path`; all else there kept.
+pub fn set_agent(path: &Path, command: Option<&str>) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    match command {
+        Some(command) => {
+            let table = doc
+                .entry("agent")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+            table["command"] = toml_edit::value(command);
+        }
+        None => {
+            let left = doc
+                .get_mut("agent")
+                .and_then(|a| a.as_table_mut())
+                .map(|a| {
+                    a.remove("command");
+                    a.is_empty()
+                });
+            if left == Some(true) {
+                doc.remove("agent");
+            }
+        }
+    }
+    write_doc(path, &doc)
 }
 
 /// How an agent opens letterbox in a terminal, if it is set in the file
@@ -209,6 +262,59 @@ fn read_file(path: &Path) -> anyhow::Result<File> {
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
     };
     toml::from_str(&text).with_context(|| format!("cannot read {}", path.display()))
+}
+
+/// Where the address of the calendar to read is kept; none if none is set.
+pub fn calendar(path: &Path) -> anyhow::Result<Option<Keeper>> {
+    Ok(read_file(path)?.calendar.map(|c| c.keep))
+}
+
+/// Set where the calendars' addresses are kept, as `keep`; or read none.
+pub fn set_calendar(path: &Path, keep: Option<Keeper>) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    match keep {
+        Some(keep) => {
+            let table = doc
+                .entry("calendar")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+            table["keep"] = toml_edit::value(keep.name());
+        }
+        None => {
+            doc.remove("calendar");
+        }
+    }
+    write_doc(path, &doc)
+}
+
+/// What each calendar's address is kept under, in order; none if none is set.
+pub fn calendar_ids(path: &Path) -> anyhow::Result<Vec<String>> {
+    Ok(match read_file(path)?.calendar {
+        Some(calendar) => calendar
+            .ids
+            .unwrap_or_else(|| vec![crate::agenda::USER.to_string()]),
+        None => Vec::new(),
+    })
+}
+
+/// What the next calendar's address is to be kept under, none of `ids`.
+pub fn next_calendar_id(ids: &[String]) -> String {
+    let mut id = crate::agenda::USER.to_string();
+    let mut n = 1;
+    while ids.contains(&id) {
+        n += 1;
+        id = format!("{}-{n}", crate::agenda::USER);
+    }
+    id
+}
+
+/// The calendars set, as what each address is kept under.
+pub fn set_calendars(path: &Path, ids: &[String]) -> anyhow::Result<()> {
+    let mut doc = read_doc(path)?;
+    if let Some(table) = doc.get_mut("calendar").and_then(|c| c.as_table_mut()) {
+        let ids: toml_edit::Array = ids.iter().map(String::as_str).collect();
+        table["ids"] = toml_edit::value(ids);
+    }
+    write_doc(path, &doc)
 }
 
 /// The accounts in the file at `path`; none if there is no file.

@@ -97,6 +97,8 @@ const FOUND: usize = 200;
 const PAUSE: Duration = Duration::from_millis(150);
 /// How often the folder shown is looked in again, and the folders counted.
 const REFRESH: Duration = Duration::from_secs(120);
+/// How often the calendar is read again.
+const AGENDA_AGAIN: Duration = Duration::from_secs(15 * 60);
 /// How often answers are looked for, between keys.
 const POLL: Duration = Duration::from_millis(50);
 /// How many bytes of the messages read before are kept, to show again at
@@ -496,6 +498,20 @@ pub struct App {
     pub map: Map,
     /// What the map's model has read, between one snapshot and the next.
     map_corpus: Option<crate::model::Corpus>,
+    /// What is coming up in the calendar, shown along the top.
+    pub agenda: Vec<crate::agenda::Coming>,
+    /// Why it could not be read again.
+    pub agenda_fault: Option<String>,
+    /// The calendars set, as last read.
+    pub agenda_calendars: Vec<crate::agenda::CalendarRead>,
+    /// How the calendar's popup shows it.
+    pub calendar_view: CalendarView,
+    /// Whether a calendar is being added or forgotten, off this thread.
+    pub calendars_changing: bool,
+    /// When it was last asked for.
+    agenda_asked: Option<Instant>,
+    /// Whether this is the demo, with nothing of the user's read or kept.
+    pub demo: bool,
     /// The folder files were last attached from.
     pub attach_dir: Option<PathBuf>,
     /// The folder the message's files were last saved in.
@@ -646,7 +662,7 @@ fn carry_out(launch: &Launch, terminal: &mut DefaultTerminal) -> String {
                 &mut std::io::stdout(),
                 format!("\x1b]52;c;{code}\x07").as_bytes(),
             );
-            "copied the address".to_string()
+            "copied".to_string()
         }
     }
 }
@@ -804,6 +820,13 @@ impl App {
             mapping: String::new(),
             map: Map::default(),
             map_corpus: None,
+            agenda: Vec::new(),
+            agenda_fault: None,
+            agenda_calendars: Vec::new(),
+            calendar_view: CalendarView::default(),
+            calendars_changing: false,
+            agenda_asked: None,
+            demo: false,
             attach_dir: None,
             save_dir: None,
             reader_width: None,
@@ -955,6 +978,139 @@ impl App {
         self.pending
     }
 
+    /// What the demo has for itself, nothing of the user's read.
+    pub fn as_demo(&mut self) {
+        self.fix_accounts();
+        self.agenda = crate::agenda::demo();
+        self.demo = true;
+        *self.library.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Box::new(crate::demo::shelf()));
+    }
+
+    /// Read the calendar off this thread, as it starts and now and then.
+    fn read_agenda(&mut self) {
+        if self.demo
+            || self
+                .agenda_asked
+                .is_some_and(|at| at.elapsed() < AGENDA_AGAIN)
+        {
+            return;
+        }
+        self.agenda_asked = Some(Instant::now());
+        // None set, nothing is ever asked of the store or the web.
+        if !matches!(crate::config::calendar(&self.config), Ok(Some(_))) {
+            self.agenda.clear();
+            self.agenda_calendars.clear();
+            self.agenda_fault = None;
+            return;
+        }
+        self.pending += 1;
+        let replies = self.replies_to.clone();
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let read = crate::agenda::read(&config, crate::agenda::AHEAD_DAYS);
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::Agenda(match read {
+                    Ok(read) => Ok(read.unwrap_or_default()),
+                    Err(e) => Err(format!("{e:#}")),
+                }),
+            });
+        });
+    }
+
+    /// Whether the calendars may be changed now; if not, it is said why.
+    pub(super) fn may_change_calendars(&mut self) -> bool {
+        if self.demo {
+            self.status = "the demo keeps no calendar".to_string();
+        } else if self.calendars_changing {
+            self.status = "a calendar is still being changed: try again in a moment".to_string();
+        } else {
+            return true;
+        }
+        false
+    }
+
+    /// Do `work` on the calendars off this thread, and say what it says.
+    fn change_calendars(
+        &mut self,
+        work: impl FnOnce(&std::path::Path) -> anyhow::Result<String> + Send + 'static,
+    ) {
+        self.dialog = Dialog::Calendar(0);
+        self.calendars_changing = true;
+        self.pending += 1;
+        let replies = self.replies_to.clone();
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let _ = replies.send(Reply {
+                account: usize::MAX,
+                answer: Answer::CalendarsChanged(work(&config).map_err(|e| format!("{e:#}"))),
+            });
+        });
+    }
+
+    /// Add the calendar at the address `typed`: refused at once, the address
+    /// unsaid, if it could not be one.
+    pub(super) fn add_calendar(&mut self, typed: String) {
+        if let Err(why) = crate::agenda::address(&typed) {
+            self.status = format!("{why:#}");
+            return;
+        }
+        self.status = "reading that calendar".to_string();
+        self.change_calendars(move |config| {
+            let (feed, _) = crate::agenda::add(config, &typed, false)?;
+            let name = feed.name.unwrap_or_else(|| "the calendar".to_string());
+            Ok(match feed.unread.rules + feed.unread.events {
+                0 => format!("{name} added"),
+                out => format!("{name} added, {out} left out as not understood"),
+            })
+        });
+    }
+
+    /// The menu of calendars set, each ticked, to untick those to forget.
+    pub(super) fn pick_calendars(&mut self) {
+        let ids = crate::config::calendar_ids(&self.config).unwrap_or_default();
+        if ids.is_empty() {
+            self.status = "no calendar is set".to_string();
+            return;
+        }
+        let items = ids
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let label = self
+                    .agenda_calendars
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map_or_else(|| format!("calendar {}", i + 1), |c| c.called(i + 1));
+                (id, label, true)
+            })
+            .collect();
+        self.dialog = Dialog::Calendars(CalendarPick { items, at: 0 });
+    }
+
+    /// Forget the calendars `gone`.
+    pub(super) fn forget_calendars(&mut self, gone: Vec<String>) {
+        if gone.is_empty() {
+            self.dialog = Dialog::Calendar(0);
+            self.status = "every calendar kept".to_string();
+            return;
+        }
+        self.change_calendars(move |config| {
+            crate::agenda::remove(config, &gone)?;
+            let n = gone.len();
+            Ok(format!(
+                "{n} calendar{} forgotten",
+                if n == 1 { "" } else { "s" }
+            ))
+        });
+    }
+
+    #[cfg(test)]
+    pub fn read_no_calendar_yet(&mut self) {
+        self.agenda_asked = Some(Instant::now());
+    }
+
     /// Do what has waited long enough; whether anything was done.
     pub fn tick(&mut self) -> bool {
         let mut any = self.tick_held();
@@ -969,6 +1125,7 @@ impl App {
             self.refresh();
             any = true;
         }
+        self.read_agenda();
         self.take_reports() || any
     }
 

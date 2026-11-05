@@ -332,6 +332,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "suggest_label",
             "would_throw_away",
             "recent_messages",
+            "upcoming_events",
             "triage",
             "uncertain_messages",
             "draft_reply",

@@ -152,8 +152,10 @@ fn t_starts_the_agent_set_and_it_is_said_when_it_ends() {
     let path = dir.path().join("accounts.toml");
     assert_eq!(crate::config::agent(&path).unwrap(), None);
     let mut app = demo_map();
+    app.config = path.clone();
     press(&mut app, &["T"]);
-    assert!(app.status.contains("no agent is set"), "{}", app.status);
+    assert!(matches!(app.dialog, app::Dialog::NoAgent));
+    press(&mut app, &["<esc>"]);
 
     let script = "echo looked at $LETTERBOX_AGENT; exit 3";
     std::fs::write(&path, format!("[agent]\ncommand = \"{script}\"\n")).unwrap();
@@ -181,6 +183,8 @@ fn an_agent_that_could_not_start_has_not_run() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts.toml");
     let mut app = demo_map();
+    crate::config::set_agent(&path, Some("exit 0")).unwrap();
+    app.config = path.clone();
     let mut set = app::AgentSet::beside("exit 0".to_string(), &path);
     set.log = dir.path().to_path_buf();
     let ran = set.ran.clone();
@@ -430,6 +434,8 @@ fn an_agent_that_failed_leaves_the_mail_for_the_next_one() {
     let path = dir.path().join("accounts.toml");
     std::fs::write(path.with_file_name("agent-ran"), "5").unwrap();
     let mut app = demo_map();
+    crate::config::set_agent(&path, Some("exit 3")).unwrap();
+    app.config = path.clone();
     let set = app::AgentSet::beside("exit 3".to_string(), &path);
     let ran = set.ran.clone();
     app.agent_set = Some(set);
@@ -446,6 +452,8 @@ fn an_agent_that_finished_has_run() {
     let path = dir.path().join("accounts.toml");
     std::fs::write(path.with_file_name("agent-ran"), "5").unwrap();
     let mut app = demo_map();
+    crate::config::set_agent(&path, Some("exit 0")).unwrap();
+    app.config = path.clone();
     app.agent_set = Some(app::AgentSet::beside("exit 0".to_string(), &path));
     press(&mut app, &["T"]);
     until_ended(&mut app);
@@ -469,4 +477,94 @@ fn a_message_no_longer_where_it_was_proposed_from_is_left_where_it_is() {
     assert!(app.status.contains("not on the map"), "{}", app.status);
     assert_eq!(dot_labels(&app, subject), was);
     assert_eq!(thrown(&app), before, "nothing learnt");
+}
+
+#[test]
+fn t_with_no_agent_says_in_a_popup_what_to_paste_and_c_copies_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = demo_map();
+    app.config = dir.path().join("accounts.toml");
+    press(&mut app, &["T"]);
+    let screen = app::screen(&mut app, 100, 30);
+    assert!(screen.contains("claude mcp add"), "{screen}");
+    assert!(screen.contains("lbx agent set"), "{screen}");
+    press(&mut app, &["c"]);
+    assert!(!app.dialog.is_open());
+    match app.launch.as_ref() {
+        Some(app::Launch::Copy(text)) => {
+            assert!(text.contains("claude mcp add --scope user letterbox"));
+            assert!(text.contains("\nlbx agent set"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_popup_for_t_fits_a_narrow_window() {
+    use unicode_width::UnicodeWidthStr;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = demo_map();
+    app.config = dir.path().join("accounts.toml");
+    press(&mut app, &["T"]);
+    let screen = app::screen(&mut app, 40, 12);
+    assert!(screen.lines().all(|l| l.width() <= 40), "{screen}");
+}
+
+#[test]
+fn an_agent_set_while_letterbox_is_open_starts_on_t_with_no_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = demo_map();
+    app.config = path.clone();
+    crate::config::set_agent(&path, Some("exit 0")).unwrap();
+    press(&mut app, &["T"]);
+    assert!(!app.dialog.is_open());
+    assert!(app.agent_set.is_some());
+    assert!(app.status.contains("looking through"), "{}", app.status);
+}
+
+#[test]
+fn an_agent_is_set_in_the_file_and_what_else_is_there_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(&path, "# mine\n[agent]\nopen = \"o {lbx}\"\n").unwrap();
+    crate::config::set_agent(&path, Some("first")).unwrap();
+    crate::config::set_agent(&path, Some("second")).unwrap();
+    assert_eq!(
+        crate::config::agent(&path).unwrap().as_deref(),
+        Some("second")
+    );
+    assert_eq!(
+        crate::config::opener(&path).unwrap().as_deref(),
+        Some("o {lbx}")
+    );
+    assert!(std::fs::read_to_string(&path).unwrap().contains("# mine"));
+    crate::config::set_agent(&path, None).unwrap();
+    assert_eq!(crate::config::agent(&path).unwrap(), None);
+    assert_eq!(
+        crate::config::opener(&path).unwrap().as_deref(),
+        Some("o {lbx}")
+    );
+}
+
+#[test]
+fn the_agent_set_by_default_is_the_one_the_readme_gives() {
+    let readme = include_str!("../../README.md");
+    assert!(readme.contains(&crate::config::claude_agent(None)));
+}
+
+#[test]
+fn t_starts_the_agent_as_it_is_set_now_or_says_there_is_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let mut app = demo_map();
+    app.config = path.clone();
+    crate::config::set_agent(&path, Some("exit 0")).unwrap();
+    press(&mut app, &["T"]);
+    assert_eq!(app.agent_set.as_ref().unwrap().command, "exit 0");
+    until_ended(&mut app);
+    crate::config::set_agent(&path, None).unwrap();
+    press(&mut app, &["T"]);
+    assert!(matches!(app.dialog, app::Dialog::NoAgent));
+    assert!(app.agent_set.is_none());
 }

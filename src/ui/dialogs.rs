@@ -18,6 +18,291 @@ pub(super) fn dialog<'a>(t: &Theme, width: u16, title: &'a str, foot: &str) -> B
         .style(Style::new().bg(t.page).fg(t.text))
 }
 
+/// How to connect an agent, as T found none: what to paste in a terminal.
+pub(super) fn no_agent_dialog(f: &mut Frame, t: &Theme) -> Rect {
+    let width = f.area().width.min(76);
+    let room = usize::from(width).saturating_sub(4);
+    let text = |said: &str, lines: &mut Vec<Line>| {
+        lines.extend(wrap(said, room).into_iter().map(Line::from));
+    };
+    let mut lines = Vec::new();
+    text(
+        "No agent is connected yet. Paste these in a terminal, for Claude Code:",
+        &mut lines,
+    );
+    lines.push(Line::default());
+    for command in crate::app::CONNECT_AGENT {
+        lines.extend(
+            wrap(command, room)
+                .into_iter()
+                .map(|l| Line::styled(l, Style::new().fg(t.title).bold())),
+        );
+    }
+    lines.push(Line::default());
+    text(
+        "The first lets it read your mail through letterbox; the second has T start it. Then press T again.",
+        &mut lines,
+    );
+    text(
+        "Another agent: lbx agent set \"its command\", and the README's MCP section.",
+        &mut lines,
+    );
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            width,
+            "Connect an agent",
+            "c copies the commands · any other key closes",
+        )),
+        area,
+    );
+    area
+}
+
+/// The calendars set, ticked to keep: those unticked are forgotten on enter.
+pub(super) fn calendars_dialog(f: &mut Frame, t: &Theme, pick: &crate::app::CalendarPick) -> Rect {
+    let width = f.area().width.min(60);
+    let room = usize::from(width).saturating_sub(4);
+    let lines: Vec<Line> = pick
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, (_, label, ticked))| {
+            let tick = if *ticked { "[x]" } else { "[ ]" };
+            let style = if i == pick.at {
+                Style::new().bg(t.focus).fg(t.title)
+            } else {
+                Style::new().fg(t.text)
+            };
+            Line::styled(clip(&format!("{tick} {label}"), room), style)
+        })
+        .collect();
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            width,
+            "Calendars",
+            "space ticks · ⏎ forgets those unticked · esc keeps all",
+        )),
+        area,
+    );
+    area
+}
+
+/// What the calendar's popup shows.
+pub(super) struct CalendarShown<'a> {
+    pub coming: &'a [crate::agenda::Coming],
+    pub calendars: &'a [crate::agenda::CalendarRead],
+    pub zone: jiff::tz::TimeZone,
+    pub fault: Option<&'a str>,
+    pub view: crate::app::CalendarView,
+    pub now: jiff::Timestamp,
+}
+
+/// The narrowest a table's cell may be: narrower, the list is shown.
+const CELL_LEAST: usize = 8;
+/// What one day of the month holds at most, however tall the window.
+const MONTH_HOLDS: usize = 4;
+const MONTH_WEEKS: usize = 5;
+
+/// One cell's lines, each with its style.
+type Cell = Vec<(String, Style)>;
+
+/// `rows` of cells side by side, each `cell` wide, ruled off.
+fn table_rows(t: &Theme, rows: &[Vec<Cell>], cell: usize) -> Vec<Line<'static>> {
+    let rule = Style::new().fg(t.rule);
+    let mut lines = Vec::new();
+    for row in rows {
+        let height = row.iter().map(Vec::len).max().unwrap_or(0).max(1);
+        for at in 0..height {
+            let mut spans = vec![Span::styled("│", rule)];
+            for column in row {
+                let (text, style) = column
+                    .get(at)
+                    .cloned()
+                    .unwrap_or((String::new(), Style::new()));
+                let text = clip(&text, cell);
+                let pad = " ".repeat(cell.saturating_sub(text.width()));
+                spans.push(Span::styled(format!("{text}{pad}"), style));
+                spans.push(Span::styled("│", rule));
+            }
+            lines.push(Line::from(spans));
+        }
+        let across = format!("├{}┤", vec!["─".repeat(cell); row.len()].join("┼"));
+        lines.push(Line::styled(across, rule));
+    }
+    lines.pop();
+    lines
+}
+
+/// A column for each of seven days from today: its name, then when and what.
+fn week_table(t: &Theme, shown: &CalendarShown, cell: usize) -> Vec<Line<'static>> {
+    let today = shown.now.to_zoned(shown.zone.clone()).date();
+    let days = crate::agenda::on_each_day(shown.coming, shown.now, today, 7, &shown.zone);
+    let (when, what) = (
+        Style::new().fg(t.when).add_modifier(Modifier::BOLD),
+        Style::new().fg(t.event),
+    );
+    let mut heads = Vec::new();
+    let mut bodies = Vec::new();
+    for (date, on) in today.series(1.day()).zip(&days) {
+        let style = if date == today {
+            Style::new().fg(t.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(t.title).add_modifier(Modifier::BOLD)
+        };
+        heads.push(vec![(date.strftime("%a %-d").to_string(), style)]);
+        let mut body = Vec::new();
+        for (at, title) in on {
+            if !at.is_empty() {
+                body.push((at.clone(), when));
+            }
+            body.extend(wrap(title, cell).into_iter().map(|l| (l, what)));
+        }
+        bodies.push(body);
+    }
+    table_rows(t, &[heads, bodies], cell)
+}
+
+/// A day of the month's table: its number, the month's name too if it is the
+/// first shown or of its month, and what it holds, as many as `holds`, and how
+/// many more.
+fn month_cell(
+    t: &Theme,
+    date: jiff::civil::Date,
+    today: jiff::civil::Date,
+    named: bool,
+    on: &[(String, String)],
+    holds: usize,
+) -> Cell {
+    let style = if date == today {
+        Style::new().fg(t.accent).add_modifier(Modifier::BOLD)
+    } else if date < today {
+        Style::new().fg(t.faint)
+    } else {
+        Style::new().fg(t.soft)
+    };
+    let form = if named { "%b %-d" } else { "%-d" };
+    let mut cell = vec![(date.strftime(form).to_string(), style)];
+    let room = if on.len() > holds {
+        holds.saturating_sub(1)
+    } else {
+        holds
+    };
+    for (at, title) in on.iter().take(room) {
+        let said = if at.is_empty() {
+            title.clone()
+        } else {
+            format!("{at} {title}")
+        };
+        cell.push((said, Style::new().fg(t.event)));
+    }
+    if on.len() > room {
+        cell.push((format!("+{} more", on.len() - room), Style::new().fg(t.dim)));
+    }
+    cell
+}
+
+/// Five weeks from the Sunday of this one.
+fn month_table(t: &Theme, shown: &CalendarShown, cell: usize, holds: usize) -> Vec<Line<'static>> {
+    let today = shown.now.to_zoned(shown.zone.clone()).date();
+    let back = today.weekday().to_sunday_zero_offset();
+    let first = today.checked_sub(i64::from(back).days()).unwrap_or(today);
+    let days =
+        crate::agenda::on_each_day(shown.coming, shown.now, first, 7 * MONTH_WEEKS, &shown.zone);
+    let head = Style::new().fg(t.title).add_modifier(Modifier::BOLD);
+    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let mut rows: Vec<Vec<Cell>> =
+        vec![names.iter().map(|n| vec![(n.to_string(), head)]).collect()];
+    let cells: Vec<Cell> = first
+        .series(1.day())
+        .zip(&days)
+        .map(|(date, on)| {
+            let named = date == first || date.day() == 1;
+            month_cell(t, date, today, named, on, holds)
+        })
+        .collect();
+    rows.extend(cells.chunks(7).map(<[Cell]>::to_vec));
+    table_rows(t, &rows, cell)
+}
+
+/// The list: each day said once.
+fn list_lines(t: &Theme, shown: &CalendarShown, room: usize) -> Vec<Line<'static>> {
+    let rows = crate::agenda::listing(shown.coming, shown.now, &shown.zone);
+    let day = rows.iter().map(|(d, ..)| d.width()).max().unwrap_or(0);
+    let time = rows.iter().map(|(_, w, _)| w.width()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(d, w, what)| {
+            let left = room.saturating_sub(day + time + 4);
+            Line::from(vec![
+                Span::styled(format!("{d:<day$}  "), Style::new().fg(t.title).bold()),
+                Span::styled(format!("{w:>time$}  "), Style::new().fg(t.when).bold()),
+                Span::styled(clip(what, left), Style::new().fg(t.event)),
+            ])
+        })
+        .collect()
+}
+
+/// What is coming up, in a popup scrolled to `scroll`: as the view asks, or
+/// the list if the window is too narrow for a table; what the calendars are
+/// above it, and what went wrong in reading them, or that there is nothing.
+pub(super) fn calendar_dialog(
+    f: &mut Frame,
+    t: &Theme,
+    shown: &CalendarShown,
+    scroll: usize,
+) -> (Rect, usize) {
+    use crate::app::CalendarView::{List, Month, Week};
+    let width = f.area().width.min(150);
+    let room = usize::from(width).saturating_sub(4);
+    let cell = room.saturating_sub(8) / 7;
+    let view = if cell < CELL_LEAST { List } else { shown.view };
+    let mut lines: Vec<Line> = wrap(&crate::agenda::names(shown.calendars).join(", "), room)
+        .into_iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| Line::styled(l, Style::new().fg(t.dim)))
+        .collect();
+    lines.extend(
+        shown
+            .fault
+            .into_iter()
+            .flat_map(|why| wrap(why, room))
+            .map(|l| Line::styled(l, Style::new().fg(t.error))),
+    );
+    if !shown.coming.iter().any(|c| c.on_at(shown.now)) && shown.fault.is_none() {
+        lines.push(Line::from("Nothing coming up."));
+        lines.push(Line::from("No calendar set yet? a adds one."));
+    }
+    // Each week takes its rule and its number; what is left, what it holds.
+    let tall = usize::from(f.area().height).saturating_sub(lines.len() + 4);
+    let holds = (tall / MONTH_WEEKS).saturating_sub(2).clamp(1, MONTH_HOLDS);
+    lines.extend(match view {
+        Week => week_table(t, shown, cell),
+        Month => month_table(t, shown, cell, holds),
+        List => list_lines(t, shown, room),
+    });
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    let shows = usize::from(area.height.saturating_sub(2));
+    let scroll = scroll.min(lines.len().saturating_sub(shows));
+    let foot = if lines.len() > shows {
+        "tab week, month, list · a adds · r removes · j/k scroll · esc closes"
+    } else {
+        "tab week, month, list · a adds · r removes · esc closes"
+    };
+    let lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
+    let title = format!("Calendar: {}", view.name());
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(t, width, &title, foot)),
+        area,
+    );
+    (area, scroll)
+}
+
 /// `foot`, its hints dropped whole from the end till it is `room` wide,
 /// but the one for esc, kept last: how to leave is never lost.
 pub(super) fn fit_foot(foot: &str, room: usize) -> String {

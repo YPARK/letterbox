@@ -66,6 +66,8 @@ pub enum Act {
     Rename,
     Remove,
     Help,
+    /// What is coming up in the calendar, in a popup.
+    Calendar,
     /// The map's view, to be changed: the keys of `VIEW`.
     View,
     /// In the map, read mail shown or hidden.
@@ -531,7 +533,7 @@ pub const KEYS: &[Binding] = &[
         name: "T",
         hint: "T",
         foot: &[(List, "agent"), (Map, "agent")],
-        help: "start your own agent, named as [agent] in accounts.toml, to look through new mail: what it finds pops up here, to choose what is done. It starts on its own as letterbox opens only if new mail came since it last ran",
+        help: "start your own agent, to look through new mail, or, with none set, say what to paste to set one: what it finds pops up here, to choose what is done. It starts on its own as letterbox opens only if new mail came since it last ran",
     },
     Binding {
         keys: &[("i", Review)],
@@ -668,6 +670,13 @@ pub const KEYS: &[Binding] = &[
         hint: "",
         foot: &[],
         help: "in the message being written, as C-c C-s: Emacs's key to check spelling",
+    },
+    Binding {
+        keys: &[("C", Calendar)],
+        name: "C",
+        hint: "",
+        foot: &[],
+        help: "what is coming up in your calendars, in a popup: tab goes from the week to the month to the list; a adds a calendar, r lists them with [x] to untick and forget, j/k and the page keys scroll, esc or C closes",
     },
     Binding {
         keys: &[("?", Help), ("F1", Help)],

@@ -57,6 +57,21 @@ pub fn move_secrets(
         (true, Some(why)) => said.push(stays("the map's key", why)),
         (false, _) => {}
     }
+    if let Some(from) = config::calendar(path)?.filter(|from| *from != to) {
+        let host = crate::agenda::HOST;
+        let ids = config::calendar_ids(path)?;
+        for id in &ids {
+            let address = find(from, host, id).context("cannot read the calendar's address")?;
+            keep(to, host, id, &address).context("cannot keep the calendar's address")?;
+        }
+        config::set_calendar(path, Some(to))?;
+        for id in &ids {
+            said.push(match forget(from, host, id) {
+                Ok(()) => format!("the calendar's address: kept {}", to.about()),
+                Err(e) => stays("the calendar's address", format!("{e:#}")),
+            });
+        }
+    }
     Ok(said)
 }
 

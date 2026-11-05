@@ -237,6 +237,8 @@ fn every_colour_reads_on_every_ground_it_is_drawn_on() {
             ("faint", t.faint, 4.5),
             ("accent", t.accent, 4.5),
             ("flag", t.flag, 4.5),
+            ("when", t.when, 4.5),
+            ("event", t.event, 4.5),
             ("error", t.error, 4.5),
         ];
         let grounds = [

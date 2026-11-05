@@ -95,6 +95,46 @@ pub fn map_panes(width: u16, focus: Focus) -> [u16; 3] {
     }
 }
 
+/// The most rows the strip takes, and how tall a window must be to give it
+/// more than one.
+const STRIP_ROWS: usize = 2;
+const STRIP_ROOMY: u16 = 12;
+
+/// What is coming up, along the top, soonest first, to take in at a glance:
+/// `coming`, in order, in as many of `rows` as it needs at `room` wide: an event
+/// too long for a row alone is cut, and none is split.
+fn agenda_lines(
+    t: &Theme,
+    coming: &[(String, String)],
+    room: usize,
+    rows: usize,
+) -> Vec<Line<'static>> {
+    let when = Style::new().fg(t.when).add_modifier(Modifier::BOLD);
+    let (what, gap) = (Style::new().fg(t.event), Style::new().fg(t.dim));
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (at, title) in coming {
+        if !spans.is_empty() && used + "  ·  ".width() + at.width() + 1 + title.width() > room {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+            if lines.len() == rows {
+                return lines;
+            }
+        }
+        let sep = if spans.is_empty() { " " } else { "  ·  " };
+        let left = room.saturating_sub(used + sep.width() + at.width() + 1);
+        used += sep.width() + at.width() + 1 + title.width().min(left);
+        spans.push(Span::styled(sep, gap));
+        spans.push(Span::styled(format!("{at} "), when));
+        spans.push(Span::styled(clip(title, left), what));
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.keep_reading_in_view();
     let t = app.theme;
@@ -104,8 +144,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.area(),
     );
     let (foot_lines, spots) = foot(app, f.area().width);
-    let [top, main, foot_area] = Layout::vertical([
+    let now = jiff::Timestamp::now();
+    let mut coming = crate::agenda::strip(&app.agenda, now, &jiff::tz::TimeZone::system());
+    match (&app.agenda_fault, coming.is_empty()) {
+        (Some(fault), true) => coming.push(("Calendar:".to_string(), fault.clone())),
+        // What is shown is not all there is, so it is not taken for free time.
+        (Some(_), false) => coming.insert(
+            0,
+            (
+                "Calendar:".to_string(),
+                "not read in full, C says why".to_string(),
+            ),
+        ),
+        _ => {}
+    }
+    let strip_rows = if f.area().height < STRIP_ROOMY {
+        1
+    } else {
+        STRIP_ROWS
+    };
+    let strip = agenda_lines(&t, &coming, usize::from(f.area().width), strip_rows);
+    let [top, strip_area, main, foot_area] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(strip.len() as u16),
         Constraint::Min(3),
         Constraint::Length(foot_lines.len() as u16),
     ])
@@ -163,6 +224,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         read = over(main);
     }
     search(f, app, top);
+    f.render_widget(Paragraph::new(strip), strip_area);
     if side_w > 0 {
         sidebar(f, app, side);
     }
@@ -228,6 +290,33 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.dialog = Dialog::Help(scroll);
             Some((area, Vec::new()))
         }
+        Dialog::NoAgent => Some((no_agent_dialog(f, &t), Vec::new())),
+        &Dialog::Calendar(scroll) => {
+            let (area, scroll) = calendar_dialog(
+                f,
+                &t,
+                &CalendarShown {
+                    coming: &app.agenda,
+                    calendars: &app.agenda_calendars,
+                    zone: jiff::tz::TimeZone::system(),
+                    fault: app.agenda_fault.as_deref(),
+                    view: app.calendar_view,
+                    now,
+                },
+                scroll,
+            );
+            app.dialog = Dialog::Calendar(scroll);
+            Some((area, Vec::new()))
+        }
+        Dialog::Calendars(pick) => Some((calendars_dialog(f, &t, pick), Vec::new())),
+        Dialog::AddCalendar(typed) => Some(asking(
+            f,
+            &t,
+            "Add a calendar",
+            "⏎ adds it · esc stops",
+            "Paste its secret address: in Google Calendar, its settings, Integrate calendar, Secret address in iCal format. It is as good as a password, so it is not shown.",
+            &"•".repeat(typed.chars().count()),
+        )),
         Dialog::Form(form) => Some(form_dialog(f, &t, form)),
         Dialog::Files(files) => Some(files_dialog(f, &t, files)),
         Dialog::Attach(picker) => Some(attach_dialog(f, &t, picker)),

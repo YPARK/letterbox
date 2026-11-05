@@ -166,6 +166,12 @@ impl App {
         self.dialog = Dialog::Applied(Box::new(Applied { said, failed }));
     }
 
+    #[cfg(test)]
+    pub fn given_reply(&mut self, reply: Reply) {
+        self.pending += 1;
+        self.take_reply(reply);
+    }
+
     /// Take a server's answer: what it asks in turn is not remembered for
     /// C-x u, as it follows the answer, not a key.
     pub(super) fn take_reply(&mut self, reply: Reply) {
@@ -257,6 +263,35 @@ impl App {
         }
         if let Answer::Added(added) = reply.answer {
             return self.added(added);
+        }
+        if let Answer::Agenda(read) = reply.answer {
+            self.agenda_fault = match read {
+                Ok(read) => {
+                    let faults = crate::agenda::faults(&read.calendars);
+                    // None read, what was read last is shown still.
+                    if faults.is_empty() || faults.len() < read.calendars.len() {
+                        self.agenda = read.coming;
+                    }
+                    self.agenda_calendars = read.calendars;
+                    (!faults.is_empty()).then(|| faults.join("; "))
+                }
+                // What was read last is shown still: it is likely right.
+                Err(why) => Some(why),
+            };
+            return;
+        }
+        if let Answer::CalendarsChanged(changed) = reply.answer {
+            self.calendars_changing = false;
+            self.status = match changed {
+                Ok(said) => {
+                    // Read again now, as they are.
+                    self.agenda_asked = None;
+                    self.agenda_calendars.clear();
+                    said
+                }
+                Err(why) => why,
+            };
+            return;
         }
         if let Answer::Drawn(snapshot) = reply.answer {
             return self.drawn_map(*snapshot);
@@ -408,6 +443,8 @@ impl App {
             | Answer::Shelved { .. }
             | Answer::Mapping(_)
             | Answer::Drawn(_)
+            | Answer::Agenda(_)
+            | Answer::CalendarsChanged(_)
             | Answer::Relaid { .. }
             | Answer::Checked { .. }
             | Answer::Raw { .. }

@@ -22,6 +22,7 @@ use std::time::Duration;
 const PATIENCE: Duration = Duration::from_secs(120);
 
 mod accounts;
+mod agenda;
 mod agents;
 mod asking;
 mod bulk;

@@ -73,11 +73,53 @@ pub enum Item {
     Link { url: String, name: Option<String> },
 }
 
+/// How the calendar's popup shows what is coming: tab goes round them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CalendarView {
+    #[default]
+    Week,
+    Month,
+    List,
+}
+
+impl CalendarView {
+    pub fn name(self) -> &'static str {
+        match self {
+            CalendarView::Week => "Week",
+            CalendarView::Month => "Month",
+            CalendarView::List => "List",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            CalendarView::Week => CalendarView::Month,
+            CalendarView::Month => CalendarView::List,
+            CalendarView::List => CalendarView::Week,
+        }
+    }
+}
+
+/// The calendars set, what each address is kept under, what to call it, and
+/// whether it is ticked, to keep; and the one picked.
+pub struct CalendarPick {
+    pub items: Vec<(String, String, bool)>,
+    pub at: usize,
+}
+
 #[derive(Default)]
 pub enum Dialog {
     #[default]
     Closed,
     Help(usize),
+    /// The calendars set, to untick those to forget.
+    Calendars(CalendarPick),
+    /// A calendar's address, as typed so far: never shown.
+    AddCalendar(String),
+    /// How to connect an agent, as T found none set.
+    NoAgent,
+    /// What is coming up in the calendar, scrolled so far.
+    Calendar(usize),
     Form(Box<Form>),
     Files(Files),
     Trash(TrashPick),
@@ -206,16 +248,28 @@ impl Dialog {
         }
     }
 
+    /// What is being typed in it, if a line is.
+    pub(super) fn typed_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Dialog::Rename(_, typed)
+            | Dialog::Label(typed)
+            | Dialog::RenameLabel(_, typed)
+            | Dialog::AddCalendar(typed) => Some(typed),
+            _ => None,
+        }
+    }
+
     /// Move in it: scroll the help, or pick another item, or field.
     pub(super) fn step(&mut self, by: isize) {
         let (at, len) = match self {
-            Dialog::Help(scroll) => {
+            Dialog::Help(scroll) | Dialog::Calendar(scroll) => {
                 *scroll = scroll.saturating_add_signed(by);
                 return;
             }
             Dialog::Form(form) if !form.checking => return form.step(by),
             Dialog::Files(files) => (&mut files.at, files.items.len()),
             Dialog::Trash(pick) => (&mut pick.at, pick.folders.len()),
+            Dialog::Calendars(pick) => (&mut pick.at, pick.items.len()),
             Dialog::Attach(picker) => return picker.step(by),
             Dialog::SaveTo(s) => return s.picker.step(by),
             _ => return,
@@ -236,12 +290,70 @@ impl App {
         };
         match &mut self.dialog {
             Dialog::Closed => {}
+            // Esc or its own key closes it, and no other: a key pressed astray
+            // does not take away what is being read.
+            Dialog::Calendar(_) => match key.code {
+                KeyCode::Tab => {
+                    self.calendar_view = self.calendar_view.next();
+                    self.dialog = Dialog::Calendar(0);
+                }
+                KeyCode::Char('a') if self.may_change_calendars() => {
+                    self.dialog = Dialog::AddCalendar(String::new());
+                }
+                KeyCode::Char('r') if self.may_change_calendars() => self.pick_calendars(),
+                KeyCode::Esc | KeyCode::Char('C') => self.dialog = Dialog::Closed,
+                _ => match keymap::act(key) {
+                    Some(Act::Down) => self.dialog.step(1),
+                    Some(Act::Up) => self.dialog.step(-1),
+                    Some(Act::ScreenDown | Act::PageDown) => self.dialog.step(10),
+                    Some(Act::ScreenUp | Act::PageUp) => self.dialog.step(-10),
+                    _ => {}
+                },
+            },
+            Dialog::Calendars(pick) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Calendar(0),
+                KeyCode::Char(' ') => {
+                    if let Some(item) = pick.items.get_mut(pick.at) {
+                        item.2 = !item.2;
+                    }
+                }
+                KeyCode::Enter => {
+                    let gone = pick
+                        .items
+                        .iter()
+                        .filter(|(_, _, ticked)| !ticked)
+                        .map(|(id, ..)| id.clone())
+                        .collect();
+                    self.forget_calendars(gone);
+                }
+                _ => match keymap::act(key) {
+                    Some(Act::Down) => self.dialog.step(1),
+                    Some(Act::Up) => self.dialog.step(-1),
+                    _ => {}
+                },
+            },
+            Dialog::AddCalendar(typed) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Calendar(0),
+                KeyCode::Enter => {
+                    let typed = typed.clone();
+                    self.add_calendar(typed);
+                }
+                _ => {
+                    edit_line(typed, key);
+                }
+            },
             Dialog::Help(_) => match keymap::act(key) {
                 Some(Act::Down) => self.dialog.step(1),
                 Some(Act::Up) => self.dialog.step(-1),
                 Some(Act::ScreenDown | Act::PageDown) => self.dialog.step(10),
                 _ => self.dialog = Dialog::Closed,
             },
+            Dialog::NoAgent => {
+                self.dialog = Dialog::Closed;
+                if key.code == KeyCode::Char('c') {
+                    self.launch = Some(Launch::Copy(agent::CONNECT_AGENT.join("\n")));
+                }
+            }
             Dialog::Form(_) => self.form_key(key),
             Dialog::Files(_) => self.files_key(key),
             Dialog::Attach(_) => self.attach_key(key),
@@ -360,7 +472,14 @@ impl App {
             // Away from help, or from renaming, closes it, the name left
             // as it is.
             (
-                Dialog::Help(_) | Dialog::Rename(..) | Dialog::Label(_) | Dialog::RenameLabel(..),
+                Dialog::Help(_)
+                | Dialog::Calendar(_)
+                | Dialog::NoAgent
+                | Dialog::AddCalendar(_)
+                | Dialog::Calendars(_)
+                | Dialog::Rename(..)
+                | Dialog::Label(_)
+                | Dialog::RenameLabel(..),
                 _,
             ) => self.dialog = Dialog::Closed,
             (Dialog::Trash(pick), Some(Target::Item(i))) => {

@@ -10,6 +10,13 @@ const REPORTS_EVERY: Duration = Duration::from_secs(3);
 /// and a key pressed as it came was meant for what was there before.
 pub const GRACE: Duration = Duration::from_millis(800);
 
+/// What connects Claude Code to letterbox, and has T start it: each short
+/// enough to paste whole, and asked for the path as a Dock's app has no PATH.
+pub const CONNECT_AGENT: [&str; 2] = [
+    "claude mcp add --scope user letterbox -- \"$(command -v lbx)\" mcp",
+    "lbx agent set",
+];
+
 /// The agent started, while it runs.
 pub struct AgentRun {
     pub child: std::process::Child,
@@ -86,7 +93,34 @@ impl ReportView {
 }
 
 impl App {
-    /// T: start your agent, if one is set and it is not running already,
+    /// T: your agent as it is set now, which may have changed since letterbox
+    /// opened, started; or, with none set, what to paste to set one.
+    pub(super) fn agent_asked(&mut self) {
+        if self.agent.is_some() {
+            self.status = "your agent is still looking through new mail".to_string();
+            return;
+        }
+        // The demo has none of the user's, as it has no mail of theirs.
+        let command = if self.demo {
+            Ok(None)
+        } else {
+            config::agent(&self.config)
+        };
+        match command {
+            Ok(Some(command)) => match &mut self.agent_set {
+                Some(set) => set.command = command,
+                None => self.agent_set = Some(AgentSet::beside(command, &self.config)),
+            },
+            Ok(None) => self.agent_set = None,
+            Err(why) => {
+                self.status = format!("{why:#}");
+                return;
+            }
+        }
+        self.run_agent();
+    }
+
+    /// Start your agent, if one is set and it is not running already,
     /// told by `LETTERBOX_AGENT` that letterbox started it, what it says
     /// written to its log, only you able to read it.
     pub(super) fn run_agent(&mut self) {
@@ -95,9 +129,7 @@ impl App {
             return;
         }
         let Some(set) = &mut self.agent_set else {
-            self.status =
-                "no agent is set: name one as [agent] in accounts.toml, as the README says"
-                    .to_string();
+            self.dialog = Dialog::NoAgent;
             return;
         };
         set.due = false;

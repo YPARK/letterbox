@@ -487,7 +487,9 @@ pub(super) fn stores_for_tui(args: &Args) -> anyhow::Result<Vec<(String, Box<dyn
         return stores(args);
     }
     let mut accounts = config::load(&args.config)?;
-    if accounts.iter().any(in_vault)
+    let calendar_in_vault =
+        config::calendar(&args.config)?.is_some_and(|k| k == secret::Keeper::Vault);
+    if (accounts.iter().any(in_vault) || calendar_in_vault)
         && let Err(e) = open_vault(false)
     {
         eprintln!("letterbox: {e:#}");
@@ -728,5 +730,54 @@ pub(super) fn restore_trash(
     if failed > 0 {
         bail!("{failed} not put back, each said above: still in the ledger, to try again");
     }
+    Ok(())
+}
+
+/// Add a calendar from its address, typed where it is not seen and not left
+/// in the shell's history, kept only once it has given a calendar; `alone`,
+/// the others forgotten as it is.
+pub(super) fn add_calendar(config: &std::path::Path, alone: bool) -> anyhow::Result<()> {
+    let given = ask_password("The calendar's secret address")?;
+    if crate::agenda::keeper(config)? == crate::secret::Keeper::Vault {
+        open_vault(true)?;
+    }
+    let (feed, keeper) = crate::agenda::add(config, &given, alone)?;
+    println!(
+        "{}: {} events read; its address is kept {}",
+        feed.name.as_deref().unwrap_or("the calendar"),
+        feed.entries.len(),
+        keeper.about()
+    );
+    if feed.unread.rules + feed.unread.events > 0 {
+        println!(
+            "{} left out, as what is not understood is not guessed at",
+            feed.unread.rules + feed.unread.events
+        );
+    }
+    Ok(())
+}
+
+/// Have T start `command`, or Claude Code, by its whole path if it is found.
+pub(super) fn set_agent(config: &std::path::Path, command: Option<String>) -> anyhow::Result<()> {
+    let command = command.unwrap_or_else(|| {
+        let found = crate::config::shell("command -v claude")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        crate::config::claude_agent(found.as_deref().map(str::trim))
+    });
+    crate::config::set_agent(config, Some(&command))?;
+    println!("T in letterbox starts: {command}");
+    Ok(())
+}
+
+/// Read no calendar, and forget their addresses.
+pub(super) fn remove_calendar(config: &std::path::Path) -> anyhow::Result<()> {
+    if crate::config::calendar(config)? == Some(crate::secret::Keeper::Vault) {
+        open_vault(false)?;
+    }
+    crate::agenda::remove(config, &crate::config::calendar_ids(config)?)?;
+    println!("no calendar is read");
     Ok(())
 }
