@@ -2,7 +2,8 @@
 //! do, on Microsoft's own page: OAuth 2.0, with PKCE. The password, and a
 //! second factor, are given to Microsoft alone; letterbox is given a token
 //! for IMAP and for sending that it renews, and that the account's owner, or its
-//! organisation, may take back.
+//! organisation, may take back. How the browser comes back, and what is asked
+//! of a sign-in service, serve Google's too.
 //!
 //! Two ways are tried at once, whichever is done first: Microsoft's page in
 //! the browser, which comes back to a server letterbox runs on this machine
@@ -34,7 +35,7 @@ pub const SMTP_HOST: &str = "smtp.office365.com";
 const SCOPE: &str = "https://outlook.office.com/IMAP.AccessAsUser.All \
      https://outlook.office.com/SMTP.Send offline_access";
 /// How long signing in is waited for: in tests, not long.
-const WAIT: Duration = Duration::from_secs(if cfg!(test) { 20 } else { 15 * 60 });
+pub(crate) const WAIT: Duration = Duration::from_secs(if cfg!(test) { 20 } else { 15 * 60 });
 /// A token is renewed this long before it runs out.
 const EARLY: Duration = Duration::from_secs(120);
 
@@ -52,7 +53,7 @@ fn endpoint(tenant: &str, what: &str) -> String {
 
 use crate::net::agent;
 
-fn post(url: &str, form: &[(&str, &str)]) -> anyhow::Result<Value> {
+pub(crate) fn post(url: &str, form: &[(&str, &str)]) -> anyhow::Result<Value> {
     let mut resp = agent()
         .post(url)
         .send_form(form.iter().copied())
@@ -95,9 +96,9 @@ fn tokens(v: &Value, refresh: Option<&str>) -> anyhow::Result<Tokens> {
     })
 }
 
-/// What went wrong, as Microsoft says it: its first line, which names the
+/// What went wrong, as the sign-in service says it: its first line, which names the
 /// error, without the trace and time it adds.
-fn failure(v: &Value) -> Option<String> {
+pub(crate) fn failure(v: &Value) -> Option<String> {
     let code = v["error"].as_str()?;
     let said = v["error_description"]
         .as_str()
@@ -113,7 +114,7 @@ fn random(n: usize) -> String {
 }
 
 /// `s` as a URL's query has it.
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
@@ -217,6 +218,43 @@ pub fn browse(url: &str) {
         .spawn();
 }
 
+/// Where the browser comes back to from a sign-in, with what proves it is this
+/// one.
+pub(crate) struct Loopback {
+    listener: TcpListener,
+    pub redirect: String,
+    pub verifier: String,
+    pub challenge: String,
+    pub state: String,
+}
+
+impl Loopback {
+    /// Listen on this machine, the browser told to come back by `host`.
+    pub fn open(host: &str) -> anyhow::Result<Loopback> {
+        let listener = TcpListener::bind("127.0.0.1:0").context("cannot listen for the browser")?;
+        listener.set_nonblocking(true)?;
+        let redirect = format!("http://{host}:{}", listener.local_addr()?.port());
+        let verifier = random(48);
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        Ok(Loopback {
+            listener,
+            redirect,
+            verifier,
+            challenge,
+            state: random(16),
+        })
+    }
+
+    /// The code the browser has brought, if it has come back for this sign-in.
+    pub fn poll(&self) -> anyhow::Result<Option<String>> {
+        match self.listener.accept() {
+            Ok((tcp, _)) => came_back(tcp, &self.state),
+            Err(_) => Ok(None),
+        }
+    }
+}
+
 /// Sign in as `email`, with the client `client` of the tenant `tenant`:
 /// Microsoft's page opened by `open`, and its device page, both offered by
 /// `show`, until one of them is done, `stop` is set, or a quarter of an
@@ -229,20 +267,16 @@ pub fn sign_in(
     open: fn(&str),
     show: impl FnOnce(&Waiting),
 ) -> anyhow::Result<Tokens> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("cannot listen for the browser")?;
-    listener.set_nonblocking(true)?;
-    let redirect = format!("http://localhost:{}", listener.local_addr()?.port());
-    let verifier = random(48);
-    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(Sha256::digest(verifier.as_bytes()));
-    let state = random(16);
+    let back = Loopback::open("localhost")?;
     let page = format!(
         "{}?client_id={}&response_type=code&response_mode=query&redirect_uri={}&scope={}\
-         &code_challenge={challenge}&code_challenge_method=S256&state={state}&login_hint={}",
+         &code_challenge={}&code_challenge_method=S256&state={}&login_hint={}",
         endpoint(tenant, "authorize"),
         encode(client),
-        encode(&redirect),
+        encode(&back.redirect),
         encode(SCOPE),
+        back.challenge,
+        back.state,
         encode(email)
     );
     let mut device = post(
@@ -275,17 +309,15 @@ pub fn sign_in(
         if stop.load(Ordering::Relaxed) {
             bail!("signing in was stopped");
         }
-        if let Ok((tcp, _)) = listener.accept()
-            && let Some(code) = came_back(tcp, &state)?
-        {
+        if let Some(code) = back.poll()? {
             let v = post(
                 &endpoint(tenant, "token"),
                 &[
                     ("client_id", client),
                     ("grant_type", "authorization_code"),
                     ("code", &code),
-                    ("redirect_uri", &redirect),
-                    ("code_verifier", &verifier),
+                    ("redirect_uri", &back.redirect),
+                    ("code_verifier", &back.verifier),
                     ("scope", SCOPE),
                 ],
             )?;
@@ -318,14 +350,18 @@ pub fn sign_in(
     bail!("no one signed in within a quarter of an hour")
 }
 
-/// Take the browser's request back from Microsoft: the code it brings, if
+/// Take the browser's request back from the sign-in: the code it brings, if
 /// it is for this sign-in; the page shown in the browser says what came of
 /// it.
 fn came_back(tcp: std::net::TcpStream, state: &str) -> anyhow::Result<Option<String>> {
     tcp.set_nonblocking(false)?;
     tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut line = String::new();
-    BufReader::new(&tcp).read_line(&mut line)?;
+    // A connection that says nothing, as a browser may open ahead of asking,
+    // is not the end of the sign-in.
+    if BufReader::new(&tcp).read_line(&mut line).is_err() || line.is_empty() {
+        return Ok(None);
+    }
     let target = line.split_whitespace().nth(1).unwrap_or_default();
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let params: HashMap<String, String> = query
@@ -368,7 +404,7 @@ fn came_back(tcp: std::net::TcpStream, state: &str) -> anyhow::Result<Option<Str
         params
             .get("error_description")
             .or(params.get("error"))
-            .map_or("Microsoft did not sign you in.", String::as_str),
+            .map_or("You were not signed in.", String::as_str),
     );
     reply("200 OK", &escape(&said));
     bail!("{said}")

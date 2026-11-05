@@ -1063,6 +1063,7 @@ impl Server {
                             id: crate::agenda::USER.to_string(),
                             name: Some("Demo".to_string()),
                             fault: None,
+                            coming: Vec::new(),
                         }],
                         ..Default::default()
                     })

@@ -228,13 +228,21 @@ pub(super) enum VaultAction {
 
 #[derive(Subcommand)]
 pub(super) enum CalendarAction {
-    /// Read this calendar alone, from its address, asked for, not given here, as it is
+    /// Read this in place of all those set by address, asked for, not given here, as it is
     /// as good as a password: in Google Calendar, its settings, "Secret
     /// address in iCal format"
     Set,
     /// Read one more beside those set, its address asked for in the same way
     Add,
-    /// Read none, and forget their addresses
+    /// Read every calendar you see in Google Calendar: signed in once, in the
+    /// browser. letterbox comes with no Google app yet, so this takes --app
+    Google {
+        /// The file Google gives for a Desktop app you registered yourself: the
+        /// README says how
+        #[arg(long, value_name = "FILE")]
+        app: Option<std::path::PathBuf>,
+    },
+    /// Read none, and forget their addresses and any sign-in
     Remove,
 }
 

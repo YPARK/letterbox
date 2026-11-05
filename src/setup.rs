@@ -59,18 +59,32 @@ pub fn move_secrets(
     }
     if let Some(from) = config::calendar(path)?.filter(|from| *from != to) {
         let host = crate::agenda::HOST;
-        let ids = config::calendar_ids(path)?;
+        let ids = config::calendar_secrets(path)?;
         for id in &ids {
-            let address = find(from, host, id).context("cannot read the calendar's address")?;
-            keep(to, host, id, &address).context("cannot keep the calendar's address")?;
+            let address =
+                find(from, host, id).context("cannot read what is kept for the calendars")?;
+            keep(to, host, id, &address).context("cannot keep what is kept for the calendars")?;
         }
         config::set_calendar(path, Some(to))?;
-        for id in &ids {
-            said.push(match forget(from, host, id) {
-                Ok(()) => format!("the calendar's address: kept {}", to.about()),
-                Err(e) => stays("the calendar's address", format!("{e:#}")),
-            });
+        let left: Vec<String> = ids
+            .iter()
+            .filter_map(|id| {
+                let why = forget(from, host, id).err()?;
+                let what = if id.starts_with("google-") {
+                    "Google's sign-in"
+                } else {
+                    "a calendar's address"
+                };
+                Some(stays(what, format!("{why:#}")))
+            })
+            .collect();
+        if left.is_empty() {
+            said.push(format!(
+                "what is kept for the calendars: kept {}",
+                to.about()
+            ));
         }
+        said.extend(left);
     }
     Ok(said)
 }

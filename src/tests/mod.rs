@@ -35,6 +35,7 @@ mod folders;
 mod folding;
 mod gmail;
 mod gmail_agents;
+mod google;
 mod grammar;
 mod hints;
 mod imap_server;

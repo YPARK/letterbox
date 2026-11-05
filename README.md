@@ -751,9 +751,30 @@ Google Calendar, a calendar's settings, *Integrate calendar*, *Secret address
 in iCal format*. It takes no sign-in, and letterbox only reads it. The address
 is as good as a password, so it is kept as one, and never shown. An event on two
 calendars is listed once, and one that cannot be read is said while the others
-are shown. `lbx calendar set` reads one alone, the others forgotten; `lbx
-calendar remove` forgets them all. A repeat a rule describes in a way letterbox
+are shown. `lbx calendar set` puts one in place of all those set by address; `lbx calendar
+remove` forgets them all. A repeat a rule describes in a way letterbox
 does not understand is left out, and adding it says how many.
+
+### Every calendar you see in Google Calendar
+
+A secret address reads one calendar you own. To read them all, those others
+share with you too, sign in to Google. **letterbox does not come with a Google
+app yet, so this takes one of your own**, and plain `lbx calendar google` says so
+and stops. Registering one needs no one else's leave, and you do it once:
+
+1. In the [Google Cloud console](https://console.cloud.google.com), make a project, and enable the Google Calendar API in it.
+2. Under Google Auth Platform: give it a name and your address, and choose External. Add yourself as a test user, or publish it, as a sign-in in testing lasts seven days.
+3. Make a client, of the type Desktop app, and download its file.
+
+```sh
+lbx calendar google --app the-file.json
+```
+
+The browser opens, and nothing is asked for here. Google warns that the app is
+not verified, as no one has reviewed it: choose to go on. letterbox asks only to
+read. It reads the calendars you have chosen to see in Google Calendar, and leaves
+out what you said no to; `r` in the popup lists only those added by address.
+`lbx calendar remove` forgets the sign-in too.
 
 An agent finds when you are free from `upcoming_events`, or a calendar tool of
 its own, and suggests times; see [how to triage](#how-to-triage).

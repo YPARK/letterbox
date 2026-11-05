@@ -772,12 +772,53 @@ pub(super) fn set_agent(config: &std::path::Path, command: Option<String>) -> an
     Ok(())
 }
 
-/// Read no calendar, and forget their addresses.
+/// Read every calendar the user sees in Google Calendar: signed in once in the
+/// browser, with the app in the file `given`, or that letterbox comes with. What
+/// lets it read is kept only once it has read.
+pub(super) fn sign_in_to_google(
+    config: &std::path::Path,
+    given: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    use crate::google;
+    let app = match given {
+        Some(file) => google::App::from_json(
+            &std::fs::read_to_string(file).context("cannot read that file")?,
+        )?,
+        None => google::App::built_in().context(
+            "this build comes with no Google app: register one, and give the file \
+             Google gives for it, as --app the-file; the README says how",
+        )?,
+    };
+    let keeper = crate::agenda::keeper(config)?;
+    if keeper == crate::secret::Keeper::Vault {
+        open_vault(true)?;
+    }
+    println!(
+        "Sign in in your browser. Google may warn that the app is not verified: choose to go on."
+    );
+    let refresh = google::sign_in(&google::Hosts::default(), &app, |page| {
+        println!("If no browser opens, go to:\n{page}");
+        crate::oauth::browse(page);
+    })?;
+    let read = crate::agenda::keep_google(config, keeper, &app, &refresh)?;
+    let names = crate::agenda::names(&read.calendars);
+    if names.is_empty() {
+        println!("Signed in, but no calendar is ticked to be seen in Google Calendar");
+    } else {
+        println!("Reading: {}", names.join(", "));
+    }
+    for fault in crate::agenda::faults(&read.calendars) {
+        println!("Not read: {fault}");
+    }
+    Ok(())
+}
+
+/// Read no calendar, and forget their addresses and any sign-in.
 pub(super) fn remove_calendar(config: &std::path::Path) -> anyhow::Result<()> {
     if crate::config::calendar(config)? == Some(crate::secret::Keeper::Vault) {
         open_vault(false)?;
     }
-    crate::agenda::remove(config, &crate::config::calendar_ids(config)?)?;
+    crate::agenda::forget_all(config)?;
     println!("no calendar is read");
     Ok(())
 }
