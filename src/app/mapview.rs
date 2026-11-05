@@ -394,13 +394,15 @@ impl App {
         let said = std::fs::read_to_string(path).unwrap_or_default();
         let mut lines = said.lines();
         let look = lines.next().unwrap_or_default();
-        // Every account folded, but those left open.
+        // Of several, every account folded, but those left open. One alone is
+        // open unless it was folded: its folders are all it has to go to.
         let open: Vec<&str> = said
             .lines()
             .filter_map(|l| l.strip_prefix("open "))
             .collect();
+        let several = self.live().count() > 1;
         for account in &self.accounts {
-            if !open.contains(&account.name.as_str()) {
+            if several && !open.contains(&account.name.as_str()) {
                 self.folded
                     .entry(account.name.clone())
                     .or_default()
@@ -473,7 +475,6 @@ impl App {
             .iter()
             .flat_map(|(a, paths)| paths.iter().map(move |p| (a, p)))
             .filter(|(a, p)| !(a.contains(['\n', '\t']) || p.contains(['\n', '\t'])))
-            .filter(|(_, p)| !p.is_empty())
             .map(|(a, p)| format!("fold {a}\t{p}\n"))
             .collect();
         let open: String = self

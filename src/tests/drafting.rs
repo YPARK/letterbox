@@ -473,3 +473,37 @@ fn a_draft_picked_says_first_of_all_that_e_edits_it() {
     let at = line.find("E edit this draft").unwrap();
     assert!(line[..at].trim().is_empty(), "first of the keys: {line}");
 }
+
+#[test]
+fn what_is_off_limits_is_known_by_any_of_its_names_and_the_cloud_is_not() {
+    use crate::mcp::off_limits;
+    use std::path::Path;
+    let config = Path::new("/nowhere/accounts.toml");
+    let home = crate::compose::home().canonicalize().unwrap();
+    let no = |p: &Path| assert!(off_limits(p, config), "{}", p.display());
+    no(&home.join("Library/Keychains/login.keychain-db"));
+    no(&Path::new("/System/Volumes/Data")
+        .join(home.strip_prefix("/").unwrap())
+        .join("Library/Keychains/x"));
+    no(Path::new("/System/Volumes/Data/private/etc/passwd"));
+    no(Path::new("/etc/passwd"));
+    for fine in [
+        "Library/CloudStorage/Dropbox/report.pdf",
+        "Library/Mobile Documents/com~apple~CloudDocs/report.pdf",
+        "Documents/report.pdf",
+    ] {
+        assert!(!off_limits(&home.join(fine), config), "{fine}");
+    }
+}
+
+#[test]
+fn a_tool_given_null_for_what_it_may_leave_out_leaves_it_out() {
+    let mut server = demo_server(false);
+    let r = call(
+        &mut server,
+        "draft_message",
+        json!({ "to": ["a@b.example"], "cc": null, "subject": "x", "body": "y",
+                "attachments": null }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+}

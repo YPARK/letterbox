@@ -411,11 +411,8 @@ impl Store for Imap {
             self.kind = Some(Kind::Gmail);
             return Ok(Kind::Gmail);
         }
-        let archive = self
-            .folders()?
-            .into_iter()
-            .find(|f| f.role == Role::Archive && f.selectable)
-            .map(|f| f.path);
+        let folders = self.folders()?;
+        let archive = mail::role_folder(&folders, Role::Archive).map(|f| f.path.clone());
         let keywords = self.run(|s, selected| {
             let mut all = true;
             for folder in std::iter::once("INBOX").chain(archive.as_deref()) {
@@ -546,10 +543,7 @@ impl Store for Imap {
                     on_server: true,
                 });
             }
-            let archive = match folders
-                .iter()
-                .find(|f| f.role == Role::Archive && f.selectable)
-            {
+            let archive = match mail::role_folder(&folders, Role::Archive) {
                 Some(f) => f.path.clone(),
                 None => {
                     self.create("Archive")?;

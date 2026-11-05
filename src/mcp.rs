@@ -313,10 +313,14 @@ impl Server {
     /// fails says why, as its result, for the agent to read.
     fn call(&mut self, params: &Value) -> Value {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-        let args = params
+        let mut args = params
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        // Null is what some clients send for what they leave out.
+        if let Some(given) = args.as_object_mut() {
+            given.retain(|_, v| !v.is_null());
+        }
         self.forget_stale_map();
         let done = match refused(name, self.asks, self.background) {
             None => self.tool(name, &args),
@@ -1387,26 +1391,39 @@ pub(crate) const ATTACHED_AT_MOST: u64 = 18 * 1024 * 1024;
 
 /// Whether `real`, a path links are resolved in, is something no agent attaches:
 /// hidden, within what is hidden, or among what the system or letterbox keeps
-/// to itself, the sign-ins and the keychain among it.
-fn off_limits(real: &Path, config: &Path) -> bool {
+/// to itself, the sign-ins and the keychain among it. Files in the cloud folders
+/// of `~/Library` are the user's own.
+pub(crate) fn off_limits(real: &Path, config: &Path) -> bool {
+    // macOS's other name for the same files: resolving a path leaves it so.
+    let real = match real.strip_prefix("/System/Volumes/Data") {
+        Ok(rest) => Path::new("/").join(rest),
+        Err(_) => real.to_path_buf(),
+    };
     let hidden = real
         .components()
         .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-    let home = crate::compose::home();
-    // The folder of the accounts' file, unless that is all there is.
-    let beside = config
-        .parent()
-        .filter(|p| p.parent().is_some() && *p != home)
-        .map(Path::to_path_buf);
+    let raw_home = crate::compose::home();
+    let home = raw_home.canonicalize().unwrap_or(raw_home);
+    // The folder of a file of letterbox's, unless that is all there is.
+    let beside = |file: &Path| {
+        file.parent()
+            .filter(|p| p.parent().is_some() && *p != home)
+            .map(Path::to_path_buf)
+    };
+    let vault = crate::vault::path();
     let own = [
         Some(config.to_path_buf()),
-        beside,
-        Some(crate::vault::path()),
+        beside(config),
+        beside(&vault),
+        Some(vault),
         Some(crate::vault::key_path()),
         Some(crate::index::key::dir()),
-        home.is_absolute().then(|| home.join("Library")),
     ];
+    let library = real.strip_prefix(home.join("Library")).is_ok_and(|rest| {
+        !rest.starts_with("Mobile Documents") && !rest.starts_with("CloudStorage")
+    });
     hidden
+        || library
         || ["/proc", "/sys", "/dev", "/etc", "/private/etc"]
             .iter()
             .any(|p| real.starts_with(p))

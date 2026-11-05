@@ -511,10 +511,6 @@ impl App {
     /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     pub(super) fn open_folder(&mut self) {
-        // What was marked in the list was of what it listed.
-        if self.map.mode == Mode::List {
-            self.map.region = None;
-        }
         let view = match self.rows.get(self.row) {
             Some(&Row::Folder(a, i)) => {
                 let Some(folder) = self.accounts[a].folders.get(i) else {
@@ -531,6 +527,11 @@ impl App {
             Some(&Row::Loners) => View::Loners,
             _ => return,
         };
+        // What was marked in the list was of what it listed: the same listed
+        // again, it still is.
+        if self.map.mode == Mode::List && self.listing.as_ref().is_none_or(|l| l.view != view) {
+            self.map.region = None;
+        }
         self.open_view(view);
     }
 
@@ -632,6 +633,7 @@ impl App {
                 Some(Row::Folder(..) | Row::All(_)) if go => {
                     self.looked_now();
                     self.map.mode = Mode::List;
+                    self.map.region = None;
                 }
                 _ => return,
             }

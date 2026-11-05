@@ -23,18 +23,30 @@ pub enum Role {
 impl Role {
     /// The role a folder plays: by its special-use attribute, as RFC 6154
     /// has servers mark them, else by the names servers give them.
-    pub fn of(path: &str, name: &str, special: Option<Role>) -> Role {
+    pub fn of(path: &str, parts: &[String], special: Option<Role>) -> Role {
         if path.eq_ignore_ascii_case("INBOX") {
             return Role::Inbox;
         }
         if let Some(r) = special {
             return r;
         }
-        match name.to_lowercase().replace(['-', '_'], " ").as_str() {
+        // Joined up, as sent-mail, only where such folders are kept: further
+        // down, deleted_items is more likely the user's own.
+        let near_top =
+            parts.len() == 1 || (parts.len() == 2 && parts[0].eq_ignore_ascii_case("INBOX"));
+        let lower = parts.last().map(|n| n.to_lowercase()).unwrap_or_default();
+        let read = if near_top {
+            lower.replace(['-', '_'], " ")
+        } else {
+            lower
+        };
+        match read.as_str() {
             "drafts" | "draft" => Role::Drafts,
             "sent" | "sent items" | "sent messages" | "sent mail" | "sentmail" => Role::Sent,
             "archive" | "archives" => Role::Archive,
-            "junk" | "junk email" | "junk e mail" | "spam" | "bulk mail" => Role::Junk,
+            "junk" | "junk email" | "junk e-mail" | "junk e mail" | "spam" | "bulk mail" => {
+                Role::Junk
+            }
             "trash" | "deleted items" | "deleted messages" | "bin" => Role::Trash,
             _ => Role::Other,
         }
@@ -68,11 +80,11 @@ impl Role {
 
 /// The folder of `role`, of those `folders`, to list.
 pub fn role_folder(folders: &[Folder], role: Role) -> Option<&Folder> {
-    // The first of those marked, else the first.
+    // Those the server marks first; then the nearest the top; then the first.
     folders
         .iter()
         .filter(|f| f.selectable && f.role == role)
-        .min_by_key(|f| !f.marked)
+        .min_by_key(|f| (!f.marked, parts(&f.path, f.delimiter.as_deref()).len()))
 }
 
 /// The folder mail is moved to as thrown away, of those `folders`: the one
@@ -84,10 +96,7 @@ pub fn trash_folder(folders: &[Folder], chosen: Option<&str>) -> Option<String> 
     {
         return Some(path.to_string());
     }
-    folders
-        .iter()
-        .find(|f| f.role == Role::Trash && f.selectable)
-        .map(|f| f.path.clone())
+    role_folder(folders, Role::Trash).map(|f| f.path.clone())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -130,7 +139,7 @@ impl Folder {
     ) -> Self {
         let parts = parts(path, delimiter);
         let leaf = parts.last().cloned().unwrap_or_default();
-        let role = Role::of(path, &leaf, special);
+        let role = Role::of(path, &parts, special);
         Folder {
             path: path.to_string(),
             name: if role == Role::Inbox {

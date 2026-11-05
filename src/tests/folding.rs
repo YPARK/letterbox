@@ -111,7 +111,7 @@ fn what_is_folded_is_remembered_as_letterbox_next_opens() {
     press(&mut app, &["<space>"]);
     let said = std::fs::read_to_string(&look).unwrap();
     assert!(
-        !said.contains("open Demo") && said.contains("fold Demo\tProjects\n"),
+        said.contains("fold Demo\t\n") && said.contains("fold Demo\tProjects\n"),
         "{said:?}"
     );
 
@@ -255,31 +255,70 @@ fn a_folder_is_within_another_only_by_its_delimiter() {
     assert!(!within("Foobar", Some(""), "Foo"));
 }
 
+/// Click on the first account's header, folding or opening it.
+fn click_first_account(app: &mut App) {
+    let _ = app::screen(app, 120, 40);
+    let at = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, app::Row::Account(0)))
+        .unwrap();
+    click_at(app, app::Target::Row(at));
+}
+
 #[test]
-fn every_account_opens_folded_until_it_is_opened_and_then_opens_as_it_was_left() {
+fn of_several_accounts_each_opens_folded_until_it_is_opened_then_as_it_was_left() {
     let dir = tempfile::tempdir().unwrap();
     let look = dir.path().join("look");
+    let folded = |app: &App| (app.is_folded(0, None), app.is_folded(1, None));
     // Never opened before.
+    let mut app = two_accounts();
+    app.look_file = Some(look.clone());
+    app.recall_look();
+    assert_eq!(folded(&app), (true, true));
+    // Opened, it stays so.
+    click_first_account(&mut app);
+    assert_eq!(folded(&app), (false, true));
+    let mut again = two_accounts();
+    again.look_file = Some(look.clone());
+    again.recall_look();
+    assert_eq!(folded(&again), (false, true));
+    // Folded again, it stays so too.
+    click_first_account(&mut again);
+    let mut last = two_accounts();
+    last.look_file = Some(look);
+    last.recall_look();
+    assert_eq!(folded(&last), (true, true));
+}
+
+#[test]
+fn one_account_alone_opens_open_as_its_folders_are_all_it_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let look = dir.path().join("look");
     let mut app = demo();
     app.look_file = Some(look.clone());
     app.recall_look();
-    assert_eq!(side(&app), ["ACCOUNT", "Inbox"]);
-    assert_eq!(picked(&app), "Inbox");
-    // Opened, it stays so.
-    app.focus = Focus::Side;
-    press(&mut app, &["<space>"]);
     assert_eq!(side(&app), ALL);
+    // Folded by its user, it stays so.
+    pick(&mut app, "Trash");
+    press(&mut app, &["<space>"]);
     let mut again = demo();
-    again.look_file = Some(look.clone());
+    again.look_file = Some(look);
     again.recall_look();
-    assert_eq!(side(&again), ALL);
-    // Folded again, it stays so too.
-    again.focus = Focus::Side;
-    press(&mut again, &["<space>"]);
-    let mut last = demo();
-    last.look_file = Some(look);
-    last.recall_look();
-    assert_eq!(side(&last), ["ACCOUNT", "Inbox"]);
+    assert_eq!(side(&again), ["ACCOUNT", "Inbox"]);
+}
+
+#[test]
+fn h_where_it_is_already_leaves_what_is_marked_marked() {
+    let mut app = demo();
+    pick(&mut app, "Inbox");
+    press(&mut app, &["<enter>"]);
+    app.focus = Focus::List;
+    let _ = app::screen(&mut app, 120, 40);
+    super::selecting::ctrl_click(&mut app, 0);
+    assert!(app.map.region.is_some(), "{}", app.status);
+    press(&mut app, &["H"]);
+    assert!(app.map.region.is_some());
 }
 
 #[test]

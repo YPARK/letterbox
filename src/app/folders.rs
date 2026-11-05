@@ -434,10 +434,8 @@ impl App {
                             None => crate::index::labels::folder_name(l),
                         }
                     }
-                    Dest::Unfiled => self.accounts[a]
-                        .folders
-                        .iter()
-                        .find(|f| f.role == Role::Archive && f.selectable)
+                    Dest::Unfiled => self
+                        .role_folder(a, Role::Archive)
                         .map_or_else(|| "Archive".to_string(), |f| f.path.clone()),
                 };
                 self.make_folder(a, &to);

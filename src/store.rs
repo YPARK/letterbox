@@ -212,11 +212,9 @@ pub fn to_archive<S: Store + ?Sized>(
     uid: u32,
     message_id: &str,
 ) -> anyhow::Result<()> {
-    let archive = store
-        .folders()?
-        .into_iter()
-        .find(|f| f.role == crate::mail::Role::Archive && f.selectable)
-        .map(|f| f.path);
+    let folders = store.folders()?;
+    let archive =
+        crate::mail::role_folder(&folders, crate::mail::Role::Archive).map(|f| f.path.clone());
     let archive = match archive {
         Some(a) => a,
         None => {
