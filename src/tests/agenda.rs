@@ -570,3 +570,16 @@ fn the_calendars_address_moves_with_the_other_secrets() {
     assert!(said.iter().any(|l| l.contains("calendar")), "{said:?}");
     assert_eq!(KEPT.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn a_week_or_more_away_is_said_with_its_date_as_a_weekday_alone_would_mislead() {
+    let now = "2026-11-04T12:00:00Z";
+    let c = coming(
+        "BEGIN:VEVENT\nUID:a\nDTSTART;VALUE=DATE:20261110\nSUMMARY:Six days\nEND:VEVENT\nBEGIN:VEVENT\nUID:b\nDTSTART;VALUE=DATE:20261111\nSUMMARY:Seven days\nEND:VEVENT\n",
+        now,
+        "2026-11-20T00:00:00Z",
+    );
+    let parts = crate::agenda::strip(&c, at(now), &TimeZone::UTC);
+    assert_eq!(parts[0].0, "Tue");
+    assert_eq!(parts[1].0, "Wed Nov 11");
+}

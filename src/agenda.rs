@@ -610,7 +610,9 @@ pub fn strip(coming: &[Coming], now: Timestamp, zone: &TimeZone) -> Vec<(String,
             } else if today.tomorrow().is_ok_and(|t| t == shown) {
                 "Tomorrow".to_string()
             } else {
-                shown.strftime("%a").to_string()
+                let away = (shown - today).get_days();
+                let form = if away < 7 { "%a" } else { "%a %b %-d" };
+                shown.strftime(form).to_string()
             };
             let when = if c.all_day {
                 day

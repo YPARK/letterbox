@@ -727,7 +727,8 @@ is shown as it next opens.
 
 ## Your calendar
 
-Set a calendar, and what is coming up in it runs along the top, soonest first:
+Set a calendar, one for now, and what is coming up in it runs along the top,
+soonest first:
 
 ```sh
 lbx calendar set
@@ -742,6 +743,8 @@ out, and `lbx calendar set` says how many.
 
 An agent finds when you are free from `upcoming_events`, or a calendar tool of
 its own, and suggests times; see [how to triage](#how-to-triage).
+`upcoming_events` sees only the calendar set here, so an agent relying on it
+says that any other you count as busy was not checked.
 
 ## In Emacs
 
