@@ -30,11 +30,11 @@ impl Role {
         if let Some(r) = special {
             return r;
         }
-        match name.to_lowercase().as_str() {
+        match name.to_lowercase().replace(['-', '_'], " ").as_str() {
             "drafts" | "draft" => Role::Drafts,
-            "sent" | "sent items" | "sent messages" | "sent mail" => Role::Sent,
+            "sent" | "sent items" | "sent messages" | "sent mail" | "sentmail" => Role::Sent,
             "archive" | "archives" => Role::Archive,
-            "junk" | "junk email" | "junk e-mail" | "spam" | "bulk mail" => Role::Junk,
+            "junk" | "junk email" | "junk e mail" | "spam" | "bulk mail" => Role::Junk,
             "trash" | "deleted items" | "deleted messages" | "bin" => Role::Trash,
             _ => Role::Other,
         }
@@ -68,7 +68,11 @@ impl Role {
 
 /// The folder of `role`, of those `folders`, to list.
 pub fn role_folder(folders: &[Folder], role: Role) -> Option<&Folder> {
-    folders.iter().find(|f| f.selectable && f.role == role)
+    // The first of those marked, else the first.
+    folders
+        .iter()
+        .filter(|f| f.selectable && f.role == role)
+        .min_by_key(|f| !f.marked)
 }
 
 /// The folder mail is moved to as thrown away, of those `folders`: the one
@@ -97,6 +101,9 @@ pub struct Folder {
     /// How far under another folder it is shown.
     pub depth: usize,
     pub role: Role,
+    /// Whether the server says so of its role, not only its name.
+    #[serde(skip)]
+    pub marked: bool,
     pub selectable: bool,
     /// Whether it holds every message of the account, as Gmail's All Mail.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -132,6 +139,7 @@ impl Folder {
                 leaf
             },
             delimiter: delimiter.map(str::to_string),
+            marked: special.is_some(),
             // Folders with a role are shown at the top, wherever they are.
             depth: if role == Role::Other {
                 parts.len().saturating_sub(1)

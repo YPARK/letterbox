@@ -577,6 +577,49 @@ impl App {
         self.narrow();
     }
 
+    /// Where H goes: the next of `TOGETHER` from what is listed; from the map,
+    /// whatever is behind it, or anything else, the first. With one account,
+    /// its Inbox, as its own folders are beside it.
+    pub fn together_next(&self) -> Role {
+        let now = match self.listing.as_ref().map(|l| &l.view) {
+            Some(View::All(role)) if self.map.mode != Mode::Map => Some(*role),
+            _ => None,
+        };
+        let at = TOGETHER.iter().position(|&r| Some(r) == now);
+        TOGETHER[at.map_or(0, |i| (i + 1) % TOGETHER.len())]
+    }
+
+    /// What the foot says H does.
+    pub fn together_said(&self) -> &'static str {
+        match self.together_next() {
+            _ if self.live().count() == 1 => "Inbox",
+            Role::Sent => "every Sent",
+            Role::Drafts => "every Drafts",
+            _ => "every Inbox",
+        }
+    }
+
+    /// Where `together_next` says.
+    pub(super) fn go_together(&mut self) {
+        let role = self.together_next();
+        let row = self.rows.iter().position(|r| match *r {
+            Row::All(all) => all == role,
+            Row::Folder(a, i) if self.live().count() == 1 => self
+                .role_folder(a, role)
+                .is_some_and(|f| f.path == self.accounts[a].folders[i].path),
+            _ => false,
+        });
+        if let Some(row) = row {
+            // A move or a mark begun on the map is let go, as M lets it go.
+            if self.map.mode == Mode::Map {
+                self.show_list();
+            }
+            self.row = row;
+            self.open_folder();
+            self.focus = Focus::List;
+        }
+    }
+
     /// Open what is picked in the sidebar. In the map, a cluster narrows
     /// it, and a folder is listed in place of it, if `go` is; else as
     /// `open_folder` does.

@@ -93,14 +93,17 @@ impl App {
 
     /// E: go on writing the draft picked, in Drafts.
     pub(super) fn take_up(&mut self) {
-        if self
-            .picked()
-            .is_some_and(|l| self.role_is(l.account, &l.folder, Role::Drafts))
-        {
+        if self.picked_is_draft() {
             self.respond(Respond::Draft);
         } else {
             self.status = "E goes on writing a draft: pick one in Drafts".to_string();
         }
+    }
+
+    /// Whether what is picked is a draft, for E to take up.
+    pub fn picked_is_draft(&self) -> bool {
+        self.picked()
+            .is_some_and(|l| self.role_is(l.account, &l.folder, Role::Drafts))
     }
 
     /// Answer the message picked, as `how` says; read first, if it was

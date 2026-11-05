@@ -226,6 +226,17 @@ pub(super) fn dot_labels(app: &App, subject: &str) -> (Vec<String>, bool) {
 }
 
 #[test]
+fn h_from_the_map_lets_go_of_what_was_moving() {
+    let mut app = demo_map();
+    down_subject(&mut app, "Aims page, third pass");
+    press(&mut app, &["m"]);
+    assert!(app.map.moving.is_some());
+    press(&mut app, &["H"]);
+    assert!(app.map.moving.is_none());
+    assert_eq!(app.map.mode, crate::map::Mode::List);
+}
+
+#[test]
 fn m_moves_a_message_onto_a_cluster_and_files_it_under_its_label() {
     let mut app = demo_map();
     down_subject(&mut app, "Aims page, third pass");

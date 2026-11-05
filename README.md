@@ -154,7 +154,7 @@ letterbox search grant report --account Work
 | `j` / `k`, the arrows, `C-n` / `C-p` | move; in a message, scroll |
 | `h` / `l`, `C-b` / `C-f`, `tab` / `S-tab` | between folders, messages and the message read |
 | `enter` | open the folder, or read the message |
-| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys. In the sidebar, `space` folds the folder picked to itself, if folders are under it (`+3` says how many), else its account to its Inbox (`▸`), or opens it again; a click on an account does too, and one on ALL ACCOUNTS folds them all, or opens them. What is folded is remembered |
+| `space` / `b` | a page down, or up, in the message; `C-v` / `M-v` as the page keys. In the sidebar, `space` folds the folder picked to itself, if folders are under it (`+3` says how many), else its account to its Inbox (`▸`), or opens it again; a click on an account does too, and one on ALL ACCOUNTS folds them all, or opens them. Accounts start folded, once from a version before this too, and what you open or fold is remembered |
 | the mouse | several selected, in the list or the Inbox looked through: dragged over their rows, Ctrl and a click adding one or taking it away, Shift and a click as far as one (where the terminal passes Shift and a click on). Selected rows are shown `▪`, and the foot says how many; `m`, `d`, `e`, `u` and `!` then act on all of it, asked first, and `esc` lets it go. No key selects alone, and nothing is selected on the map |
 | `<` / `>` | make the message read wider, or narrower; below the list, taller or shorter; or drag the line before it. It opens as wide again next time |
 | `\` | put the message read elsewhere, in turn: below the list, hidden until `enter` reads one, a pop-up over the list until `esc`, or beside it again. It opens where it was left |
@@ -170,7 +170,8 @@ letterbox search grant report --account Work
 | `a` | reply to all: the sender, the others it went to copied |
 | `f` | forward it, its files with it |
 | `e` | archive it: out of the Inbox, to Archive; several selected, asked first |
-| `E` | in Drafts, go on writing the draft picked, its thread and files kept: sent, it goes to Trash |
+| `E` | in Drafts, go on writing the draft picked, its thread and files kept: sent, it goes to Trash. The foot says so first, on a draft |
+| `H` | to the Inbox of every account; again, to their Sent, then their Drafts, then back. With one account, to its Inbox |
 | `o` | open the message in the browser, as its HTML, or one of its files and links: a PDF or markdown presented in [ohp](https://github.com/YPARK/ohp), a linked PDF, or an arXiv paper's, downloaded first; anything else opened by the system, or in the browser. There `s` and `S` save as they do from the message. A PDF attached may be signed there, `S` in ohp, and replied with, as [Signing a PDF](#signing-a-pdf) says |
 | `s` `S` | save the message read's attachments: `s` lists them, `⏎` saving the one picked, `a` all of them; `S` saves them all at once, into a folder you pick, browsed as files to attach are: `⏎` goes into a folder, and on `.` saves there; a name typed that no folder there has is made, as a new folder, to save in. It begins where you last saved, else in `~/Downloads` (`$LETTERBOX_DOWNLOADS`). The one picked is named first: its name, all but the extension picked, to type over; `←` `→` edit it, `⏎` keeps it |
 | `O` | present the message read with [ohp](https://github.com/YPARK/ohp), typeset as a page, the images it carries in it; quit ohp to come back. Where the terminal speaks kitty's graphics protocol it is drawn as a page, elsewhere as its text |
@@ -599,8 +600,10 @@ Port 465 is TLS from the start. The same password signs in, or, for an
 account signed in on Microsoft's page, the same token. Sending needs
 Microsoft's permission to send, which a token saved before letterbox asked
 for it does not have: sign in again, and the status line says so when the
-server refuses it. Gmail files the copy itself; other accounts have it
-added to Sent.
+server refuses it. Gmail files the copy itself, of what goes through its own server; anything
+else has one added to the account's Sent folder, known by the server's mark or
+by its name (`Sent`, `Sent Items`, `sent-mail` and the like), and made if there
+is none. ALL ACCOUNTS lists every account's Sent together; `H` goes there.
 
 `--demo` writes the message into Sent and does not send it.
 
@@ -654,8 +657,8 @@ have your shell's `PATH`.
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
-| `draft_reply` | a reply, threaded, quoting what it answers, kept in Drafts; never sent | writes a draft |
-| `draft_message` | a new letter, kept in Drafts; never sent | writes a draft |
+| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named, kept in Drafts; never sent | writes a draft |
+| `draft_message` | a new letter, with any files you named, kept in Drafts; never sent | writes a draft |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |
