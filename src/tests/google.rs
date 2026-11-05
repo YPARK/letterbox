@@ -2,6 +2,7 @@
 
 use crate::agenda::{Coming, upcoming};
 use crate::google::{self, Hosts};
+use anyhow::Context;
 use jiff::{Timestamp, tz::TimeZone};
 use serde_json::json;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -536,10 +537,41 @@ fn only_a_sign_in_that_has_died_is_told_to_sign_in_again() {
 }
 
 #[test]
-fn the_app_a_build_comes_with_is_one_or_none_never_a_broken_one() {
-    let text = include_str!("../google_app.json");
-    let v: serde_json::Value = serde_json::from_str(text).unwrap();
-    if v["installed"]["client_id"].as_str() != Some("") {
-        google::App::from_json(text).unwrap();
-    }
+fn signing_in_again_takes_the_app_the_last_sign_in_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("accounts.toml");
+    let kept = std::cell::RefCell::new(std::collections::HashMap::new());
+    let app = app("an-id", "its-secret");
+    crate::agenda::keep_sign_in(
+        &config,
+        crate::secret::Keeper::Keyring,
+        &app,
+        "to-read-with",
+        |what| kept.borrow().get(what).cloned(),
+        |what, value| {
+            kept.borrow_mut()
+                .insert(what.to_string(), value.to_string());
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    let client = crate::config::google_client(&config).unwrap().unwrap();
+    let again = crate::agenda::app_kept(&client, |what| {
+        kept.borrow().get(what).cloned().context("none")
+    })
+    .unwrap();
+    assert_eq!(again.client, "an-id");
+    assert_eq!(again.secret, "its-secret");
+}
+
+#[test]
+fn a_store_that_cannot_be_read_says_so_and_not_that_there_is_no_app() {
+    let why = crate::agenda::app_kept("an-id", |_| anyhow::bail!("the store is locked"))
+        .err()
+        .map(|e| format!("{e:#}"))
+        .unwrap();
+    assert!(why.contains("the store is locked"), "{why}");
+    assert!(why.contains("--app"), "{why}");
+    assert!(!why.contains("register"), "{why}");
 }
