@@ -194,11 +194,14 @@ impl Record {
             })
             .unwrap_or_default()
         };
-        let (to, cc) = match &parsed {
-            Some(m) => (addresses(m.to()), addresses(m.cc())),
-            None => (Vec::new(), Vec::new()),
+        let (to, cc, text) = match &parsed {
+            Some(m) => (
+                addresses(m.to()),
+                addresses(m.cc()),
+                mail::listed_text(m, &indexed.raw),
+            ),
+            None => (Vec::new(), Vec::new(), String::new()),
         };
-        let text = mail::listed_text(&indexed.raw);
         let list = mail::field(&indexed.raw, "List-Id")
             .map(|l| list_id(&l))
             .unwrap_or_default();

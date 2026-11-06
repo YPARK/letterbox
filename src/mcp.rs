@@ -388,10 +388,7 @@ impl Server {
 
     /// What the account named, or else the first, is called.
     fn called(&self, name: Option<&str>) -> Option<String> {
-        self.accounts
-            .iter()
-            .find(|a| name.is_none_or(|n| a.name.eq_ignore_ascii_case(n)))
-            .map(|a| a.name.clone())
+        self.names(name).into_iter().next()
     }
 
     /// The messages come to the Inbox of the account named since `since`,

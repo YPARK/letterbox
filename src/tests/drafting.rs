@@ -624,39 +624,44 @@ fn a_draft_kept_on_a_server_is_known_by_the_uid_the_server_says() {
 #[test]
 fn a_server_that_does_not_say_is_asked_by_message_id_never_guessed_at() {
     let (account, boxes) = server();
+    let kept = |boxes: &Boxes, says: &str| {
+        let held = boxes.lock().unwrap();
+        let sent = held.iter().find(|b| b.name == "Sent Items").unwrap();
+        sent.letters
+            .iter()
+            .find(|l| String::from_utf8_lossy(&l.raw).contains(says))
+            .map(|l| l.uid)
+    };
+    boxes
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|b| b.name == "Sent Items")
+        .unwrap()
+        .says_appenduid = false;
     let mut imap = Imap::new(account);
-    let wanted = format!(
-        "{NO_APPENDUID}\r\nFrom: me@example.com\r\nMessage-ID: <wanted@example.com>\r\n\r\nhi\r\n"
-    );
-    let uid = imap.append_draft("Sent Items", wanted.as_bytes()).unwrap();
+    let uid = imap
+        .append_draft(
+            "Sent Items",
+            b"From: me@example.com\r\nMessage-ID: <wanted@example.com>\r\n\r\nhi\r\n",
+        )
+        .unwrap();
     imap.append(
         "Sent Items",
         b"From: me@example.com\r\nMessage-ID: <later@example.com>\r\n\r\nlater\r\n",
         true,
     )
     .unwrap();
-    {
-        let held = boxes.lock().unwrap();
-        let kept = held.iter().find(|b| b.name == "Sent Items").unwrap();
-        let expected = kept
-            .letters
-            .iter()
-            .find(|l| String::from_utf8_lossy(&l.raw).contains("wanted@"))
-            .map(|l| l.uid);
-        assert_eq!(uid, expected);
-    }
+    assert_eq!(uid, kept(&boxes, "wanted@"));
     // With no Message-ID to ask by, it says it cannot tell.
     let told = imap
-        .append_draft(
-            "Sent Items",
-            format!("{NO_APPENDUID}\r\nFrom: me@example.com\r\n\r\nno id\r\n").as_bytes(),
-        )
+        .append_draft("Sent Items", b"From: me@example.com\r\n\r\nno id\r\n")
         .unwrap();
     assert_eq!(told, None, "not the highest there is");
 }
 
 /// The user's answer to what they were asked, and the tool called to ask.
-fn answered(
+pub(super) fn answered(
     server: &mut crate::mcp::Server,
     asking: u32,
     tool: &str,
@@ -699,7 +704,7 @@ fn a_draft_thrown_away_is_asked_about_told_apart_from_its_twin_and_kept_in_trash
     let new = new["structuredContent"]["uid"].clone();
     let listed = in_folder(&mut server, "Drafts");
     let was = listed.iter().find(|m| m["uid"] == old).unwrap();
-    let day = was["date"].as_str().unwrap()[..10].to_string();
+    let year = was["date"].as_str().unwrap()[..4].to_string();
 
     let (asked, r) = answered(
         &mut server,
@@ -710,8 +715,15 @@ fn a_draft_thrown_away_is_asked_about_told_apart_from_its_twin_and_kept_in_trash
     );
     assert_eq!(r["structuredContent"]["moved"], 0, "{r}");
     assert!(asked.contains("Twin"), "{asked}");
-    assert!(asked.contains(&day), "when it was written: {asked}");
-    assert!(asked.contains("KB"), "how big, as twins differ: {asked}");
+    assert!(asked.contains(&year), "when it was written: {asked}");
+    let raw = server
+        .first_store()
+        .raw("Drafts", old.as_u64().unwrap() as u32)
+        .unwrap();
+    assert!(
+        asked.contains(&crate::ui::size(raw.len())),
+        "how big, as twins differ: {asked}"
+    );
     let kept = |server: &mut crate::mcp::Server, uid: &serde_json::Value| {
         in_folder(server, "Drafts").iter().any(|m| m["uid"] == *uid)
     };
@@ -749,7 +761,7 @@ fn what_is_thrown_away_of_any_other_folder_is_listed_as_ever() {
         json!({ "uids": [uid] }),
         "decline",
     );
-    assert!(!asked.contains("KB"), "{asked}");
+    assert!(!asked.contains(" ["), "{asked}");
 }
 
 #[test]

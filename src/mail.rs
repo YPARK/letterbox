@@ -323,7 +323,7 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
         .map(clean)
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| address.clone());
-    let preview = preview(&listed_text(raw), PREVIEW_CHARS);
+    let preview = preview(&listed_text(&m, raw), PREVIEW_CHARS);
     Summary {
         uid,
         from,
@@ -346,15 +346,17 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
 /// The text of `raw`, as much of a message as is fetched to list it: a server
 /// gives only its start, and a part cut off before its boundary is not read as
 /// a part at all, so its parts are ended where that lost the text.
-pub fn listed_text(raw: &[u8]) -> String {
-    let text_of = |raw: &[u8]| {
-        MessageParser::default()
-            .parse(raw)
-            .and_then(|m| m.body_text(0).map(|t| t.into_owned()))
+pub fn listed_text(parsed: &mail_parser::Message, raw: &[u8]) -> String {
+    fn text_of(m: &mail_parser::Message) -> Option<String> {
+        m.body_text(0)
+            .map(|t| t.into_owned())
             .filter(|t| !t.trim().is_empty())
-    };
-    text_of(raw)
-        .or_else(|| text_of(&ended(raw)?))
+    }
+    text_of(parsed)
+        .or_else(|| {
+            let ended = ended(raw)?;
+            text_of(&MessageParser::default().parse(&ended)?)
+        })
         .unwrap_or_default()
 }
 
@@ -854,7 +856,7 @@ fn header_block(raw: &[u8]) -> String {
 
 /// Where the headers end: the earlier of `\r\n\r\n` and `\n\n`, or the
 /// whole message when it has no blank line. Only that prefix is decoded.
-fn header_end(raw: &[u8]) -> usize {
+pub(crate) fn header_end(raw: &[u8]) -> usize {
     let mut i = 0;
     while i + 1 < raw.len() {
         if raw[i] == b'\n' && raw[i + 1] == b'\n' {

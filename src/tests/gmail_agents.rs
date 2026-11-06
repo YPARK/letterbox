@@ -1,7 +1,8 @@
 //! An agent on Gmail, where the map reads All Mail and the agent is shown
 //! the Inbox: the same message, found by its `Message-ID`.
 
-use super::agents::{Written, call, demo_server};
+use super::agents::{call, demo_server};
+use super::drafting::answered;
 use super::*;
 use serde_json::json;
 
@@ -38,25 +39,15 @@ fn new_mail_of_the_gmail_inbox_is_weighed() {
 #[test]
 fn what_is_said_yes_to_of_the_gmail_inbox_is_learnt() {
     let mut server = on_gmail(true);
-    let script = vec![
-        json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-            "params": { "name": "trash_messages", "arguments": { "uids": [2] } } })
-        .to_string(),
-        json!({ "jsonrpc": "2.0", "id": "letterbox-1",
-            "result": { "action": "accept", "content": { "confirm": true } } })
-        .to_string(),
-    ];
-    let out = Written::default();
-    server
-        .serve(crate::mcp::Io {
-            lines: Box::new(script.into_iter().map(Ok)),
-            out: Box::new(out.clone()),
-        })
-        .unwrap();
-    let written = out.messages();
-    let reply = written.iter().find(|m| m["id"] == 10).unwrap();
-    assert_eq!(reply["result"]["structuredContent"]["moved"], 1, "{reply}");
-    assert_eq!(reply["result"]["structuredContent"]["learnt"], 1, "{reply}");
+    let (_, r) = answered(
+        &mut server,
+        1,
+        "trash_messages",
+        json!({ "uids": [2] }),
+        "accept",
+    );
+    assert_eq!(r["structuredContent"]["moved"], 1, "{r}");
+    assert_eq!(r["structuredContent"]["learnt"], 1, "{r}");
 }
 
 #[test]
@@ -66,7 +57,8 @@ fn a_draft_said_yes_to_throwing_away_teaches_nothing_even_where_all_mail_holds_i
     server.use_store(Box::new(Imap::new(account)));
     // Gmail keeps a draft in All Mail as well, so the map can know it.
     let drafts = "[Gmail]/Drafts";
-    let uid = {
+    let uid = 900;
+    {
         let mut held = boxes.lock().unwrap();
         let raw = held
             .iter()
@@ -79,28 +71,16 @@ fn a_draft_said_yes_to_throwing_away_teaches_nothing_even_where_all_mail_holds_i
             .raw
             .clone();
         let at = held.iter().position(|b| b.name == drafts).unwrap();
-        held[at].push(Letter::new(900, &["\\Seen", "\\Draft"], raw));
-        900
-    };
-    let script = vec![
-        json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-            "params": { "name": "trash_messages",
-                        "arguments": { "folder": drafts, "uids": [uid] } } })
-        .to_string(),
-        json!({ "jsonrpc": "2.0", "id": "letterbox-1",
-            "result": { "action": "accept", "content": { "confirm": true } } })
-        .to_string(),
-    ];
-    let out = Written::default();
-    server
-        .serve(crate::mcp::Io {
-            lines: Box::new(script.into_iter().map(Ok)),
-            out: Box::new(out.clone()),
-        })
-        .unwrap();
-    let written = out.messages();
-    let reply = written.iter().find(|m| m["id"] == 10).unwrap();
-    assert_eq!(reply["result"]["structuredContent"]["moved"], 1, "{reply}");
-    assert_eq!(reply["result"]["structuredContent"]["learnt"], 0, "{reply}");
+        held[at].push(Letter::new(uid, &["\\Seen", "\\Draft"], raw));
+    }
+    let (_, r) = answered(
+        &mut server,
+        1,
+        "trash_messages",
+        json!({ "folder": drafts, "uids": [uid] }),
+        "accept",
+    );
+    assert_eq!(r["structuredContent"]["moved"], 1, "{r}");
+    assert_eq!(r["structuredContent"]["learnt"], 0, "{r}");
     assert!(server.learnt.is_empty());
 }

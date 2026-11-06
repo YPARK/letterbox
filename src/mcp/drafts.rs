@@ -43,16 +43,12 @@ impl Server {
         let raw = raw.map_err(anyhow::Error::msg)?;
         // As it is kept, not as it was asked for: its headers alone, as its
         // files may be many bytes.
-        let head = raw
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .map_or(raw.len(), |at| at + 4);
-        let kept = mail::message(0, raw[..head].to_vec())?;
+        let kept = mail::message(0, raw[..mail::header_end(&raw)].to_vec())?;
+        // The bytes are in the letter now, and may be many.
         let attached: Vec<Value> = files
-            .iter()
+            .into_iter()
             .map(|f| json!({ "name": f.name, "size": f.bytes.len() }))
             .collect();
-        drop(files);
         let drafts = mail::role_folder(&store.folders()?, mail::Role::Drafts)
             .context("this account has no Drafts")?
             .path
@@ -87,17 +83,8 @@ impl Server {
 /// What tells a draft from another of the same subject, as the user is asked
 /// about it: when it was written, and how big it is.
 pub(super) fn told_apart(s: &Summary) -> String {
-    let when = s.date.and_then(|d| jiff::Timestamp::from_second(d).ok());
-    let when = when.map(|t| {
-        t.to_zoned(jiff::tz::TimeZone::system())
-            .strftime("%Y-%m-%d %H:%M, ")
-            .to_string()
-    });
-    format!(
-        " [{}{} KB]",
-        when.unwrap_or_default(),
-        s.size.div_ceil(1024).max(1)
-    )
+    let when = s.date.map(crate::ui::long_date).unwrap_or_default();
+    format!(" [{when}, {}]", crate::ui::size(s.size as usize))
 }
 
 /// The most a draft's files may come to, as most servers take a message of
