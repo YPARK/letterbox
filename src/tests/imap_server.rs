@@ -41,6 +41,8 @@ pub(super) struct Mailbox {
     pub(super) validity: u32,
     /// The UID the next message will have.
     pub(super) next: u32,
+    /// Whether what is appended here is answered with the UID it took.
+    pub(super) says_appenduid: bool,
 }
 
 impl Mailbox {
@@ -52,6 +54,7 @@ impl Mailbox {
             letters,
             validity: 7,
             next,
+            says_appenduid: true,
         }
     }
 
@@ -190,6 +193,20 @@ pub(super) fn boxes_in(mode: Mode) -> Boxes {
 /// Gmail's folders: the Inbox, and in [Gmail], All Mail, which holds every
 /// message with its labels, and the rest; a label of the user's, as a
 /// folder too.
+/// A draft put in Gmail's Drafts, as UID 900, by the `Message-ID` of the first
+/// of the Inbox, as Gmail keeps a draft in All Mail too.
+pub(super) fn gmail_draft(boxes: &Boxes) {
+    let mut held = boxes.lock().unwrap();
+    let raw = held.iter().find(|b| b.name == "INBOX").unwrap().letters[0]
+        .raw
+        .clone();
+    let drafts = held
+        .iter_mut()
+        .find(|b| b.name == "[Gmail]/Drafts")
+        .unwrap();
+    drafts.push(Letter::new(900, &["\\Seen", "\\Draft"], raw));
+}
+
 pub(super) fn gmail_boxes() -> Boxes {
     let letter = |uid: u32, flags: &[&str], labels: &[&str], from: &str, subject: &str| {
         let mut l = Letter::new(
@@ -738,11 +755,16 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                     .filter(|f| args.contains(f))
                     .collect();
                 match boxes.iter_mut().find(|b| b.name == name) {
-                    Some(b) => b.push(Letter::new(new_uid, &flags, body)),
+                    Some(b) => {
+                        b.push(Letter::new(new_uid, &flags, body));
+                        done = if b.says_appenduid {
+                            let validity = b.validity;
+                            format!("{tag} OK [APPENDUID {validity} {new_uid}] appended\r\n")
+                        } else {
+                            format!("{tag} OK appended\r\n")
+                        };
+                    }
                     None => done = format!("{tag} NO no such folder\r\n"),
-                }
-                if !done.starts_with(&format!("{tag} NO")) {
-                    done = format!("{tag} OK appended\r\n");
                 }
             }
             "LOGOUT" => {

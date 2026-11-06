@@ -13,9 +13,11 @@ pub enum Done {
     Cancel,
     /// `C-c C-a`: a file to be attached is asked for.
     Attach,
-    /// `M-$`, Emacs's key to check spelling: the grammar of what is written
-    /// checked.
+    /// `C-c g`, or `M-$`, Emacs's key to check spelling: the grammar of what
+    /// is written checked.
     Check,
+    /// `C-x C-s`: kept in Drafts, and gone on with.
+    Save,
     /// `C-c` or `C-x` and a key neither does anything with.
     Undefined,
 }
@@ -801,8 +803,11 @@ pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Don
             ('c', KeyCode::Char('c' | 'C')) => Done::Send,
             ('c', KeyCode::Char('k' | 'K')) => Done::Cancel,
             ('c', KeyCode::Char('a' | 'A')) => Done::Attach,
-            // C-c C-s: the grammar checked, as M-$, no Meta needed.
-            ('c', KeyCode::Char('s' | 'S')) => Done::Check,
+            // C-c g: the grammar checked, as M-$, no Meta needed. C-c C-g lets
+            // C-c go, as C-g lets go of anything.
+            ('c', KeyCode::Char('g' | 'G')) if !ctrl => Done::Check,
+            // C-x C-s: saved, as Emacs saves.
+            ('x', KeyCode::Char('s' | 'S')) if ctrl => Done::Save,
             // C-x u undoes, as Emacs's.
             ('x', KeyCode::Char('u')) if !ctrl => {
                 buf.undoing = undoing;

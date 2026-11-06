@@ -32,7 +32,7 @@ It is built with two features, both on by default:
   images (kitty, WezTerm, Ghostty, iTerm2). That brings typst, so it
   builds for longer, and typst's evaluator assembles one small file with
   the system's C toolchain.
-- `grammar`, to check the grammar of what you write, `C-c C-s`, with a
+- `grammar`, to check the grammar of what you write, `C-c g`, with a
   small model.
 
 The model is a T5 from Hugging Face, made to correct English grammar, read
@@ -218,11 +218,15 @@ again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
 it, held 10 seconds first, counted down at the foot: `C-g` takes it back,
 still there to change, and `C-c C-c` again sends it at once. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
-lets go of a search, the mark, or a `C-c` begun, as Emacs's does; with
+lets go of a search, the mark, or a `C-c` begun, as Emacs's does, so `C-c C-g` does nothing; with
 nothing to let go, it leaves the message, from wherever the cursor is,
 asking first if you changed it or it carries files. `esc` does as `C-g`. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
-`C-c C-s`, or the Grammar button on its top edge, checks the grammar of
+`C-x C-s`, or the Save button on its top edge, keeps what you are writing in
+Drafts and goes on: saved again it replaces what was saved, which goes to Trash,
+and sent, what was saved goes too. It may be to no one yet.
+
+`C-c g`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, the message it forwards, nor the signature. Each change the model would make
@@ -232,10 +236,12 @@ change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
 (`i`) none, and any other key stops and is written. Nothing changes but
 what you take.
 
-Built with grammar, `C-c C-c` checks it first, before it is sent: with
-nothing to change it goes at once; else each change is asked, and then
-whether to send it now, Send (`y`) or Keep writing. `C-c C-c` again while
-it is asked sends it as it is. A model that cannot be read, as with no
+Built with grammar, `C-c C-c` asks first whether to check it: Check (`y`),
+Send as it is (`n`), or any other key to go on writing; no model is read
+unless you say so. Checked, with nothing to change it goes at once; else each
+change is asked, and then whether to send it now, Send (`y`) or Keep writing.
+`C-c C-c` again while a change is asked sends it as it is. A model that cannot
+be read, as with no
 network the first time, keeps nothing from going: it is sent, and said
 to be unchecked.
 
@@ -447,7 +453,8 @@ list, and `u` and `!` mark the one picked.
 letterbox learns what you throw away. Each message you trash, however it
 is trashed, teaches it that mail like it is thrown away; each you file,
 archive, answer, flag, keep in the Inbox looked through, or put back from
-the Trash, that it is not. Like is by who sent it, from where, by which
+the Trash, that it is not. A draft teaches nothing, whatever is done with
+it: it is your own writing. Like is by who sent it, from where, by which
 list, and its words, never its subject alone, so that a sender you always
 throw away is known by a subject never seen; and by whether you ever wrote
 to its sender, as your sent mail says, whether its sender takes no answer
@@ -644,7 +651,7 @@ have your shell's `PATH`.
 
 | Tool | | |
 |---|---|---|
-| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread | reads |
+| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread; one account, or only their names, if asked; and the version of letterbox | reads |
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
@@ -653,12 +660,13 @@ have your shell's `PATH`.
 | `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
 | `recent_messages` | what came to each Inbox in the last hours, every account or one | reads |
 | `triage` | the same, each with how likely you are to throw it away and where it would be filed | reads |
-| `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back | moves, once you say yes |
+| `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back; what you say yes to is learnt, but a draft teaches nothing, so this is how an agent drops a draft it wrote again | moves, once you say yes |
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
-| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named, kept in Drafts; never sent | writes a draft |
-| `draft_message` | a new letter, with any files you named, kept in Drafts; never sent | writes a draft |
+| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
+| `draft_message` | a new letter, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to and how big its files are | writes a draft |
+| `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; the draft then goes to Trash, teaching nothing | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

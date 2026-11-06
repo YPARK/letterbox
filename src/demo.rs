@@ -744,14 +744,21 @@ impl Store for Demo {
         Ok(())
     }
 
-    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<Option<u32>> {
+        self.append(folder, raw, true)?;
+        Ok(self.mail().letters(folder)?.last().map(|l| l.uid))
+    }
+
+    fn uid_of(&mut self, folder: &str, message_id: &str) -> anyhow::Result<Option<u32>> {
         let bare = |s: &str| s.trim().trim_matches(['<', '>']).to_lowercase();
         let id = bare(message_id);
         let mut mail = self.mail();
         Ok(mail
             .letters(folder)?
             .iter()
-            .any(|l| crate::mail::field(&l.raw, "Message-ID").is_some_and(|m| bare(&m) == id)))
+            .rev()
+            .find(|l| crate::mail::field(&l.raw, "Message-ID").is_some_and(|m| bare(&m) == id))
+            .map(|l| l.uid))
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {

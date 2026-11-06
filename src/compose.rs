@@ -17,6 +17,7 @@ enum Head {
 
 /// What was written: who it is to, the files it takes, and the text below
 /// the blank line.
+#[derive(Clone)]
 pub struct Draft {
     pub to: Vec<String>,
     pub cc: Vec<String>,
@@ -24,6 +25,58 @@ pub struct Draft {
     /// Each `Attach` line's file: a path, or one of a forward's files.
     pub attach: Vec<String>,
     pub body: String,
+}
+
+/// Each file of `draft`, read now: one of `forwarded`, or this machine's.
+pub(crate) fn attached(draft: &Draft, forwarded: &[File]) -> Result<Vec<File>, String> {
+    draft
+        .attach
+        .iter()
+        .map(|value| match value.strip_suffix(FORWARDED) {
+            Some(name) => forwarded
+                .iter()
+                .find(|f| f.name == name)
+                .cloned()
+                .ok_or_else(|| format!("{name} is not among the files forwarded")),
+            None => read_file(&path_of(value)).map_err(|e| format!("cannot attach {value}: {e}")),
+        })
+        .collect()
+}
+
+/// `raw`, a draft kept, as it goes: dated now, with an ID of its own, without
+/// what a mail app marks a draft by. Its text is as it was.
+pub(crate) fn to_send(raw: &[u8], from: &str) -> Vec<u8> {
+    const LEFT_OUT: [&str; 6] = [
+        "date",
+        "message-id",
+        "x-uniform-type-identifier",
+        "x-mozilla-draft-info",
+        "x-unsent",
+        "x-apple-mail-remote-attachments",
+    ];
+    let end = mail::header_end(raw);
+    let (head, rest) = raw.split_at(end);
+    let mut out = format!("Date: {}\r\nMessage-ID: {}\r\n", now(), message_id(from)).into_bytes();
+    let mut keeping = true;
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if !line.starts_with(b" ") && !line.starts_with(b"\t") {
+            let name = line.split(|b| *b == b':').next().unwrap_or_default();
+            let name = String::from_utf8_lossy(name).trim().to_ascii_lowercase();
+            keeping = !LEFT_OUT.contains(&name.as_str());
+        }
+        if keeping {
+            out.extend_from_slice(line);
+        }
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
+/// The time, as a `Date` header says it.
+fn now() -> String {
+    Zoned::now()
+        .strftime("%a, %d %b %Y %H:%M:%S %z")
+        .to_string()
 }
 
 /// What an `Attach` line ends with when its file is one of the message
@@ -34,6 +87,15 @@ pub const FORWARDED: &str = " (forwarded)";
 /// first blank line of `text`. Anything else there, or a missing `To`, is
 /// said and nothing is sent.
 pub fn parse(text: &str) -> Result<Draft, String> {
+    let draft = parse_unaddressed(text)?;
+    if draft.to.is_empty() {
+        return Err("say who it is to".to_string());
+    }
+    Ok(draft)
+}
+
+/// As `parse`, it may be to no one yet: as it is saved, not sent.
+pub fn parse_unaddressed(text: &str) -> Result<Draft, String> {
     let text = text.strip_suffix('\n').unwrap_or(text);
     let Some((head, body)) = text.split_once("\n\n") else {
         return Err("a blank line ends the headers".to_string());
@@ -79,9 +141,6 @@ pub fn parse(text: &str) -> Result<Draft, String> {
     }
     attach.retain(|a| !a.is_empty());
     let to = addresses(&to)?;
-    if to.is_empty() {
-        return Err("say who it is to".to_string());
-    }
     let cc = addresses(&cc)?;
     Ok(Draft {
         to,
@@ -444,6 +503,18 @@ fn to_all(message: &Message, me: &str) -> (Vec<String>, Vec<String>) {
     (to, cc)
 }
 
+/// Who a reply to all would reach that a reply to the sender alone does not.
+pub(crate) fn not_copied(message: &Message, me: &str) -> Vec<String> {
+    let spec = |a: &str| addr_spec(a).map(|s| s.to_lowercase());
+    let mut going: Vec<String> = sender(message).iter().filter_map(|a| spec(a)).collect();
+    going.extend(spec(me));
+    let (to, cc) = to_all(message, me);
+    to.into_iter()
+        .chain(cc)
+        .filter(|a| spec(a).is_some_and(|s| !going.contains(&s)))
+        .collect()
+}
+
 /// The buffer a reply opens with: to `to`, `cc` copied.
 fn answer(message: &Message, to: &[String], cc: &[String]) -> (String, usize) {
     let (head, quoted) = parts(message, to, cc);
@@ -551,7 +622,7 @@ pub fn bytes(
     references: Option<&str>,
     files: &[File],
 ) -> Vec<u8> {
-    let date = Zoned::now().strftime("%a, %d %b %Y %H:%M:%S %z");
+    let date = now();
     let id = message_id(from);
     let mut head = format!("From: {from}\r\nTo: {}\r\n", draft.to.join(", "));
     if !draft.cc.is_empty() {

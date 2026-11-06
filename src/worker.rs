@@ -104,6 +104,19 @@ pub enum Ask {
         raw: Vec<u8>,
         answer: Option<(String, u32)>,
     },
+    /// `draft` kept in `folder`, its files read here, not to hold up the
+    /// screen: `replacing`, the draft saved before, its folder, UID and
+    /// `Message-ID`, and which `save` this is, are for the answer.
+    SaveDraft {
+        folder: String,
+        from: String,
+        draft: crate::compose::Draft,
+        in_reply_to: Option<String>,
+        references: Option<String>,
+        forwarded: Vec<crate::compose::File>,
+        replacing: Option<(String, u32, String)>,
+        save: u64,
+    },
 }
 
 pub enum Answer {
@@ -151,6 +164,14 @@ pub enum Answer {
     Sent {
         said: Result<String, String>,
         answer: Option<(String, u32)>,
+    },
+    /// Kept in `folder`, by the UID it took if that can be told.
+    DraftSaved {
+        result: Result<Option<u32>, String>,
+        folder: String,
+        message_id: String,
+        replacing: Option<(String, u32, String)>,
+        save: u64,
     },
     /// Asked, and passed over for what was asked after it.
     Skipped,
@@ -434,6 +455,36 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             }
             Answer::Sent { said, answer }
         }
+        Ask::SaveDraft {
+            folder,
+            from,
+            draft,
+            in_reply_to,
+            references,
+            forwarded,
+            replacing,
+            save,
+        } => {
+            let mut message_id = String::new();
+            let result = crate::compose::attached(&draft, &forwarded).and_then(|files| {
+                let raw = crate::compose::bytes(
+                    &from,
+                    &draft,
+                    in_reply_to.as_deref(),
+                    references.as_deref(),
+                    &files,
+                );
+                message_id = crate::mail::field(&raw, "Message-ID").unwrap_or_default();
+                store.append_draft(&folder, &raw).map_err(text)
+            });
+            Answer::DraftSaved {
+                result,
+                folder,
+                message_id,
+                replacing,
+                save,
+            }
+        }
     }
 }
 
@@ -455,6 +506,7 @@ impl Ask {
                 | Ask::Bring { .. }
                 | Ask::Archive { .. }
                 | Ask::Send { .. }
+                | Ask::SaveDraft { .. }
         )
     }
 }
@@ -473,6 +525,7 @@ impl Answer {
                 | Answer::Brought { .. }
                 | Answer::Archived { .. }
                 | Answer::Sent { .. }
+                | Answer::DraftSaved { .. }
         )
     }
 }

@@ -54,7 +54,8 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     let buttons = [
         ("Send", "C-c C-c", t.accent, t.on_accent),
         ("Attach", "C-c C-a", t.focus, t.title),
-        ("Grammar", "C-c C-s", t.flag, t.on_accent),
+        ("Save", "C-x C-s", t.focus, t.title),
+        ("Grammar", "C-c g", t.flag, t.on_accent),
         ("Discard", "C-c C-k", t.error, t.on_accent),
     ];
     // Each with its keys where there is room, else its name alone.
@@ -157,22 +158,33 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
             ("Ignore all", 'i', t.error, t.on_accent),
         ];
         (format!("Grammar · {at} of {of}"), "y n a i", lines, buttons)
-    } else if app.sending_asked {
+    } else if let Some(asked) = app.asked {
+        let (title, foot, said, buttons) = match asked {
+            crate::app::SendAsked::Check => (
+                "Check the grammar first?",
+                "y checks · n sends · any other key goes on writing",
+                "It goes as it is, or its grammar is gone through first.",
+                vec![
+                    ("Check", 'y', t.accent, t.on_accent),
+                    ("Send as it is", 'n', t.focus, t.title),
+                ],
+            ),
+            crate::app::SendAsked::Send => (
+                "Send it now?",
+                "y sends · any other key goes on writing",
+                "Its grammar is gone through.",
+                vec![
+                    ("Send", 'y', t.accent, t.on_accent),
+                    ("Keep writing", 'n', t.focus, t.title),
+                ],
+            ),
+        };
         let lines = vec![
             Line::raw(""),
-            Line::styled("Its grammar is gone through.", Style::new().fg(t.title)),
+            Line::styled(said, Style::new().fg(t.title)),
             Line::raw(""),
         ];
-        let buttons = vec![
-            ("Send", 'y', t.accent, t.on_accent),
-            ("Keep writing", 'n', t.focus, t.title),
-        ];
-        (
-            "Send it now?".to_string(),
-            "y sends · any other key goes on writing",
-            lines,
-            buttons,
-        )
+        (title.to_string(), foot, lines, buttons)
     } else {
         return;
     };
@@ -400,7 +412,8 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
             &fitting(
                 &[
                     ("C-/", "undo"),
-                    ("C-c C-s", "grammar"),
+                    ("C-x C-s", "save"),
+                    ("C-c g", "grammar"),
                     ("C-SPC", "mark"),
                     ("C-w", "cut"),
                     ("C-y", "yank"),

@@ -368,18 +368,18 @@ impl App {
             self.move_to_trash(a, p.folder, p.uid, p.message_id, trash);
             done += 1;
         }
-        // Each label's together, from each folder, the index asked of once.
+        // Each label's together, from each folder.
         let mut filing: std::collections::BTreeMap<
             (usize, String, String),
             Vec<crate::index::Key>,
         > = Default::default();
-        {
-            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-            for (a, p) in filed {
-                match index.key_of(&p.account, &p.folder, p.uid, &p.message_id) {
-                    Some(key) => filing.entry((a, p.folder, p.to)).or_default().push(key),
-                    None => not.push(format!("{}: not on the map yet", p.subject)),
+        for (a, p) in filed {
+            match self.key_of(a, &p.folder, p.uid, &p.message_id) {
+                Some(key) => filing.entry((a, p.folder, p.to)).or_default().push(key),
+                None if self.role_is(a, &p.folder, Role::Drafts) => {
+                    not.push(format!("{}: a draft is not filed", p.subject))
                 }
+                None => not.push(format!("{}: not on the map yet", p.subject)),
             }
         }
         for ((a, folder, label), keys) in filing {

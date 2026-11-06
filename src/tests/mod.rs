@@ -23,6 +23,8 @@ const PATIENCE: Duration = Duration::from_secs(120);
 
 mod accounts;
 mod agenda;
+mod agent_listing;
+mod agent_sending;
 mod agents;
 mod asking;
 mod bulk;
@@ -58,6 +60,7 @@ mod reporting;
 mod restoring;
 mod reviewing;
 mod saving;
+mod saving_drafts;
 mod searching;
 mod selecting;
 mod sending;

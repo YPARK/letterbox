@@ -4,7 +4,7 @@
 use super::*;
 use serde_json::json;
 
-fn in_folder(server: &mut crate::mcp::Server, folder: &str) -> Vec<serde_json::Value> {
+pub(super) fn in_folder(server: &mut crate::mcp::Server, folder: &str) -> Vec<serde_json::Value> {
     let r = call(
         server,
         "list_messages",
@@ -313,7 +313,7 @@ fn capital_e_elsewhere_says_what_it_is_for() {
 }
 
 /// A file of a folder not hidden, as a temporary folder's own name would be.
-fn a_file(name: &str, says: &str) -> (tempfile::TempDir, String) {
+pub(super) fn a_file(name: &str, says: &str) -> (tempfile::TempDir, String) {
     let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
     let path = dir.path().join(name);
     std::fs::write(&path, says).unwrap();
@@ -342,7 +342,7 @@ fn an_agent_attaches_a_file_the_user_named_to_a_new_letter_and_to_a_reply() {
         assert_eq!(r["isError"], false, "{r}");
         assert_eq!(
             r["structuredContent"]["attached"],
-            json!(["notes.txt"]),
+            json!([{ "name": "notes.txt", "size": 9 }]),
             "{r}"
         );
     }
@@ -443,7 +443,7 @@ fn a_file_attached_by_a_link_goes_by_the_name_the_user_gave_it() {
     );
     assert_eq!(
         r["structuredContent"]["attached"],
-        json!(["report.pdf"]),
+        json!([{ "name": "report.pdf", "size": 10 }]),
         "{r}"
     );
 }
@@ -506,4 +506,319 @@ fn a_tool_given_null_for_what_it_may_leave_out_leaves_it_out() {
                 "attachments": null }),
     );
     assert_eq!(r["isError"], false, "{r}");
+}
+
+// ---- What an agent is told of what it drafted ----
+
+#[test]
+fn a_draft_kept_says_which_it_is_who_it_goes_to_and_how_big_its_files_are() {
+    let (_dir, path) = a_file("notes.txt", "the notes");
+    let mut server = demo_server(false);
+    let args = json!({ "to": ["a@b.example"], "cc": ["c@d.example"], "subject": "Twice",
+                       "body": "see it", "attachments": [path] });
+    let first = call(&mut server, "draft_message", args.clone());
+    let again = call(&mut server, "draft_message", args);
+    let (first, again) = (&first["structuredContent"], &again["structuredContent"]);
+    assert_ne!(first["uid"], again["uid"], "told apart: {first} {again}");
+    assert_eq!(first["subject"], "Twice", "{first}");
+    assert_eq!(first["to"], json!(["a@b.example"]), "{first}");
+    assert_eq!(first["cc"], json!(["c@d.example"]), "{first}");
+    assert_eq!(
+        first["attached"],
+        json!([{ "name": "notes.txt", "size": 9 }]),
+        "{first}"
+    );
+    let whole = call(&mut server, "list_accounts", json!({}));
+    assert_eq!(
+        first["account"], whole["structuredContent"]["accounts"][0]["name"],
+        "{first}"
+    );
+    let read = call(
+        &mut server,
+        "read_message",
+        json!({ "folder": first["saved_in"], "uid": first["uid"] }),
+    );
+    assert_eq!(read["structuredContent"]["subject"], "Twice", "{read}");
+}
+
+/// The demo's server, holding a letter to the user and two more, one
+/// copied: its uid.
+fn holding_one_to_many(server: &mut crate::mcp::Server) -> serde_json::Value {
+    server
+        .first_store()
+        .append(
+            "INBOX",
+            b"From: Ada <ada@analytical.example>\r\nTo: you@example.com, Bob <bob@b.example>\r\n\
+              Cc: Vice Dean <dean@u.example>\r\nSubject: To many\r\n\
+              Date: Sat, 1 Jan 2050 00:00:00 +0000\r\nMessage-ID: <many@example.com>\r\n\r\nHi\r\n",
+            true,
+        )
+        .unwrap();
+    let found = call(server, "search_messages", json!({ "query": "To many" }));
+    found["structuredContent"]["messages"][0]["uid"].clone()
+}
+
+#[test]
+fn a_reply_to_the_sender_alone_says_who_it_leaves_out() {
+    let mut server = demo_server(false);
+    let uid = holding_one_to_many(&mut server);
+    let r = call(
+        &mut server,
+        "draft_reply",
+        json!({ "uid": uid, "body": "Yes" }),
+    );
+    let r = &r["structuredContent"];
+    assert_eq!(r["to"], json!(["Ada <ada@analytical.example>"]), "{r}");
+    assert_eq!(r["cc"], json!([]), "{r}");
+    assert_eq!(
+        r["not_copied"],
+        json!(["Bob <bob@b.example>", "Vice Dean <dean@u.example>"]),
+        "the user is not among them: {r}"
+    );
+    assert!(
+        r["said"].as_str().unwrap().contains("with all"),
+        "what would copy them: {r}"
+    );
+}
+
+#[test]
+fn a_reply_to_all_leaves_no_one_out_and_a_reply_to_one_alone_says_nothing_of_it() {
+    let mut server = demo_server(false);
+    let uid = holding_one_to_many(&mut server);
+    let r = call(
+        &mut server,
+        "draft_reply",
+        json!({ "uid": uid, "body": "Yes", "all": true }),
+    );
+    let r = &r["structuredContent"];
+    assert_eq!(r["not_copied"], json!([]), "{r}");
+    assert!(!r["said"].as_str().unwrap().contains("with all"), "{r}");
+    assert_eq!(
+        r["cc"],
+        json!(["Bob <bob@b.example>", "Vice Dean <dean@u.example>"]),
+        "{r}"
+    );
+    let sole = call(
+        &mut server,
+        "draft_message",
+        json!({ "to": ["a@b.example"], "subject": "x", "body": "y" }),
+    );
+    assert!(
+        sole["structuredContent"].get("not_copied").is_none(),
+        "{sole}"
+    );
+}
+
+#[test]
+fn a_draft_kept_on_a_server_is_known_by_the_uid_the_server_says() {
+    let (account, boxes) = server();
+    let mut imap = Imap::new(account);
+    let uid = imap
+        .append_draft("Sent Items", b"From: me@example.com\r\n\r\nhi\r\n")
+        .unwrap();
+    let held = boxes.lock().unwrap();
+    let kept = held.iter().find(|b| b.name == "Sent Items").unwrap();
+    assert_eq!(uid, kept.letters.last().map(|l| l.uid));
+}
+
+#[test]
+fn a_server_that_does_not_say_is_asked_by_message_id_never_guessed_at() {
+    let (account, boxes) = server();
+    let kept = |boxes: &Boxes, says: &str| {
+        let held = boxes.lock().unwrap();
+        let sent = held.iter().find(|b| b.name == "Sent Items").unwrap();
+        sent.letters
+            .iter()
+            .find(|l| String::from_utf8_lossy(&l.raw).contains(says))
+            .map(|l| l.uid)
+    };
+    boxes
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|b| b.name == "Sent Items")
+        .unwrap()
+        .says_appenduid = false;
+    let mut imap = Imap::new(account);
+    let uid = imap
+        .append_draft(
+            "Sent Items",
+            b"From: me@example.com\r\nMessage-ID: <wanted@example.com>\r\n\r\nhi\r\n",
+        )
+        .unwrap();
+    imap.append(
+        "Sent Items",
+        b"From: me@example.com\r\nMessage-ID: <later@example.com>\r\n\r\nlater\r\n",
+        true,
+    )
+    .unwrap();
+    assert_eq!(uid, kept(&boxes, "wanted@"));
+    // With no Message-ID to ask by, it says it cannot tell.
+    let told = imap
+        .append_draft("Sent Items", b"From: me@example.com\r\n\r\nno id\r\n")
+        .unwrap();
+    assert_eq!(told, None, "not the highest there is");
+}
+
+/// The user's answer to what they were asked, and the tool called to ask.
+pub(super) fn answered(
+    server: &mut crate::mcp::Server,
+    asking: u32,
+    tool: &str,
+    args: serde_json::Value,
+    action: &str,
+) -> (String, serde_json::Value) {
+    answered_with(
+        server,
+        asking,
+        tool,
+        args,
+        action,
+        json!({ "confirm": true }),
+    )
+}
+
+/// As `answered`, what they said given.
+pub(super) fn answered_with(
+    server: &mut crate::mcp::Server,
+    asking: u32,
+    tool: &str,
+    args: serde_json::Value,
+    action: &str,
+    content: serde_json::Value,
+) -> (String, serde_json::Value) {
+    let script = vec![
+        json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": { "name": tool, "arguments": args } })
+        .to_string(),
+        json!({ "jsonrpc": "2.0", "id": format!("letterbox-{asking}"),
+            "result": { "action": action, "content": content } })
+        .to_string(),
+    ];
+    let out = Written::default();
+    server
+        .serve(crate::mcp::Io {
+            lines: Box::new(script.into_iter().map(Ok)),
+            out: Box::new(out.clone()),
+        })
+        .unwrap();
+    let written = out.messages();
+    let asked = written
+        .iter()
+        .rfind(|m| m["method"] == "elicitation/create")
+        .map(|m| m["params"]["message"].as_str().unwrap().to_string())
+        .unwrap_or_default();
+    let reply = written.iter().find(|m| m["id"] == 10).unwrap().clone();
+    (asked, reply["result"].clone())
+}
+
+#[test]
+fn a_draft_thrown_away_is_asked_about_told_apart_from_its_twin_and_kept_in_trash() {
+    let (_dir, path) = a_file("big.bin", &"x".repeat(5000));
+    let mut server = demo_server(true);
+    let twin = |attachments: serde_json::Value| json!({ "to": ["a@b.example"], "subject": "Twin", "body": "y", "attachments": attachments });
+    let old = call(&mut server, "draft_message", twin(json!([])));
+    let new = call(&mut server, "draft_message", twin(json!([path])));
+    let old = old["structuredContent"]["uid"].clone();
+    let new = new["structuredContent"]["uid"].clone();
+    let listed = in_folder(&mut server, "Drafts");
+    let was = listed.iter().find(|m| m["uid"] == old).unwrap();
+    let year = was["date"].as_str().unwrap()[..4].to_string();
+
+    let (asked, r) = answered(
+        &mut server,
+        1,
+        "trash_messages",
+        json!({ "folder": "Drafts", "uids": [old] }),
+        "decline",
+    );
+    assert_eq!(r["structuredContent"]["moved"], 0, "{r}");
+    assert!(asked.contains("Twin"), "{asked}");
+    assert!(asked.contains(&year), "when it was written: {asked}");
+    let raw = server
+        .first_store()
+        .raw("Drafts", old.as_u64().unwrap() as u32)
+        .unwrap();
+    assert!(
+        asked.contains(&crate::ui::size(raw.len())),
+        "how big, as twins differ: {asked}"
+    );
+    let kept = |server: &mut crate::mcp::Server, uid: &serde_json::Value| {
+        in_folder(server, "Drafts").iter().any(|m| m["uid"] == *uid)
+    };
+    assert!(kept(&mut server, &old), "the user said no");
+    assert!(kept(&mut server, &new));
+
+    let trash = in_folder(&mut server, "Trash").len();
+    let (_, r) = answered(
+        &mut server,
+        2,
+        "trash_messages",
+        json!({ "folder": "Drafts", "uids": [old] }),
+        "accept",
+    );
+    assert_eq!(r["structuredContent"]["moved"], 1, "{r}");
+    assert_eq!(r["structuredContent"]["learnt"], 0, "{r}");
+    assert!(server.learnt.is_empty());
+    assert!(!kept(&mut server, &old), "gone from Drafts");
+    assert!(kept(&mut server, &new), "its twin stays");
+    assert_eq!(
+        in_folder(&mut server, "Trash").len(),
+        trash + 1,
+        "not gone for good"
+    );
+}
+
+#[test]
+fn what_is_thrown_away_of_any_other_folder_is_listed_as_ever() {
+    let mut server = demo_server(true);
+    let uid = in_folder(&mut server, "INBOX")[0]["uid"].clone();
+    let (asked, _) = answered(
+        &mut server,
+        1,
+        "trash_messages",
+        json!({ "uids": [uid] }),
+        "decline",
+    );
+    assert!(!asked.contains(" ["), "{asked}");
+}
+
+#[test]
+fn an_agent_is_told_how_files_go_on_a_draft_and_what_becomes_of_one_thrown_away() {
+    let mut server = demo_server(true);
+    let init = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": { "elicitation": {} } } }))
+        .unwrap();
+    let said = init["result"]["instructions"].as_str().unwrap();
+    assert!(said.contains("attachments"), "{said}");
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .unwrap();
+    let tool = |name: &str| {
+        listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    for name in ["draft_reply", "draft_message"] {
+        let t = tool(name);
+        let about = t["description"].as_str().unwrap();
+        assert!(about.contains("described"), "{name}: {about}");
+        assert!(about.contains("trash_messages"), "how to redo one: {about}");
+        let files = t["inputSchema"]["properties"]["attachments"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(files.contains("described"), "{name}: {files}");
+    }
+    let trash = tool("trash_messages");
+    assert!(
+        trash["description"].as_str().unwrap().contains("draft"),
+        "{trash}"
+    );
+    let all = tool("draft_reply")["inputSchema"]["properties"]["all"]["description"].clone();
+    assert!(all.as_str().unwrap().contains("not_copied"), "{all}");
 }

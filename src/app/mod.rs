@@ -398,7 +398,9 @@ pub struct App {
     /// it is to go now; whether the next send goes as it is, its checking
     /// let go by C-c; and what is said of the grammar once it is sent.
     pub check_on_send: bool,
-    pub sending_asked: bool,
+    pub asked: Option<SendAsked>,
+    /// How many saves were asked for, each answer known by its own.
+    saves: u64,
     send_as_is: bool,
     send_note: Option<String>,
     checking_for_send: bool,
@@ -770,7 +772,8 @@ impl App {
             checking: None,
             // Never in tests, which would fetch the model: those of it say so.
             check_on_send: cfg!(feature = "grammar") && !cfg!(test),
-            sending_asked: false,
+            asked: None,
+            saves: 0,
             send_as_is: false,
             send_note: None,
             checking_for_send: false,

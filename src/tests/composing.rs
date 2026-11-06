@@ -50,7 +50,7 @@ fn after_a_send_warning_c_c_c_c_sends_without_asking_the_grammar_again() {
             &mut app,
             &["c", "bob@x.org", "<tab>", "<tab>", "<tab>", "thanks i will"],
         );
-        press(&mut app, &["<c-c>", "<c-c>"]);
+        press(&mut app, &["<c-c>", "<c-c>", "y"]);
         assert!(app.checking.is_some(), "{}", app.status);
         press(&mut app, &[answer, "y"]);
         assert!(app.status.contains("no subject"), "{}", app.status);
@@ -74,8 +74,8 @@ fn after_a_send_warning_c_c_c_c_sends_without_asking_the_grammar_again() {
         &mut app,
         &["c", "bob@x.org", "<tab>", "<tab>", "<tab>", "thanks i will"],
     );
-    press(&mut app, &["<c-c>", "<c-c>", "i", "y", "!"]);
-    press(&mut app, &["<c-c>", "<c-c>"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y", "i", "y", "!"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y"]);
     assert!(app.checking.is_some(), "{}", app.status);
 }
 
@@ -144,7 +144,7 @@ fn c_c_and_c_x_are_said_while_writing_and_a_key_they_lack_is_undefined() {
     assert_eq!(app.status, "C-x-");
     press(&mut app, &["<c-z>"]);
     assert_eq!(app.status, "C-x C-z is undefined");
-    // C-g lets C-c go, saying nothing more.
+    // C-g lets C-c go, saying nothing more, and starts no check.
     press(&mut app, &["<c-c>", "<c-g>"]);
     assert_eq!(app.status, "");
     assert!(app.compose.is_some());

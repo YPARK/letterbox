@@ -198,7 +198,7 @@ impl Record {
             Some(m) => (
                 addresses(m.to()),
                 addresses(m.cc()),
-                m.body_text(0).map(|t| t.into_owned()).unwrap_or_default(),
+                mail::listed_text(m, &indexed.raw),
             ),
             None => (Vec::new(), Vec::new(), String::new()),
         };

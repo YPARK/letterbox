@@ -27,8 +27,30 @@ const LISTED: &str = "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC
                       MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
                       BODY.PEEK[TEXT]<0.2048>)";
 
+/// How many times Sent is looked in for the copy a server files itself, and
+/// how long apart, before letterbox keeps one of its own.
+const SENT_LOOKS: u32 = 4;
+/// How many sends in a row found no copy before the server is taken to file
+/// none, and looked for once.
+const SENT_MISSES: u32 = 3;
+const SENT_LOOKED_AFTER: Duration = Duration::from_millis(500);
+
+/// How many times to look in Sent, as the server has done so far: longer where
+/// it has filed its own, once where it has been seen not to.
+pub fn sent_looks(files_its_own: bool, misses: u32) -> u32 {
+    match (files_its_own, misses >= SENT_MISSES) {
+        (true, _) => SENT_LOOKS * 3,
+        (false, true) => 1,
+        (false, false) => SENT_LOOKS,
+    }
+}
+
 pub struct Imap {
     account: Account,
+    /// Whether the server has been seen to file what is sent, and how many
+    /// sends in a row it has not.
+    files_sent: bool,
+    sent_misses: u32,
     session: Option<Session>,
     /// The folder selected, as it was then.
     selected: Option<Selected>,
@@ -43,29 +65,35 @@ pub struct Imap {
 }
 
 impl Imap {
-    /// Add `raw` to the end of `folder`, with `flags`.
+    /// Add `raw` to the end of `folder`, with `flags`. The UID it took, if
+    /// the server says.
     fn append_flagged(
         &mut self,
         folder: &str,
         raw: &[u8],
         flags: &[imap::types::Flag<'static>],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<u32>> {
         self.run(|s, selected| {
             let mut cmd = s.append(folder, raw);
             for flag in flags {
                 cmd.flag(flag.clone());
             }
-            cmd.finish()?;
+            let appended = cmd.finish()?;
             if selected.as_ref().is_some_and(|sel| sel.folder == folder) {
                 *selected = None;
             }
-            Ok(())
+            Ok(appended.uids.and_then(|uids| match uids.first() {
+                Some(imap_proto::UidSetMember::Uid(uid)) => Some(*uid),
+                _ => None,
+            }))
         })
     }
 
     pub fn new(account: Account) -> Self {
         Imap {
             account,
+            files_sent: false,
+            sent_misses: 0,
             session: None,
             selected: None,
             can_move: None,
@@ -314,13 +342,12 @@ impl Store for Imap {
         }
     }
 
-    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+    fn uid_of(&mut self, folder: &str, message_id: &str) -> anyhow::Result<Option<u32>> {
         let id = mail::brackets(message_id);
         self.run(|s, selected| {
             select(s, selected, folder, true)?;
-            Ok(!s
-                .uid_search(format!("HEADER Message-ID {}", astring(&id)))?
-                .is_empty())
+            let found = s.uid_search(format!("HEADER Message-ID {}", astring(&id)))?;
+            Ok(found.into_iter().max())
         })
     }
 
@@ -330,12 +357,22 @@ impl Store for Imap {
         } else {
             &[]
         };
-        self.append_flagged(folder, raw, flags)
+        self.append_flagged(folder, raw, flags).map(|_| ())
     }
 
-    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<()> {
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<Option<u32>> {
         use imap::types::Flag;
-        self.append_flagged(folder, raw, &[Flag::Seen, Flag::Draft])
+        let told = self.append_flagged(folder, raw, &[Flag::Seen, Flag::Draft])?;
+        if told.is_some() {
+            return Ok(told);
+        }
+        // As relocate finds what it moved: by Message-ID, as the highest UID
+        // there might be some other message. It is kept by now, so not being
+        // able to tell which it is is no failure, for it to be drafted again.
+        let Some(id) = mail::field(raw, "Message-ID") else {
+            return Ok(None);
+        };
+        Ok(self.uid_of(folder, &id).ok().flatten())
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {
@@ -389,6 +426,9 @@ impl Store for Imap {
             Ok(folder) => folder,
             Err(e) => return Ok(format!("sent, and not saved in Sent: {e:#}")),
         };
+        if self.filed_by_server(&folder, &sent) {
+            return Ok("sent".to_string());
+        }
         if let Err(e) = self.append(&folder, &sent, true) {
             return Ok(format!("sent, and not saved in Sent: {e:#}"));
         }
@@ -792,6 +832,31 @@ impl Imap {
         })?;
         self.caps = Some(caps);
         Ok(caps)
+    }
+
+    /// Whether the server has filed `sent` in `folder` itself, as Exchange
+    /// does, a moment after taking it. Not being able to tell is no: a copy
+    /// kept twice is better than none.
+    fn filed_by_server(&mut self, folder: &str, sent: &[u8]) -> bool {
+        let Some(id) = mail::field(sent, "Message-ID") else {
+            return false;
+        };
+        for look in 0..sent_looks(self.files_sent, self.sent_misses) {
+            if look > 0 {
+                std::thread::sleep(SENT_LOOKED_AFTER);
+            }
+            match self.holds(folder, &id) {
+                Ok(true) => {
+                    self.files_sent = true;
+                    self.sent_misses = 0;
+                    return true;
+                }
+                Ok(false) => {}
+                Err(_) => return false,
+            }
+        }
+        self.sent_misses += 1;
+        false
     }
 
     /// The Sent folder, made if the server has none.
