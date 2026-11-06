@@ -237,13 +237,7 @@ impl Server {
                     .map(|e| said(&e));
                 let gone: Vec<&Summary> =
                     moving.iter().filter(|s| moved.contains(&s.uid)).collect();
-                // A draft is the user's own, not what they would throw away
-                // of what comes to them, wherever All Mail holds it too.
-                let learnt = if of_drafts {
-                    json!(0)
-                } else {
-                    self.advise(account.as_deref(), &folder, &gone, thrown)
-                };
+                let learnt = self.advise(account.as_deref(), &folder, &gone, thrown);
                 Ok(json!({
                     "moved": moved.len(),
                     "not_recorded_to_put_back": unrecorded,

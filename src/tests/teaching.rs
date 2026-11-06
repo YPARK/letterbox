@@ -138,3 +138,24 @@ fn a_choice_taken_back_is_learnt_from_as_it_was_before() {
     apply(&mut app);
     assert_eq!((thrown(&app), kept(&app)), (t, k), "{}", app.status);
 }
+
+#[test]
+fn a_message_labelled_a_draft_teaches_nothing_wherever_it_is_acted_on() {
+    let app = super::mapscreen::demo_map();
+    let mut index = app.index.lock().unwrap();
+    let mut keys = index.records.keys().cloned();
+    let (mail, draft) = (keys.next().unwrap(), keys.next().unwrap());
+    drop(keys);
+    let (t, k) = (index.filter.thrown, index.filter.kept);
+    index
+        .records
+        .get_mut(&draft)
+        .unwrap()
+        .server
+        .push("\\Draft".to_string());
+    index.teach(&draft, true).unwrap();
+    index.teach(&draft, false).unwrap();
+    assert_eq!((index.filter.thrown, index.filter.kept), (t, k));
+    index.teach(&mail, true).unwrap();
+    assert_eq!(index.filter.thrown, t + 1, "any other, as ever");
+}

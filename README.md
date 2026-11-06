@@ -447,7 +447,8 @@ list, and `u` and `!` mark the one picked.
 letterbox learns what you throw away. Each message you trash, however it
 is trashed, teaches it that mail like it is thrown away; each you file,
 archive, answer, flag, keep in the Inbox looked through, or put back from
-the Trash, that it is not. Like is by who sent it, from where, by which
+the Trash, that it is not. A draft teaches nothing, whatever is done with
+it: it is your own writing. Like is by who sent it, from where, by which
 list, and its words, never its subject alone, so that a sender you always
 throw away is known by a subject never seen; and by whether you ever wrote
 to its sender, as your sent mail says, whether its sender takes no answer

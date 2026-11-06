@@ -275,3 +275,58 @@ fn filed_as_an_agent_proposed_from_its_folder_not_the_one_you_are_looking_at() {
     assert!(labels.contains(&"Family".to_string()), "{labels:?}");
     assert!(!inbox, "out of the Inbox");
 }
+
+/// Letterbox on Gmail, listing its Drafts, which hold a draft by the
+/// `Message-ID` of what All Mail holds, as Gmail keeps a draft in both.
+fn in_gmail_drafts() -> App {
+    let (mut app, boxes) = gmail_app(true);
+    {
+        let mut fake = boxes.lock().unwrap();
+        let raw = fake.iter().find(|b| b.name == "INBOX").unwrap().letters[0]
+            .raw
+            .clone();
+        let drafts = fake
+            .iter_mut()
+            .find(|b| b.name == "[Gmail]/Drafts")
+            .unwrap();
+        drafts.push(Letter::new(900, &["\\Seen", "\\Draft"], raw));
+    }
+    let row = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(*r, app::Row::Folder(0, i) if app.accounts[0].folders[i].path == "[Gmail]/Drafts"),
+        )
+        .unwrap();
+    app.focus = Focus::Side;
+    app.row = row;
+    press(&mut app, &["<enter>"]);
+    app.settle(PATIENCE);
+    assert_eq!(app.folder_name(), "Drafts", "{}", app.status);
+    assert_eq!(app.shown.len(), 1, "{}", app.status);
+    app
+}
+
+fn lessons(app: &App) -> (u32, u32) {
+    let index = app.index.lock().unwrap();
+    (index.filter.thrown, index.filter.kept)
+}
+
+#[test]
+fn a_draft_thrown_away_by_hand_on_gmail_teaches_nothing() {
+    let mut app = in_gmail_drafts();
+    press(&mut app, &["d"]);
+    app.settle(PATIENCE);
+    assert!(app.shown.is_empty(), "moved: {}", app.status);
+    assert_eq!(lessons(&app), (0, 0), "{}", app.status);
+}
+
+#[test]
+fn a_draft_archived_or_flagged_or_taken_up_on_gmail_teaches_nothing() {
+    for keys in [&["e"][..], &["f"][..], &["E", "<c-c>", "<c-k>"][..]] {
+        let mut app = in_gmail_drafts();
+        press(&mut app, keys);
+        app.settle(PATIENCE);
+        assert_eq!(lessons(&app), (0, 0), "{keys:?}: {}", app.status);
+    }
+}

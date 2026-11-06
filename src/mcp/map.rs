@@ -185,6 +185,15 @@ impl Server {
         thrown: bool,
         asked: bool,
     ) -> anyhow::Result<usize> {
+        // Nothing done in Drafts is learnt, though All Mail holds the draft
+        // too, marked so or not.
+        let folders = self.store(account)?.folders()?;
+        if folders
+            .iter()
+            .any(|f| f.path == folder && matches!(f.role, mail::Role::Drafts))
+        {
+            return Ok(0);
+        }
         let ident = self.store(account)?.ident();
         let m = self.mapped()?;
         let at = jiff::Timestamp::now().as_second();

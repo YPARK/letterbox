@@ -12,7 +12,7 @@
 //! the program cannot ask, nothing is moved. What they said yes to is
 //! written down, with the map's public key alone, for letterbox to learn.
 //! A letter it is asked to write is kept in Drafts, for the user to send;
-//! one thrown away from there, as they say yes to, teaches nothing.
+//! nothing done with a draft teaches anything.
 //! The map's index is read, never written, as letterbox may be writing it:
 //! what is near a message, where it would be filed, and whether it would
 //! be thrown away.

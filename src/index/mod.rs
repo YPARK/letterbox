@@ -665,7 +665,8 @@ impl Index {
     }
 
     /// What is learnt of the message `key`, thrown away or kept, as it is
-    /// read now beside `known`; none if it is not indexed.
+    /// read now beside `known`; none if it is not indexed, or a draft: the
+    /// user's own writing, not what they would throw away of what comes.
     pub fn lesson(
         &self,
         key: &Key,
@@ -673,6 +674,9 @@ impl Index {
         known: &crate::filter::Known,
     ) -> Option<crate::filter::Taught> {
         let r = self.records.get(key)?;
+        if labels::system(r, &self.folders).draft {
+            return None;
+        }
         Some(crate::filter::Taught {
             key: key.clone(),
             thrown,
