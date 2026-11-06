@@ -2,6 +2,9 @@
 //! suggests, and labels renamed.
 use super::*;
 
+/// Why a draft is not filed from the list.
+const DRAFT_NOT_FILED: &str = "a draft is not filed: it is your own writing, not on the map";
+
 impl App {
     /// File the messages `keys` under `label`: one at once, more asked
     /// first, all of them together.
@@ -168,7 +171,11 @@ impl App {
             .listed_on_map()
             .and_then(|i| self.map.snapshot.as_ref().map(|s| s.dots[i].key.clone()))
         else {
-            self.status = "not on the map yet: it is marked once the map has read it".to_string();
+            self.status = if self.picked_is_draft() {
+                "a draft is not marked: it is your own writing, not on the map".to_string()
+            } else {
+                "not on the map yet: it is marked once the map has read it".to_string()
+            };
             return;
         };
         let region = self
@@ -259,7 +266,11 @@ impl App {
     /// asked first.
     pub(super) fn list_file_all(&mut self) {
         let Some(i) = self.listed_on_map() else {
-            self.status = "not on the map yet: it is filed once the map has read it".to_string();
+            self.status = if self.picked_is_draft() {
+                DRAFT_NOT_FILED.to_string()
+            } else {
+                "not on the map yet: it is filed once the map has read it".to_string()
+            };
             return;
         };
         let Some(s) = self.map.snapshot.clone() else {
@@ -295,7 +306,9 @@ impl App {
     /// would go, and `-` says it is not one for there.
     pub(super) fn list_file(&mut self, act: Act) {
         let Some(i) = self.listed_on_map() else {
-            self.status = if self.map_off.is_some() || self.map_later {
+            self.status = if self.picked_is_draft() {
+                DRAFT_NOT_FILED.to_string()
+            } else if self.map_off.is_some() || self.map_later {
                 "filing is by the map: M begins it".to_string()
             } else {
                 "not on the map yet: it is filed once the map has read it".to_string()

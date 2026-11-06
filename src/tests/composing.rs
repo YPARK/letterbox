@@ -144,8 +144,8 @@ fn c_c_and_c_x_are_said_while_writing_and_a_key_they_lack_is_undefined() {
     assert_eq!(app.status, "C-x-");
     press(&mut app, &["<c-z>"]);
     assert_eq!(app.status, "C-x C-z is undefined");
-    // C-g lets C-x go, saying nothing more.
-    press(&mut app, &["<c-x>", "<c-g>"]);
+    // C-g lets C-c go, saying nothing more, and starts no check.
+    press(&mut app, &["<c-c>", "<c-g>"]);
     assert_eq!(app.status, "");
     assert!(app.compose.is_some());
 }
@@ -203,10 +203,7 @@ fn a_narrow_box_shows_whole_hints_with_undo_and_f1() {
         assert!(screen.contains("F1 all keys"), "{width}: {screen}");
         assert!(screen.contains("C-/ undo"), "{width}: {screen}");
         // No hint cut short of what it does.
-        for line in screen.lines().map(|l| l.replace("C-c C-g", "")) {
-            if !line.contains("C-g") {
-                continue;
-            }
+        for line in screen.lines().filter(|l| l.contains("C-g")) {
             assert!(line.contains("C-g stops"), "{width}: {line}");
         }
     }

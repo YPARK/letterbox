@@ -337,3 +337,11 @@ fn what_else_is_listed_on_gmail_is_known_as_ever() {
     let (app, _boxes) = gmail_app(true);
     assert!(app.listed_key(&app.shown[0]).is_some(), "{}", app.status);
 }
+
+#[test]
+fn a_draft_on_gmail_says_it_is_not_filed_not_that_the_map_will_read_it() {
+    let mut app = in_gmail_drafts();
+    press(&mut app, &["m"]);
+    assert!(app.status.contains("draft"), "{}", app.status);
+    assert!(!app.status.contains("not on the map yet"), "{}", app.status);
+}

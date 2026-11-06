@@ -32,7 +32,7 @@ It is built with two features, both on by default:
   images (kitty, WezTerm, Ghostty, iTerm2). That brings typst, so it
   builds for longer, and typst's evaluator assembles one small file with
   the system's C toolchain.
-- `grammar`, to check the grammar of what you write, `C-c C-g`, with a
+- `grammar`, to check the grammar of what you write, `C-c g`, with a
   small model.
 
 The model is a T5 from Hugging Face, made to correct English grammar, read
@@ -218,7 +218,7 @@ again finds the next, `⏎` stays there, `C-g` goes back. `C-c C-c` sends
 it, held 10 seconds first, counted down at the foot: `C-g` takes it back,
 still there to change, and `C-c C-c` again sends it at once. `C-c C-k` discards it, asking first if you changed it, as Emacs's
 message-mode asks: `y` discards it, any other key goes on writing. `C-g`
-lets go of a search, the mark, or a `C-c` begun, as Emacs's does; with
+lets go of a search, the mark, or a `C-c` begun, as Emacs's does, so `C-c C-g` does nothing; with
 nothing to let go, it leaves the message, from wherever the cursor is,
 asking first if you changed it or it carries files. `esc` does as `C-g`. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
@@ -226,7 +226,7 @@ asking first if you changed it or it carries files. `esc` does as `C-g`. Outside
 Drafts and goes on: saved again it replaces what was saved, which goes to Trash,
 and sent, what was saved goes too. It may be to no one yet.
 
-`C-c C-g`, or the Grammar button on its top edge, checks the grammar of
+`C-c g`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, the message it forwards, nor the signature. Each change the model would make

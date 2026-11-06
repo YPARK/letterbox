@@ -52,7 +52,8 @@ impl Server {
         let drafts = drafts_of(&store.folders()?)?;
         let uid = store.append_draft(&drafts, &raw)?;
         let mut said = "kept in Drafts, not sent: the user reads it, changes it and sends it \
-                        themselves, with E on it in letterbox, or from their mail app"
+                        themselves, with E on it in letterbox, or from their mail app, or says \
+                        yes to send_draft"
             .to_string();
         if not_copied.as_ref().is_some_and(|n| !n.is_empty()) {
             said.push_str(
@@ -91,41 +92,70 @@ impl Server {
         let store = self.store(account)?;
         let folders = store.folders()?;
         let drafts = drafts_of(&folders)?;
+        if let Some(asked) = args.get("folder").and_then(Value::as_str)
+            && asked != drafts
+        {
+            bail!(
+                "only what is in {drafts} is sent: {asked} is not, and a uid is its folder's own"
+            );
+        }
         let raw = store
             .raw(&drafts, uid)
             .with_context(|| format!("there is no draft {uid} in {drafts}"))?;
-        if mail::field(&raw, "Bcc").is_some() {
-            bail!(
-                "it has a Bcc, which letterbox cannot send: the user sends it from their mail app"
-            );
-        }
         let m = mail::message(uid, raw)?;
-        if m.to.is_empty() && m.cc.is_empty() {
-            bail!("it goes to no one");
-        }
-        if let Some(why) = self.confirm(&going(&m), "Send it")?.refused("sent") {
+        let (to, cc) = goes_as_it_is(&m)?;
+        let me = store.address().to_string();
+        let answer = self.confirm_as(&going(&m, &to, &cc), "Send it", false)?;
+        if let Some(why) = answer.refused("sent") {
             return Ok(json!({ "sent": false, "said": why }));
         }
         let store = self.store(account)?;
-        let said_of_it = store.send(&m.raw)?;
+        let said_of_it = store.send(&crate::compose::to_send(&m.raw, &me))?;
         // It has gone: what follows is told of, never a failure to send.
-        if let Some(id) = mail::field(&m.raw, "In-Reply-To")
-            && let Ok(Some(uid)) = store.uid_of("INBOX", &id)
-        {
-            let _ = store.set("INBOX", uid, Flag::Answered, true);
+        if let Some(id) = mail::field(&m.raw, "In-Reply-To") {
+            self.answered(account, &mail::brackets(&id));
         }
         let draft = self
             .draft_gone(account, &folders, &drafts, &m)
-            .unwrap_or_else(|e| format!("left in {drafts}: {}", said(&e)));
+            .unwrap_or_else(|e| format!("not told where it went from {drafts}: {}", said(&e)));
         Ok(json!({
             "sent": true,
             "account": self.called(account),
             "subject": m.subject,
-            "to": m.to,
-            "cc": m.cc,
+            "to": to,
+            "cc": cc,
             "said": said_of_it,
             "draft": draft,
         }))
+    }
+
+    /// The message of the Message-ID `id`, answered: marked so where the map
+    /// knows it to be, else in the Inbox, and learnt as kept, as answering
+    /// teaches in letterbox.
+    fn answered(&mut self, account: Option<&str>, id: &str) {
+        let Ok(store) = self.store(account) else {
+            return;
+        };
+        let ident = store.ident();
+        let mapped = self.mapped().ok().and_then(|m| {
+            let p = m.index.by_message_id(&ident, id)?.places.first()?;
+            Some((p.folder.clone(), p.uid))
+        });
+        let Ok(store) = self.store(account) else {
+            return;
+        };
+        let place = mapped.or_else(|| {
+            let uid = store.uid_of("INBOX", id).ok().flatten()?;
+            Some(("INBOX".to_string(), uid))
+        });
+        let Some((folder, uid)) = place else {
+            return;
+        };
+        let _ = store.set(&folder, uid, Flag::Answered, true);
+        if let Ok(found) = self.moving(account, &folder, &[uid]) {
+            let found: Vec<&Summary> = found.iter().collect();
+            self.advise(account, &folder, &found, false);
+        }
     }
 
     /// The draft `m`, sent, moved to Trash as one sent in letterbox is, to be
@@ -177,26 +207,54 @@ fn drafts_of(folders: &[Folder]) -> anyhow::Result<String> {
         .clone())
 }
 
-/// How much of a draft's text the user is shown in asking to send it.
-const SHOWN_CHARS: usize = 4000;
+/// The most of a draft's text the user can be shown in asking to send it.
+const SHOWN_CHARS: usize = 20_000;
 
-/// What the user is asked of a draft to send: all that goes.
-fn going(m: &mail::Message) -> String {
+/// Who the draft `m` goes to, To and Cc, as it will be sent: or why it is left
+/// for the user, as what they are shown must be all that goes, unchanged.
+fn goes_as_it_is(m: &mail::Message) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    const THEIRS: &str = "the user sends it themselves, with E in letterbox or from their mail app";
+    let raw = &m.raw;
+    if mail::field(raw, "Bcc").is_some() {
+        bail!("it has a Bcc, which letterbox cannot send: {THEIRS}");
+    }
+    if m.html.is_some() {
+        bail!("it has an HTML part, which cannot be shown to the user here: {THEIRS}");
+    }
+    if m.text.chars().count() > SHOWN_CHARS {
+        bail!("it is too long to show the user whole here: {THEIRS}");
+    }
+    if std::str::from_utf8(raw).is_err() {
+        bail!("it is not UTF-8, and would not go as it is: {THEIRS}");
+    }
+    let multipart = mail::field(raw, "Content-Type")
+        .is_some_and(|t| t.to_ascii_lowercase().starts_with("multipart/"));
+    if multipart && !raw.is_ascii() {
+        bail!("it has 8-bit parts, and may not go as it is: {THEIRS}");
+    }
+    let (to, cc) = (
+        crate::smtp::envelope(raw, "To")?,
+        crate::smtp::envelope(raw, "Cc")?,
+    );
+    if to.is_empty() && cc.is_empty() {
+        bail!("it goes to no one");
+    }
+    Ok((to, cc))
+}
+
+/// What the user is asked of a draft to send: all that goes, and to the
+/// addresses it goes to, not the names they come with.
+fn going(m: &mail::Message, to: &[String], cc: &[String]) -> String {
     let mut text = "Send this now? It cannot be taken back.".to_string();
-    text.push_str(&format!("\nFrom: {}\nTo: {}", m.from, m.to.join(", ")));
-    if !m.cc.is_empty() {
-        text.push_str(&format!("\nCc: {}", m.cc.join(", ")));
+    text.push_str(&format!("\nFrom: {}\nTo: {}", m.from, to.join(", ")));
+    if !cc.is_empty() {
+        text.push_str(&format!("\nCc: {}", cc.join(", ")));
     }
     text.push_str(&format!("\nSubject: {}", m.subject));
     for f in &m.attachments {
         text.push_str(&format!("\nFile: {}, {}", f.name, crate::ui::size(f.size)));
     }
-    let body: String = m.text.chars().take(SHOWN_CHARS).collect();
-    text.push_str(&format!("\n\n{body}"));
-    let left = m.text.chars().count().saturating_sub(SHOWN_CHARS);
-    if left > 0 {
-        text.push_str(&format!("\n… and {left} characters more"));
-    }
+    text.push_str(&format!("\n\n{}", m.text));
     mail::clean_lines(&text)
 }
 

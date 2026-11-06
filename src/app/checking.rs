@@ -104,11 +104,13 @@ impl App {
     /// to change, or no model to say: sent, as it is.
     pub(super) fn checked(&mut self, text: &str, edits: Result<Vec<Edit>, String>) {
         let for_send = std::mem::take(&mut self.checking_for_send);
+        // What it found is asked now, not what was asked while it looked.
+        self.asked = None;
         let Some(compose) = &self.compose else {
             return;
         };
         if compose.buffer.text() != text {
-            self.status = "changed while it was checked: C-c C-g again".to_string();
+            self.status = "changed while it was checked: C-c g again".to_string();
             return;
         }
         match edits {

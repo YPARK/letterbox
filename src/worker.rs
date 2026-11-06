@@ -104,12 +104,18 @@ pub enum Ask {
         raw: Vec<u8>,
         answer: Option<(String, u32)>,
     },
-    /// `raw` kept in `folder`, as a draft: `replacing`, the draft saved
-    /// before, its folder, UID and `Message-ID`, is for the answer to deal with.
+    /// `draft` kept in `folder`, its files read here, not to hold up the
+    /// screen: `replacing`, the draft saved before, its folder, UID and
+    /// `Message-ID`, and which `save` this is, are for the answer.
     SaveDraft {
         folder: String,
-        raw: Vec<u8>,
+        from: String,
+        draft: crate::compose::Draft,
+        in_reply_to: Option<String>,
+        references: Option<String>,
+        forwarded: Vec<crate::compose::File>,
         replacing: Option<(String, u32, String)>,
+        save: u64,
     },
 }
 
@@ -165,6 +171,7 @@ pub enum Answer {
         folder: String,
         message_id: String,
         replacing: Option<(String, u32, String)>,
+        save: u64,
     },
     /// Asked, and passed over for what was asked after it.
     Skipped,
@@ -450,14 +457,34 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
         }
         Ask::SaveDraft {
             folder,
-            raw,
+            from,
+            draft,
+            in_reply_to,
+            references,
+            forwarded,
             replacing,
-        } => Answer::DraftSaved {
-            result: store.append_draft(&folder, &raw).map_err(text),
-            message_id: crate::mail::field(&raw, "Message-ID").unwrap_or_default(),
-            folder,
-            replacing,
-        },
+            save,
+        } => {
+            let mut message_id = String::new();
+            let result = crate::compose::attached(&draft, &forwarded).and_then(|files| {
+                let raw = crate::compose::bytes(
+                    &from,
+                    &draft,
+                    in_reply_to.as_deref(),
+                    references.as_deref(),
+                    &files,
+                );
+                message_id = crate::mail::field(&raw, "Message-ID").unwrap_or_default();
+                store.append_draft(&folder, &raw).map_err(text)
+            });
+            Answer::DraftSaved {
+                result,
+                folder,
+                message_id,
+                replacing,
+                save,
+            }
+        }
     }
 }
 

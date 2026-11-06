@@ -677,8 +677,8 @@ pub const KEYS: &[Binding] = &[
     },
     Binding {
         keys: &[],
-        name: "C-c C-g",
-        hint: "C-c C-g",
+        name: "C-c g",
+        hint: "C-c g",
         foot: &[(Writing, "grammar")],
         help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change asked in a pop-up, y takes it, n skips it, a accepts all, i ignores all; C-c C-c asks first whether to check it before it is sent",
     },
@@ -694,7 +694,7 @@ pub const KEYS: &[Binding] = &[
         name: "M-$",
         hint: "",
         foot: &[],
-        help: "in the message being written, as C-c C-g: Emacs's key to check spelling",
+        help: "in the message being written, as C-c g: Emacs's key to check spelling",
     },
     Binding {
         keys: &[("C", Calendar)],

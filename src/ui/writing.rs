@@ -55,7 +55,7 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
         ("Send", "C-c C-c", t.accent, t.on_accent),
         ("Attach", "C-c C-a", t.focus, t.title),
         ("Save", "C-x C-s", t.focus, t.title),
-        ("Grammar", "C-c C-g", t.flag, t.on_accent),
+        ("Grammar", "C-c g", t.flag, t.on_accent),
         ("Discard", "C-c C-k", t.error, t.on_accent),
     ];
     // Each with its keys where there is room, else its name alone.
@@ -413,7 +413,7 @@ pub(super) fn compose_pane(f: &mut Frame, app: &mut App, area: Rect) {
                 &[
                     ("C-/", "undo"),
                     ("C-x C-s", "save"),
-                    ("C-c C-g", "grammar"),
+                    ("C-c g", "grammar"),
                     ("C-SPC", "mark"),
                     ("C-w", "cut"),
                     ("C-y", "yank"),

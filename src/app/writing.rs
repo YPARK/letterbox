@@ -15,8 +15,8 @@ pub struct Compose {
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
-    /// What is being saved in Drafts, while it is.
-    pub saving: Option<String>,
+    /// Which save this is, and what is being saved in Drafts, while it is.
+    pub saving: Option<(u64, String)>,
     /// The files of the message it forwards, sent with it while an
     /// `Attach` line names them.
     pub files: Vec<compose::File>,
@@ -81,26 +81,6 @@ pub(super) struct Pending {
     pub(super) how: Respond,
     /// A file to attach to it, once it is opened.
     pub(super) attach: Option<PathBuf>,
-}
-
-impl Compose {
-    /// Each file of `draft`, read now: a forward's, or this machine's.
-    fn attached(&self, draft: &compose::Draft) -> Result<Vec<compose::File>, String> {
-        draft
-            .attach
-            .iter()
-            .map(|value| match value.strip_suffix(compose::FORWARDED) {
-                Some(name) => self
-                    .files
-                    .iter()
-                    .find(|f| f.name == name)
-                    .cloned()
-                    .ok_or_else(|| format!("{name} is not among the files forwarded")),
-                None => compose::read_file(&compose::path_of(value))
-                    .map_err(|e| format!("cannot attach {value}: {e}")),
-            })
-            .collect()
-    }
 }
 
 impl App {
@@ -442,12 +422,12 @@ impl App {
         }
         let account = compose.account;
         let text = compose.buffer.text();
-        let letter = compose::parse_unaddressed(&text).and_then(|draft| {
-            let files = compose.attached(&draft)?;
-            Ok((draft, files))
-        });
-        let (draft, files) = match letter {
-            Ok(letter) => letter,
+        if text == compose.original && compose.thread.draft.is_some() {
+            self.status = "saved already: nothing changed".to_string();
+            return;
+        }
+        let draft = match compose::parse_unaddressed(&text) {
+            Ok(draft) => draft,
             Err(e) => {
                 self.status = format!("not saved: {e}");
                 return;
@@ -458,6 +438,10 @@ impl App {
             .get(account)
             .map(|a| a.email.clone())
             .unwrap_or_default();
+        if email.is_empty() {
+            self.status = "not saved: this account has no address to write from".to_string();
+            return;
+        }
         let Some(folder) = self
             .role_folder(account, Role::Drafts)
             .map(|f| f.path.clone())
@@ -465,25 +449,22 @@ impl App {
             self.status = "not saved: this account has no Drafts".to_string();
             return;
         };
+        self.saves += 1;
+        let save = self.saves;
         let compose = self.compose.as_mut().expect("open");
-        let raw = compose::bytes(
-            &email,
-            &draft,
-            compose.thread.in_reply_to.as_deref(),
-            compose.thread.references.as_deref(),
-            &files,
-        );
-        let replacing = compose.thread.draft.clone();
-        compose.saving = Some(text);
+        compose.saving = Some((save, text));
+        let ask = Ask::SaveDraft {
+            folder,
+            from: email,
+            draft,
+            in_reply_to: compose.thread.in_reply_to.clone(),
+            references: compose.thread.references.clone(),
+            forwarded: compose.files.clone(),
+            replacing: compose.thread.draft.clone(),
+            save,
+        };
         self.status = "saving in Drafts…".to_string();
-        self.ask(
-            account,
-            Ask::SaveDraft {
-                folder,
-                raw,
-                replacing,
-            },
-        );
+        self.ask(account, ask);
     }
 
     pub(super) fn send_compose(&mut self) {
@@ -517,7 +498,7 @@ impl App {
             self.status = "this account has no address to send from".to_string();
             return;
         }
-        let files = match compose.attached(&draft) {
+        let files = match compose::attached(&draft, &compose.files) {
             Ok(files) => files,
             Err(e) => {
                 self.status = e;

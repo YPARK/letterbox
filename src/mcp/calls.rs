@@ -225,7 +225,13 @@ impl Server {
                 let unrecorded = self.record_trashed(trashed);
                 let gone: Vec<&Summary> =
                     moving.iter().filter(|s| moved.contains(&s.uid)).collect();
-                let learnt = self.advise(account.as_deref(), &folder, &gone, thrown, of_drafts);
+                // Nothing done with a draft is learnt, though All Mail holds it
+                // too, marked so or not.
+                let learnt = if of_drafts {
+                    json!(0)
+                } else {
+                    self.advise(account.as_deref(), &folder, &gone, thrown)
+                };
                 Ok(json!({
                     "moved": moved.len(),
                     "not_recorded_to_put_back": unrecorded,

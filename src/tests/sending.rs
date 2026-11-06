@@ -183,3 +183,16 @@ fn a_letter_with_no_message_id_is_kept_as_it_cannot_be_looked_for() {
     let sent = boxes.iter().find(|b| b.name == "Sent Items").unwrap();
     assert_eq!(sent.letters.len(), 1);
 }
+
+#[test]
+fn how_long_sent_is_looked_in_goes_by_what_the_server_has_done() {
+    use crate::imap::sent_looks;
+    // Not known yet, the usual look.
+    assert_eq!(sent_looks(false, 0), sent_looks(false, 2));
+    // Known to file its own, longer, as it has been seen to do so.
+    assert!(sent_looks(true, 0) > sent_looks(false, 0));
+    // Seen not to, again and again: one look, and no waiting.
+    assert_eq!(sent_looks(false, 3), 1);
+    // Having filed its own, a miss or two does not stop the looking.
+    assert_eq!(sent_looks(true, 9), sent_looks(true, 0));
+}

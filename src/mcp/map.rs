@@ -168,9 +168,8 @@ impl Server {
         folder: &str,
         messages: &[&Summary],
         thrown: bool,
-        of_drafts: bool,
     ) -> Value {
-        match self.written_down(account, folder, messages, thrown, false, of_drafts) {
+        match self.written_down(account, folder, messages, thrown, false) {
             Ok(n) => json!(n),
             Err(e) => json!(format!("none: {}", said(&e))),
         }
@@ -185,13 +184,7 @@ impl Server {
         messages: &[&Summary],
         thrown: bool,
         asked: bool,
-        of_drafts: bool,
     ) -> anyhow::Result<usize> {
-        // Nothing done in Drafts is learnt, though All Mail holds the draft
-        // too, marked so or not.
-        if of_drafts {
-            return Ok(0);
-        }
         let ident = self.store(account)?.ident();
         let m = self.mapped()?;
         let at = jiff::Timestamp::now().as_second();
@@ -293,8 +286,14 @@ impl Server {
                 _ => passed += 1,
             }
         }
-        let learnt = self.written_down(account, folder, &junk, true, true, of_drafts)?
-            + self.written_down(account, folder, &keep, false, true, of_drafts)?;
+        // Nothing said of a draft is learnt, though All Mail holds it too,
+        // marked so or not.
+        let learnt = if of_drafts {
+            0
+        } else {
+            self.written_down(account, folder, &junk, true, true)?
+                + self.written_down(account, folder, &keep, false, true)?
+        };
         Ok(json!({
             "junk": junk.len(),
             "keep": keep.len(),

@@ -30,10 +30,27 @@ const LISTED: &str = "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC
 /// How many times Sent is looked in for the copy a server files itself, and
 /// how long apart, before letterbox keeps one of its own.
 const SENT_LOOKS: u32 = 4;
+/// How many sends in a row found no copy before the server is taken to file
+/// none, and looked for once.
+const SENT_MISSES: u32 = 3;
 const SENT_LOOKED_AFTER: Duration = Duration::from_millis(500);
+
+/// How many times to look in Sent, as the server has done so far: longer where
+/// it has filed its own, once where it has been seen not to.
+pub fn sent_looks(files_its_own: bool, misses: u32) -> u32 {
+    match (files_its_own, misses >= SENT_MISSES) {
+        (true, _) => SENT_LOOKS * 3,
+        (false, true) => 1,
+        (false, false) => SENT_LOOKS,
+    }
+}
 
 pub struct Imap {
     account: Account,
+    /// Whether the server has been seen to file what is sent, and how many
+    /// sends in a row it has not.
+    files_sent: bool,
+    sent_misses: u32,
     session: Option<Session>,
     /// The folder selected, as it was then.
     selected: Option<Selected>,
@@ -75,6 +92,8 @@ impl Imap {
     pub fn new(account: Account) -> Self {
         Imap {
             account,
+            files_sent: false,
+            sent_misses: 0,
             session: None,
             selected: None,
             can_move: None,
@@ -822,16 +841,21 @@ impl Imap {
         let Some(id) = mail::field(sent, "Message-ID") else {
             return false;
         };
-        for look in 0..SENT_LOOKS {
+        for look in 0..sent_looks(self.files_sent, self.sent_misses) {
             if look > 0 {
                 std::thread::sleep(SENT_LOOKED_AFTER);
             }
             match self.holds(folder, &id) {
-                Ok(true) => return true,
+                Ok(true) => {
+                    self.files_sent = true;
+                    self.sent_misses = 0;
+                    return true;
+                }
                 Ok(false) => {}
                 Err(_) => return false,
             }
         }
+        self.sent_misses += 1;
         false
     }
 

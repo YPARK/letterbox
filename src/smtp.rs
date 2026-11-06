@@ -296,19 +296,27 @@ fn quoted_printable(body: &str) -> String {
 fn recipients(raw: &[u8]) -> anyhow::Result<Vec<String>> {
     let mut out = Vec::new();
     for name in ["To", "Cc", "Bcc"] {
-        let Some(value) = mail::field(raw, name) else {
-            continue;
-        };
-        for part in crate::compose::split_addrs(&value) {
-            let Some(spec) = crate::compose::addr_spec(&part) else {
-                bail!("{part} is not an address");
-            };
+        for spec in envelope(raw, name)? {
             if !out.contains(&spec) {
                 out.push(spec);
             }
         }
     }
     Ok(out)
+}
+
+/// The addresses `raw` is sent to for its header `name`: as they go on the
+/// wire, so what the user is shown is what happens.
+pub(crate) fn envelope(raw: &[u8], name: &str) -> anyhow::Result<Vec<String>> {
+    let Some(value) = mail::field(raw, name) else {
+        return Ok(Vec::new());
+    };
+    crate::compose::split_addrs(&value)
+        .iter()
+        .map(|part| {
+            crate::compose::addr_spec(part).with_context(|| format!("{part} is not an address"))
+        })
+        .collect()
 }
 
 fn first(text: &str) -> String {

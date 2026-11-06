@@ -313,7 +313,7 @@ fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
     for b in [
         "Send  C-c C-c",
         "Attach  C-c C-a",
-        "Grammar  C-c C-g",
+        "Grammar  C-c g",
         "Discard  C-c C-k",
     ] {
         assert!(top.contains(b), "{top}");

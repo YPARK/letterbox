@@ -13,7 +13,7 @@ pub enum Done {
     Cancel,
     /// `C-c C-a`: a file to be attached is asked for.
     Attach,
-    /// `C-c C-g`, or `M-$`, Emacs's key to check spelling: the grammar of what
+    /// `C-c g`, or `M-$`, Emacs's key to check spelling: the grammar of what
     /// is written checked.
     Check,
     /// `C-x C-s`: kept in Drafts, and gone on with.
@@ -803,8 +803,9 @@ pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Don
             ('c', KeyCode::Char('c' | 'C')) => Done::Send,
             ('c', KeyCode::Char('k' | 'K')) => Done::Cancel,
             ('c', KeyCode::Char('a' | 'A')) => Done::Attach,
-            // C-c C-g: the grammar checked, as M-$, no Meta needed.
-            ('c', KeyCode::Char('g' | 'G')) => Done::Check,
+            // C-c g: the grammar checked, as M-$, no Meta needed. C-c C-g lets
+            // C-c go, as C-g lets go of anything.
+            ('c', KeyCode::Char('g' | 'G')) if !ctrl => Done::Check,
             // C-x C-s: saved, as Emacs saves.
             ('x', KeyCode::Char('s' | 'S')) if ctrl => Done::Save,
             // C-x u undoes, as Emacs's.
@@ -813,7 +814,7 @@ pub fn handle(buf: &mut Buffer, prefix: &mut Option<char>, key: KeyEvent) -> Don
                 buf.undo();
                 Done::Stay
             }
-            // C-x C-g, nothing; and anything else is undefined.
+            // C-c or C-x C-g, nothing; and anything else is undefined.
             (_, KeyCode::Char('g' | 'G')) if ctrl => Done::Stay,
             _ => Done::Undefined,
         };

@@ -748,8 +748,13 @@ impl App {
                 folder,
                 message_id,
                 replacing,
+                save,
             } => {
-                let saved = self.compose.as_mut().and_then(|c| c.saving.take());
+                // Its own letter's, if that is still what is written.
+                let saved = self.compose.as_mut().and_then(|c| {
+                    let own = c.saving.as_ref().is_some_and(|(s, _)| *s == save);
+                    own.then(|| c.saving.take()).flatten()
+                });
                 let uid = match result {
                     Ok(uid) => uid,
                     Err(e) => {
@@ -758,7 +763,7 @@ impl App {
                     }
                 };
                 let mut said = format!("saved in {}", self.folder_label(a, &folder));
-                if let (Some(compose), Some(text)) = (&mut self.compose, saved) {
+                if let (Some(compose), Some((_, text))) = (&mut self.compose, saved) {
                     compose.original = text;
                     compose.thread.draft = uid.map(|uid| (folder, uid, message_id));
                     if uid.is_none() {
