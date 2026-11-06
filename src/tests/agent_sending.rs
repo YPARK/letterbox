@@ -350,34 +350,69 @@ fn a_folder_other_than_drafts_is_refused_not_ignored() {
     assert!(asked.is_empty(), "{asked}");
 }
 
-#[test]
-fn sending_is_not_what_the_question_defaults_to() {
-    let mut server = demo_server(true);
-    let uid = drafted(&mut server, "No default");
-    let script = vec![
-        json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-            "params": { "name": "send_draft", "arguments": { "uid": uid } } })
-        .to_string(),
-        json!({ "jsonrpc": "2.0", "id": "letterbox-1",
-            "result": { "action": "decline" } })
-        .to_string(),
-    ];
+/// The user's answer as a program sends it that shows only Yes and No: the
+/// default of what it was asked, on yes. The prompt is `drafted`'s, once.
+fn pressed(server: &mut crate::mcp::Server, uid: &Value, action: &str) -> Value {
+    let (requests, replies) = std::sync::mpsc::channel::<String>();
     let out = super::agents::Written::default();
+    let lines = {
+        let out = out.clone();
+        let mut asked = false;
+        let first = json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": { "name": "send_draft", "arguments": { "uid": uid } } })
+        .to_string();
+        requests.send(first).unwrap();
+        let action = action.to_string();
+        std::iter::from_fn(move || {
+            if let Ok(line) = replies.try_recv() {
+                return Some(Ok(line));
+            }
+            if asked {
+                return None;
+            }
+            asked = true;
+            let written = out.messages();
+            let question = written
+                .iter()
+                .rfind(|m| m["method"] == "elicitation/create")?;
+            let schema = &question["params"]["requestedSchema"]["properties"];
+            let content: serde_json::Map<String, Value> = schema
+                .as_object()?
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.get("default")?.clone())))
+                .collect();
+            Some(Ok(json!({ "jsonrpc": "2.0", "id": question["id"],
+                "result": { "action": action, "content": content } })
+            .to_string()))
+        })
+    };
     server
         .serve(crate::mcp::Io {
-            lines: Box::new(script.into_iter().map(Ok)),
+            lines: Box::new(lines),
             out: Box::new(out.clone()),
         })
         .unwrap();
     let written = out.messages();
-    let asked = written
-        .iter()
-        .find(|m| m["method"] == "elicitation/create")
-        .unwrap();
-    assert_eq!(
-        asked["params"]["requestedSchema"]["properties"]["confirm"]["default"], false,
-        "{asked}"
-    );
+    written.iter().find(|m| m["id"] == 10).unwrap()["result"].clone()
+}
+
+#[test]
+fn yes_pressed_in_a_program_that_shows_only_yes_and_no_sends_it() {
+    let mut server = demo_server(true);
+    let uid = drafted(&mut server, "Pressed yes");
+    let r = pressed(&mut server, &uid, "accept");
+    assert_eq!(r["structuredContent"]["sent"], true, "{r}");
+    assert!(has(&mut server, "Sent", "Pressed yes"));
+}
+
+#[test]
+fn no_pressed_there_sends_nothing() {
+    let mut server = demo_server(true);
+    let uid = drafted(&mut server, "Pressed no");
+    let r = pressed(&mut server, &uid, "decline");
+    assert_eq!(r["structuredContent"]["sent"], false, "{r}");
+    assert!(!has(&mut server, "Sent", "Pressed no"));
+    assert!(has(&mut server, "Drafts", "Pressed no"));
 }
 
 #[test]

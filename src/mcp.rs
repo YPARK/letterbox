@@ -184,13 +184,9 @@ impl Server {
     /// agent: where the program cannot ask, it is an error, and nothing is
     /// done.
     fn confirm(&mut self, message: &str, yes: &str) -> anyhow::Result<Said> {
-        self.confirm_as(message, yes, true)
-    }
-
-    /// As `confirm`, what is offered unless they change it given: no, for what
-    /// cannot be taken back.
-    fn confirm_as(&mut self, message: &str, yes: &str, default: bool) -> anyhow::Result<Said> {
-        let schema = json!({ "confirm": { "type": "boolean", "title": yes, "default": default } });
+        // Yes by default: a program may show only Yes and No, and answer Yes
+        // with this, which must not turn it into a no.
+        let schema = json!({ "confirm": { "type": "boolean", "title": yes, "default": true } });
         let result = self.elicit(message, schema, "confirm")?;
         let confirm = result["content"]["confirm"].as_bool();
         Ok(match (result["action"].as_str(), confirm) {

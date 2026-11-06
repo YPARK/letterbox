@@ -105,7 +105,7 @@ impl Server {
         let m = mail::message(uid, raw)?;
         let (to, cc) = goes_as_it_is(&m)?;
         let me = store.address().to_string();
-        let answer = self.confirm_as(&going(&m, &to, &cc), "Send it", false)?;
+        let answer = self.confirm(&going(&m, &to, &cc), "Send it")?;
         if let Some(why) = answer.refused("sent") {
             return Ok(json!({ "sent": false, "said": why }));
         }
