@@ -5,8 +5,8 @@
 //! to stdout.
 //!
 //! Each account's store is opened as it is first asked of, and kept open.
-//! No message is sent or deleted for good here; reading one does not mark
-//! it read. A message is moved, to the Trash or under a label, only once
+//! No message is deleted for good here, nor sent but by `send_draft`, once
+//! the user, asked by letterbox, says yes; reading one does not mark it read. A message is moved, to the Trash or under a label, only once
 //! the user said yes to it, as letterbox asks them through the agent's
 //! program (MCP's elicitation), never as the agent says they did; where
 //! the program cannot ask, nothing is moved. What they said yes to is
@@ -705,6 +705,13 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
         "draft_reply" | "draft_message" if background => {
             Some("letterbox started this agent: draft a letter only as the user asks for it")
         }
+        "send_draft" if background => {
+            Some("letterbox started this agent, and no one is there to say yes, so nothing is sent")
+        }
+        "send_draft" if !asks => Some(
+            "the agent's program cannot ask the user to say yes, so nothing is sent: they send \
+             it themselves, with E on it in letterbox, or from their mail app",
+        ),
         "ask_about_messages" if background => Some(
             "letterbox started this agent, and no one is there to answer: say in the summary \
              that L in letterbox asks about what it is least sure of",

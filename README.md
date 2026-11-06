@@ -232,10 +232,12 @@ change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
 (`i`) none, and any other key stops and is written. Nothing changes but
 what you take.
 
-Built with grammar, `C-c C-c` checks it first, before it is sent: with
-nothing to change it goes at once; else each change is asked, and then
-whether to send it now, Send (`y`) or Keep writing. `C-c C-c` again while
-it is asked sends it as it is. A model that cannot be read, as with no
+Built with grammar, `C-c C-c` asks first whether to check it: Check (`y`),
+Send as it is (`n`), or any other key to go on writing; no model is read
+unless you say so. Checked, with nothing to change it goes at once; else each
+change is asked, and then whether to send it now, Send (`y`) or Keep writing.
+`C-c C-c` again while a change is asked sends it as it is. A model that cannot
+be read, as with no
 network the first time, keeps nothing from going: it is sent, and said
 to be unchecked.
 
@@ -658,8 +660,9 @@ have your shell's `PATH`.
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
-| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; never sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
-| `draft_message` | a new letter, with any files you named or described, kept in Drafts; never sent. Says its uid, who it goes to and how big its files are | writes a draft |
+| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
+| `draft_message` | a new letter, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to and how big its files are | writes a draft |
+| `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; the draft then goes to Trash, teaching nothing | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

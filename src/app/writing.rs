@@ -257,6 +257,15 @@ impl App {
     }
 
     pub(super) fn compose_key(&mut self, key: KeyEvent) {
+        // Asked if its grammar is checked first: y checks it, n sends it.
+        if std::mem::take(&mut self.check_asked) {
+            match key.code {
+                KeyCode::Char('y' | 'Y') if key.modifiers.is_empty() => self.check_grammar(true),
+                KeyCode::Char('n' | 'N') if key.modifiers.is_empty() => self.send_compose(),
+                _ => self.status = "kept · C-c C-c sends it".to_string(),
+            }
+            return;
+        }
         // Asked if it is to go now, its grammar gone through: y sends it.
         if std::mem::take(&mut self.sending_asked) {
             if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {

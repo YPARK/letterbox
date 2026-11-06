@@ -80,6 +80,134 @@ impl Server {
     }
 }
 
+impl Server {
+    /// `send_draft`: the draft of the uid `args` say, from the account's
+    /// Drafts and no other folder, sent once the user, shown all that goes,
+    /// says yes; its draft then kept in Trash. An agent's word is not enough:
+    /// it reads mail from strangers, who may ask it for anything.
+    pub(super) fn send_draft(&mut self, args: &Value) -> anyhow::Result<Value> {
+        let account = args.get("account").and_then(Value::as_str);
+        let uid = args
+            .get("uid")
+            .and_then(Value::as_u64)
+            .context("give the draft's uid")? as u32;
+        let store = self.store(account)?;
+        let folders = store.folders()?;
+        let drafts = mail::role_folder(&folders, mail::Role::Drafts)
+            .context("this account has no Drafts")?
+            .path
+            .clone();
+        let raw = store
+            .raw(&drafts, uid)
+            .with_context(|| format!("there is no draft {uid} in {drafts}"))?;
+        if mail::field(&raw, "Bcc").is_some() {
+            bail!(
+                "it has a Bcc, which letterbox cannot send: the user sends it from their mail app"
+            );
+        }
+        let m = mail::message(uid, raw.clone())?;
+        if m.to.is_empty() && m.cc.is_empty() {
+            bail!("it goes to no one");
+        }
+        let answer = match self.confirm(&going(&m), "Send it")? {
+            Said::Yes => None,
+            Said::No => Some("the user said no: nothing was sent"),
+            Said::Unanswered => Some(
+                "the user did not answer (the question was dismissed, or no one was there to \
+                 see it): nothing was sent",
+            ),
+        };
+        if let Some(answer) = answer {
+            return Ok(json!({ "sent": false, "said": answer }));
+        }
+        let store = self.store(account)?;
+        let said = store.send(&raw)?;
+        // It has gone: what follows is told of, never a failure to send.
+        if let Some(id) = mail::field(&raw, "In-Reply-To") {
+            let id = mail::brackets(&id);
+            let found = store.search("INBOX", &id, 5).unwrap_or_default();
+            if let Some(s) = found.iter().find(|s| s.message_id == id) {
+                let _ = store.set("INBOX", s.uid, Flag::Answered, true);
+            }
+        }
+        let draft = self.draft_gone(account, &folders, &drafts, &m);
+        Ok(json!({
+            "sent": true,
+            "account": self.called(account),
+            "subject": m.subject,
+            "to": m.to,
+            "cc": m.cc,
+            "said": said,
+            "draft": draft,
+        }))
+    }
+
+    /// The draft `m`, sent, moved to Trash as one sent in letterbox is, to be
+    /// put back, and nothing learnt: what became of it.
+    fn draft_gone(
+        &mut self,
+        account: Option<&str>,
+        folders: &[Folder],
+        drafts: &str,
+        m: &mail::Message,
+    ) -> String {
+        let to =
+            match self.destination(account, folders, drafts, crate::report::Action::Trash, None) {
+                Ok(to) => to,
+                Err(e) => return format!("left in {drafts}: {}", said(&e)),
+            };
+        let id = m
+            .message_id
+            .clone()
+            .map(|id| mail::brackets(&id))
+            .unwrap_or_default();
+        let demo = self.demo;
+        let Ok(store) = self.store(account) else {
+            return format!("left in {drafts}");
+        };
+        let address = store.address().to_string();
+        match store.relocate(drafts, m.uid, &to, &id) {
+            Ok(uid) => {
+                if !demo {
+                    let _ = crate::trash::Ledger::load().record_many(vec![crate::trash::Entry {
+                        account: address,
+                        message_id: id,
+                        folder: to.clone(),
+                        uid,
+                        origin: drafts.to_string(),
+                        at: jiff::Timestamp::now().as_second(),
+                    }]);
+                }
+                format!("moved to {to}")
+            }
+            Err(e) => format!("left in {drafts}: {}", said(&e)),
+        }
+    }
+}
+
+/// How much of a draft's text the user is shown in asking to send it.
+const SHOWN_CHARS: usize = 4000;
+
+/// What the user is asked of a draft to send: all that goes.
+fn going(m: &mail::Message) -> String {
+    let mut text = "Send this now? It cannot be taken back.".to_string();
+    text.push_str(&format!("\nFrom: {}\nTo: {}", m.from, m.to.join(", ")));
+    if !m.cc.is_empty() {
+        text.push_str(&format!("\nCc: {}", m.cc.join(", ")));
+    }
+    text.push_str(&format!("\nSubject: {}", m.subject));
+    for f in &m.attachments {
+        text.push_str(&format!("\nFile: {}, {}", f.name, crate::ui::size(f.size)));
+    }
+    let body: String = m.text.chars().take(SHOWN_CHARS).collect();
+    text.push_str(&format!("\n\n{body}"));
+    let left = m.text.chars().count().saturating_sub(SHOWN_CHARS);
+    if left > 0 {
+        text.push_str(&format!("\n… and {left} characters more"));
+    }
+    mail::clean_lines(&text)
+}
+
 /// What tells a draft from another of the same subject, as the user is asked
 /// about it: when it was written, and how big it is.
 pub(super) fn told_apart(s: &Summary) -> String {

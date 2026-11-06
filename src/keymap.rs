@@ -673,7 +673,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-s",
         hint: "C-c C-s",
         foot: &[(Writing, "grammar")],
-        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change asked in a pop-up, y takes it, n skips it, a accepts all, i ignores all; C-c C-c checks it too before it is sent, and asks if it is to go",
+        help: "in the message being written, check its grammar with a small model from Hugging Face, or the Grammar button on its top edge: each change asked in a pop-up, y takes it, n skips it, a accepts all, i ignores all; C-c C-c asks first whether to check it before it is sent",
     },
     Binding {
         keys: &[],

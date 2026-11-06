@@ -157,6 +157,25 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
             ("Ignore all", 'i', t.error, t.on_accent),
         ];
         (format!("Grammar · {at} of {of}"), "y n a i", lines, buttons)
+    } else if app.check_asked {
+        let lines = vec![
+            Line::raw(""),
+            Line::styled(
+                "It goes as it is, or its grammar is gone through first.",
+                Style::new().fg(t.title),
+            ),
+            Line::raw(""),
+        ];
+        let buttons = vec![
+            ("Check", 'y', t.accent, t.on_accent),
+            ("Send as it is", 'n', t.focus, t.title),
+        ];
+        (
+            "Check the grammar first?".to_string(),
+            "y checks · n sends · any other key goes on writing",
+            lines,
+            buttons,
+        )
     } else if app.sending_asked {
         let lines = vec![
             Line::raw(""),

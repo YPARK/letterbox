@@ -21,13 +21,17 @@ impl Checking {
 }
 
 impl App {
-    /// Send the message, its grammar checked first where it is to be: as
-    /// it is where its checking was let go by C-c C-c.
+    /// Send the message, asked first where its grammar may be checked
+    /// whether it is to be: no model read till it is told to. As it is where
+    /// its checking was let go by C-c C-c.
     pub(super) fn send_or_check(&mut self) {
         if std::mem::take(&mut self.send_as_is) || !self.check_on_send {
             return self.send_compose();
         }
-        self.check_grammar(true);
+        self.check_asked = true;
+        self.status =
+            "Check the grammar first? y checks it · n sends it as it is · any other key goes on writing"
+                .to_string();
     }
 
     /// Check what is written, before it is sent if `for_send`: sent to the
