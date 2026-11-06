@@ -49,10 +49,7 @@ impl Server {
             .into_iter()
             .map(|f| json!({ "name": f.name, "size": f.bytes.len() }))
             .collect();
-        let drafts = mail::role_folder(&store.folders()?, mail::Role::Drafts)
-            .context("this account has no Drafts")?
-            .path
-            .clone();
+        let drafts = drafts_of(&store.folders()?)?;
         let uid = store.append_draft(&drafts, &raw)?;
         let mut said = "kept in Drafts, not sent: the user reads it, changes it and sends it \
                         themselves, with E on it in letterbox, or from their mail app"
@@ -93,10 +90,7 @@ impl Server {
             .context("give the draft's uid")? as u32;
         let store = self.store(account)?;
         let folders = store.folders()?;
-        let drafts = mail::role_folder(&folders, mail::Role::Drafts)
-            .context("this account has no Drafts")?
-            .path
-            .clone();
+        let drafts = drafts_of(&folders)?;
         let raw = store
             .raw(&drafts, uid)
             .with_context(|| format!("there is no draft {uid} in {drafts}"))?;
@@ -105,39 +99,31 @@ impl Server {
                 "it has a Bcc, which letterbox cannot send: the user sends it from their mail app"
             );
         }
-        let m = mail::message(uid, raw.clone())?;
+        let m = mail::message(uid, raw)?;
         if m.to.is_empty() && m.cc.is_empty() {
             bail!("it goes to no one");
         }
-        let answer = match self.confirm(&going(&m), "Send it")? {
-            Said::Yes => None,
-            Said::No => Some("the user said no: nothing was sent"),
-            Said::Unanswered => Some(
-                "the user did not answer (the question was dismissed, or no one was there to \
-                 see it): nothing was sent",
-            ),
-        };
-        if let Some(answer) = answer {
-            return Ok(json!({ "sent": false, "said": answer }));
+        if let Some(why) = self.confirm(&going(&m), "Send it")?.refused("sent") {
+            return Ok(json!({ "sent": false, "said": why }));
         }
         let store = self.store(account)?;
-        let said = store.send(&raw)?;
+        let said_of_it = store.send(&m.raw)?;
         // It has gone: what follows is told of, never a failure to send.
-        if let Some(id) = mail::field(&raw, "In-Reply-To") {
-            let id = mail::brackets(&id);
-            let found = store.search("INBOX", &id, 5).unwrap_or_default();
-            if let Some(s) = found.iter().find(|s| s.message_id == id) {
-                let _ = store.set("INBOX", s.uid, Flag::Answered, true);
-            }
+        if let Some(id) = mail::field(&m.raw, "In-Reply-To")
+            && let Ok(Some(uid)) = store.uid_of("INBOX", &id)
+        {
+            let _ = store.set("INBOX", uid, Flag::Answered, true);
         }
-        let draft = self.draft_gone(account, &folders, &drafts, &m);
+        let draft = self
+            .draft_gone(account, &folders, &drafts, &m)
+            .unwrap_or_else(|e| format!("left in {drafts}: {}", said(&e)));
         Ok(json!({
             "sent": true,
             "account": self.called(account),
             "subject": m.subject,
             "to": m.to,
             "cc": m.cc,
-            "said": said,
+            "said": said_of_it,
             "draft": draft,
         }))
     }
@@ -150,39 +136,45 @@ impl Server {
         folders: &[Folder],
         drafts: &str,
         m: &mail::Message,
-    ) -> String {
-        let to =
-            match self.destination(account, folders, drafts, crate::report::Action::Trash, None) {
-                Ok(to) => to,
-                Err(e) => return format!("left in {drafts}: {}", said(&e)),
-            };
+    ) -> anyhow::Result<String> {
+        let to = self.destination(account, folders, drafts, crate::report::Action::Trash, None)?;
         let id = m
             .message_id
-            .clone()
-            .map(|id| mail::brackets(&id))
+            .as_deref()
+            .map(mail::brackets)
             .unwrap_or_default();
-        let demo = self.demo;
-        let Ok(store) = self.store(account) else {
-            return format!("left in {drafts}");
-        };
+        let store = self.store(account)?;
         let address = store.address().to_string();
-        match store.relocate(drafts, m.uid, &to, &id) {
-            Ok(uid) => {
-                if !demo {
-                    let _ = crate::trash::Ledger::load().record_many(vec![crate::trash::Entry {
-                        account: address,
-                        message_id: id,
-                        folder: to.clone(),
-                        uid,
-                        origin: drafts.to_string(),
-                        at: jiff::Timestamp::now().as_second(),
-                    }]);
-                }
-                format!("moved to {to}")
-            }
-            Err(e) => format!("left in {drafts}: {}", said(&e)),
-        }
+        let uid = store.relocate(drafts, m.uid, &to, &id)?;
+        let entry = crate::trash::Entry {
+            account: address,
+            message_id: id,
+            folder: to.clone(),
+            uid,
+            origin: drafts.to_string(),
+            at: jiff::Timestamp::now().as_second(),
+        };
+        Ok(match self.record_trashed(vec![entry]) {
+            Some(why) => format!("moved to {to}, not recorded to put back: {why}"),
+            None => format!("moved to {to}"),
+        })
     }
+
+    /// `trashed` recorded, to be put back; why not, if it could not be.
+    pub(super) fn record_trashed(&self, trashed: Vec<crate::trash::Entry>) -> Option<String> {
+        (!self.demo && !trashed.is_empty())
+            .then(|| crate::trash::Ledger::load().record_many(trashed).err())
+            .flatten()
+            .map(|e| said(&e))
+    }
+}
+
+/// The path of the account's Drafts, among its `folders`.
+fn drafts_of(folders: &[Folder]) -> anyhow::Result<String> {
+    Ok(mail::role_folder(folders, mail::Role::Drafts)
+        .context("this account has no Drafts")?
+        .path
+        .clone())
 }
 
 /// How much of a draft's text the user is shown in asking to send it.

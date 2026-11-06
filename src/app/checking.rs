@@ -13,6 +13,15 @@ pub struct Checking {
     pub for_send: bool,
 }
 
+/// What is asked as a message is to go, answered by the next key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SendAsked {
+    /// Whether its grammar is checked first.
+    Check,
+    /// Whether it goes now, its grammar gone through.
+    Send,
+}
+
 impl Checking {
     /// The change looked at.
     pub fn edit(&self) -> Option<&Edit> {
@@ -28,7 +37,7 @@ impl App {
         if std::mem::take(&mut self.send_as_is) || !self.check_on_send {
             return self.send_compose();
         }
-        self.check_asked = true;
+        self.asked = Some(SendAsked::Check);
         self.status =
             "Check the grammar first? y checks it · n sends it as it is · any other key goes on writing"
                 .to_string();
@@ -99,7 +108,7 @@ impl App {
             return;
         };
         if compose.buffer.text() != text {
-            self.status = "changed while it was checked: C-c C-s again".to_string();
+            self.status = "changed while it was checked: C-c C-g again".to_string();
             return;
         }
         match edits {
@@ -138,7 +147,7 @@ impl App {
             self.status = format!("the grammar: {taken} changed");
             // Gone through to be sent: asked if it is to go now.
             if for_send {
-                self.sending_asked = true;
+                self.asked = Some(SendAsked::Send);
                 self.status = format!(
                     "the grammar: {taken} changed · Send it now? y sends it, any other key goes on writing"
                 );

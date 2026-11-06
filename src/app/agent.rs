@@ -374,9 +374,8 @@ impl App {
             Vec<crate::index::Key>,
         > = Default::default();
         {
-            let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
             for (a, p) in filed {
-                match index.key_of(&p.account, &p.folder, p.uid, &p.message_id) {
+                match self.key_of(a, &p.folder, p.uid, &p.message_id) {
                     Some(key) => filing.entry((a, p.folder, p.to)).or_default().push(key),
                     None => not.push(format!("{}: not on the map yet", p.subject)),
                 }

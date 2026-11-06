@@ -193,6 +193,20 @@ pub(super) fn boxes_in(mode: Mode) -> Boxes {
 /// Gmail's folders: the Inbox, and in [Gmail], All Mail, which holds every
 /// message with its labels, and the rest; a label of the user's, as a
 /// folder too.
+/// A draft put in Gmail's Drafts, as UID 900, by the `Message-ID` of the first
+/// of the Inbox, as Gmail keeps a draft in All Mail too.
+pub(super) fn gmail_draft(boxes: &Boxes) {
+    let mut held = boxes.lock().unwrap();
+    let raw = held.iter().find(|b| b.name == "INBOX").unwrap().letters[0]
+        .raw
+        .clone();
+    let drafts = held
+        .iter_mut()
+        .find(|b| b.name == "[Gmail]/Drafts")
+        .unwrap();
+    drafts.push(Letter::new(900, &["\\Seen", "\\Draft"], raw));
+}
+
 pub(super) fn gmail_boxes() -> Boxes {
     let letter = |uid: u32, flags: &[&str], labels: &[&str], from: &str, subject: &str| {
         let mut l = Letter::new(

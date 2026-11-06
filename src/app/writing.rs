@@ -15,6 +15,8 @@ pub struct Compose {
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
+    /// What is being saved in Drafts, while it is.
+    pub saving: Option<String>,
     /// The files of the message it forwards, sent with it while an
     /// `Attach` line names them.
     pub files: Vec<compose::File>,
@@ -79,6 +81,26 @@ pub(super) struct Pending {
     pub(super) how: Respond,
     /// A file to attach to it, once it is opened.
     pub(super) attach: Option<PathBuf>,
+}
+
+impl Compose {
+    /// Each file of `draft`, read now: a forward's, or this machine's.
+    fn attached(&self, draft: &compose::Draft) -> Result<Vec<compose::File>, String> {
+        draft
+            .attach
+            .iter()
+            .map(|value| match value.strip_suffix(compose::FORWARDED) {
+                Some(name) => self
+                    .files
+                    .iter()
+                    .find(|f| f.name == name)
+                    .cloned()
+                    .ok_or_else(|| format!("{name} is not among the files forwarded")),
+                None => compose::read_file(&compose::path_of(value))
+                    .map_err(|e| format!("cannot attach {value}: {e}")),
+            })
+            .collect()
+    }
 }
 
 impl App {
@@ -238,6 +260,7 @@ impl App {
             prefix: None,
             scroll: 0,
             sending: false,
+            saving: None,
             files,
             warned: None,
             held: None,
@@ -257,21 +280,14 @@ impl App {
     }
 
     pub(super) fn compose_key(&mut self, key: KeyEvent) {
-        // Asked if its grammar is checked first: y checks it, n sends it.
-        if std::mem::take(&mut self.check_asked) {
-            match key.code {
-                KeyCode::Char('y' | 'Y') if key.modifiers.is_empty() => self.check_grammar(true),
-                KeyCode::Char('n' | 'N') if key.modifiers.is_empty() => self.send_compose(),
+        // Asked as it is to go: y checks it, or sends it; n sends it unchecked.
+        if let Some(asked) = self.asked.take() {
+            let plain = key.modifiers.is_empty();
+            match (asked, key.code) {
+                (SendAsked::Check, KeyCode::Char('y' | 'Y')) if plain => self.check_grammar(true),
+                (SendAsked::Check, KeyCode::Char('n' | 'N')) if plain => self.send_compose(),
+                (SendAsked::Send, KeyCode::Char('y' | 'Y')) if plain => self.send_compose(),
                 _ => self.status = "kept · C-c C-c sends it".to_string(),
-            }
-            return;
-        }
-        // Asked if it is to go now, its grammar gone through: y sends it.
-        if std::mem::take(&mut self.sending_asked) {
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) && key.modifiers.is_empty() {
-                self.send_compose();
-            } else {
-                self.status = "kept · C-c C-c sends it".to_string();
             }
             return;
         }
@@ -333,6 +349,7 @@ impl App {
             }
             Done::Send => self.send_or_check(),
             Done::Check => self.check_grammar(false),
+            Done::Save => self.save_draft(),
             Done::Attach => {
                 let dir = start_dir(self.attach_dir.clone());
                 self.dialog = Dialog::Attach(Box::new(crate::pick::Picker::open(dir)));
@@ -414,11 +431,70 @@ impl App {
         }
     }
 
+    /// Keep what is written in Drafts, and go on writing it: what was saved
+    /// of it before goes to Trash once this is kept.
+    pub(super) fn save_draft(&mut self) {
+        let Some(compose) = &self.compose else {
+            return;
+        };
+        if compose.sending || compose.saving.is_some() {
+            return;
+        }
+        let account = compose.account;
+        let text = compose.buffer.text();
+        let letter = compose::parse_unaddressed(&text).and_then(|draft| {
+            let files = compose.attached(&draft)?;
+            Ok((draft, files))
+        });
+        let (draft, files) = match letter {
+            Ok(letter) => letter,
+            Err(e) => {
+                self.status = format!("not saved: {e}");
+                return;
+            }
+        };
+        let email = self
+            .accounts
+            .get(account)
+            .map(|a| a.email.clone())
+            .unwrap_or_default();
+        let Some(folder) = self
+            .role_folder(account, Role::Drafts)
+            .map(|f| f.path.clone())
+        else {
+            self.status = "not saved: this account has no Drafts".to_string();
+            return;
+        };
+        let compose = self.compose.as_mut().expect("open");
+        let raw = compose::bytes(
+            &email,
+            &draft,
+            compose.thread.in_reply_to.as_deref(),
+            compose.thread.references.as_deref(),
+            &files,
+        );
+        let replacing = compose.thread.draft.clone();
+        compose.saving = Some(text);
+        self.status = "saving in Drafts…".to_string();
+        self.ask(
+            account,
+            Ask::SaveDraft {
+                folder,
+                raw,
+                replacing,
+            },
+        );
+    }
+
     pub(super) fn send_compose(&mut self) {
         let Some(compose) = &self.compose else {
             return;
         };
         if compose.sending {
+            return;
+        }
+        if compose.saving.is_some() {
+            self.status = "still saving it in Drafts: C-c C-c again".to_string();
             return;
         }
         if compose.held.is_some() {
@@ -441,27 +517,13 @@ impl App {
             self.status = "this account has no address to send from".to_string();
             return;
         }
-        // Each file attached, read now: a forward's, or this machine's.
-        let mut files = Vec::new();
-        for value in &draft.attach {
-            let file = match value.strip_suffix(compose::FORWARDED) {
-                Some(name) => compose
-                    .files
-                    .iter()
-                    .find(|f| f.name == name)
-                    .cloned()
-                    .ok_or_else(|| format!("{name} is not among the files forwarded")),
-                None => compose::read_file(&compose::path_of(value))
-                    .map_err(|e| format!("cannot attach {value}: {e}")),
-            };
-            match file {
-                Ok(f) => files.push(f),
-                Err(e) => {
-                    self.status = e;
-                    return;
-                }
+        let files = match compose.attached(&draft) {
+            Ok(files) => files,
+            Err(e) => {
+                self.status = e;
+                return;
             }
-        }
+        };
         // What is easily got wrong, said once: a send asked again, with
         // nothing more to say, sends it.
         let total: usize = files.iter().map(|f| f.bytes.len()).sum();

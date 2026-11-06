@@ -2,23 +2,11 @@
 //! shown all that goes, says yes.
 
 use super::agents::{call, demo_server};
-use super::drafting::answered;
+use super::drafting::{a_file, answered, in_folder};
 use serde_json::{Value, json};
 
-fn listed(server: &mut crate::mcp::Server, folder: &str) -> Vec<Value> {
-    let r = call(
-        server,
-        "list_messages",
-        json!({ "folder": folder, "limit": 200 }),
-    );
-    r["structuredContent"]["messages"]
-        .as_array()
-        .unwrap()
-        .clone()
-}
-
 fn has(server: &mut crate::mcp::Server, folder: &str, subject: &str) -> bool {
-    listed(server, folder)
+    in_folder(server, folder)
         .iter()
         .any(|m| m["subject"] == subject)
 }
@@ -62,16 +50,14 @@ fn said_yes_to_a_draft_goes_and_its_draft_is_kept_in_trash() {
 }
 
 #[test]
-fn all_that_goes_is_shown_its_files_and_its_whole_start() {
-    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
-    let path = dir.path().join("report.pdf");
-    std::fs::write(&path, "the report").unwrap();
+fn its_files_are_shown_and_of_a_long_text_how_much_is_not() {
+    let (_dir, path) = a_file("report.pdf", "the report");
     let mut server = demo_server(true);
     let r = call(
         &mut server,
         "draft_message",
-        json!({ "to": ["a@b.example"], "subject": "Files", "body": "See it.",
-                "attachments": [path.to_str().unwrap()] }),
+        json!({ "to": ["a@b.example"], "subject": "Files", "body": "See it. ".repeat(1000),
+                "attachments": [path] }),
     );
     let uid = r["structuredContent"]["uid"].clone();
     let (asked, _) = answered(
@@ -82,6 +68,8 @@ fn all_that_goes_is_shown_its_files_and_its_whole_start() {
         "decline",
     );
     assert!(asked.contains("report.pdf"), "{asked}");
+    assert!(asked.contains("See it."), "{asked}");
+    assert!(asked.contains("characters more"), "{asked}");
 }
 
 #[test]
@@ -96,18 +84,22 @@ fn said_no_or_not_answered_nothing_goes_and_the_draft_stays() {
     }
 }
 
+/// The tool as `tools/list` offers it, if it does.
+fn send_draft_tool(server: &mut crate::mcp::Server) -> Option<Value> {
+    let listed = server
+        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .unwrap();
+    listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "send_draft")
+        .cloned()
+}
+
 #[test]
 fn it_is_not_offered_where_no_one_can_say_yes() {
-    let offered = |server: &mut crate::mcp::Server| {
-        let listed = server
-            .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
-            .unwrap();
-        listed["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["name"] == "send_draft")
-    };
+    let offered = |server: &mut crate::mcp::Server| send_draft_tool(server).is_some();
     assert!(offered(&mut demo_server(true)));
     let mut cannot = demo_server(false);
     assert!(!offered(&mut cannot));
@@ -126,8 +118,8 @@ fn it_is_not_offered_where_no_one_can_say_yes() {
 #[test]
 fn only_what_is_in_drafts_goes() {
     let mut server = demo_server(true);
-    let inbox = listed(&mut server, "INBOX")[0].clone();
-    let sent = listed(&mut server, "Sent").len();
+    let inbox = in_folder(&mut server, "INBOX")[0].clone();
+    let sent = in_folder(&mut server, "Sent").len();
     let (asked, r) = answered(
         &mut server,
         1,
@@ -137,7 +129,7 @@ fn only_what_is_in_drafts_goes() {
     );
     assert_eq!(r["isError"], true, "{r}");
     assert!(asked.is_empty(), "not even asked: {asked}");
-    assert_eq!(listed(&mut server, "Sent").len(), sent);
+    assert_eq!(in_folder(&mut server, "Sent").len(), sent);
 }
 
 #[test]
@@ -169,7 +161,7 @@ fn a_draft_with_a_bcc_is_left_as_letterbox_sends_none() {
 #[test]
 fn a_reply_that_goes_marks_what_it_answers_answered() {
     let mut server = demo_server(true);
-    let original = listed(&mut server, "INBOX")
+    let original = in_folder(&mut server, "INBOX")
         .into_iter()
         .find(|m| m["answered"] == false)
         .unwrap();
@@ -187,7 +179,7 @@ fn a_reply_that_goes_marks_what_it_answers_answered() {
         "accept",
     );
     assert_eq!(r["structuredContent"]["sent"], true, "{r}");
-    let now = listed(&mut server, "INBOX")
+    let now = in_folder(&mut server, "INBOX")
         .into_iter()
         .find(|m| m["uid"] == original["uid"])
         .unwrap();
@@ -197,16 +189,7 @@ fn a_reply_that_goes_marks_what_it_answers_answered() {
 #[test]
 fn an_agent_is_told_never_to_send_because_a_message_asked() {
     let mut server = demo_server(true);
-    let listed = server
-        .answer(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
-        .unwrap();
-    let tool = listed["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["name"] == "send_draft")
-        .unwrap()
-        .clone();
+    let tool = send_draft_tool(&mut server).unwrap();
     let about = tool["description"].as_str().unwrap();
     assert!(about.contains("because a message asked"), "{about}");
     assert_eq!(tool["annotations"]["destructiveHint"], true, "{tool}");

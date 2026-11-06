@@ -743,6 +743,41 @@ impl App {
                     Err(e) => self.status = first_line(&e).to_string(),
                 }
             }
+            Answer::DraftSaved {
+                result,
+                folder,
+                message_id,
+                replacing,
+            } => {
+                let saved = self.compose.as_mut().and_then(|c| c.saving.take());
+                let uid = match result {
+                    Ok(uid) => uid,
+                    Err(e) => {
+                        self.status = format!("not saved: {}", first_line(&e));
+                        return;
+                    }
+                };
+                let mut said = format!("saved in {}", self.folder_label(a, &folder));
+                if let (Some(compose), Some(text)) = (&mut self.compose, saved) {
+                    compose.original = text;
+                    compose.thread.draft = uid.map(|uid| (folder, uid, message_id));
+                    if uid.is_none() {
+                        said.push_str(
+                            " · the server did not say which it is, so it stays once sent",
+                        );
+                    }
+                }
+                // What was saved before: replaced, kept to be put back.
+                match (replacing, self.trash_of(a)) {
+                    (Some((folder, uid, id)), Some(trash)) => {
+                        self.trash_quietly(a, folder, uid, id, trash);
+                    }
+                    (Some(_), None) => said.push_str(" · no Trash known, so the last stays too"),
+                    _ => {}
+                }
+                self.status = said;
+                self.reload(a);
+            }
         }
     }
 }

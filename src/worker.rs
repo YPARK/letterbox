@@ -104,6 +104,13 @@ pub enum Ask {
         raw: Vec<u8>,
         answer: Option<(String, u32)>,
     },
+    /// `raw` kept in `folder`, as a draft: `replacing`, the draft saved
+    /// before, its folder, UID and `Message-ID`, is for the answer to deal with.
+    SaveDraft {
+        folder: String,
+        raw: Vec<u8>,
+        replacing: Option<(String, u32, String)>,
+    },
 }
 
 pub enum Answer {
@@ -151,6 +158,13 @@ pub enum Answer {
     Sent {
         said: Result<String, String>,
         answer: Option<(String, u32)>,
+    },
+    /// Kept in `folder`, by the UID it took if that can be told.
+    DraftSaved {
+        result: Result<Option<u32>, String>,
+        folder: String,
+        message_id: String,
+        replacing: Option<(String, u32, String)>,
     },
     /// Asked, and passed over for what was asked after it.
     Skipped,
@@ -434,6 +448,16 @@ fn answer(store: &mut dyn Store, ask: Ask) -> Answer {
             }
             Answer::Sent { said, answer }
         }
+        Ask::SaveDraft {
+            folder,
+            raw,
+            replacing,
+        } => Answer::DraftSaved {
+            result: store.append_draft(&folder, &raw).map_err(text),
+            message_id: crate::mail::field(&raw, "Message-ID").unwrap_or_default(),
+            folder,
+            replacing,
+        },
     }
 }
 
@@ -455,6 +479,7 @@ impl Ask {
                 | Ask::Bring { .. }
                 | Ask::Archive { .. }
                 | Ask::Send { .. }
+                | Ask::SaveDraft { .. }
         )
     }
 }
@@ -473,6 +498,7 @@ impl Answer {
                 | Answer::Brought { .. }
                 | Answer::Archived { .. }
                 | Answer::Sent { .. }
+                | Answer::DraftSaved { .. }
         )
     }
 }

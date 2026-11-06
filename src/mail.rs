@@ -343,6 +343,11 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
     }
 }
 
+/// Whether the folder at `path` of `folders` has the role `role`.
+pub fn role_is(folders: &[Folder], path: &str, role: Role) -> bool {
+    folders.iter().any(|f| f.path == path && f.role == role)
+}
+
 /// The text of `raw`, as much of a message as is fetched to list it: a server
 /// gives only its start, and a part cut off before its boundary is not read as
 /// a part at all, so its parts are ended where that lost the text.

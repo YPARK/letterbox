@@ -34,6 +34,15 @@ pub const FORWARDED: &str = " (forwarded)";
 /// first blank line of `text`. Anything else there, or a missing `To`, is
 /// said and nothing is sent.
 pub fn parse(text: &str) -> Result<Draft, String> {
+    let draft = parse_unaddressed(text)?;
+    if draft.to.is_empty() {
+        return Err("say who it is to".to_string());
+    }
+    Ok(draft)
+}
+
+/// As `parse`, it may be to no one yet: as it is saved, not sent.
+pub fn parse_unaddressed(text: &str) -> Result<Draft, String> {
     let text = text.strip_suffix('\n').unwrap_or(text);
     let Some((head, body)) = text.split_once("\n\n") else {
         return Err("a blank line ends the headers".to_string());
@@ -79,9 +88,6 @@ pub fn parse(text: &str) -> Result<Draft, String> {
     }
     attach.retain(|a| !a.is_empty());
     let to = addresses(&to)?;
-    if to.is_empty() {
-        return Err("say who it is to".to_string());
-    }
     let cc = addresses(&cc)?;
     Ok(Draft {
         to,

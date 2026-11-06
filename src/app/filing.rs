@@ -193,14 +193,28 @@ impl App {
 
     /// What the index knows the message listed `l` by, once the map has
     /// read it.
-    pub(super) fn listed_key(&self, l: &Listed) -> Option<crate::index::Key> {
-        let ident = &self.accounts.get(l.account)?.ident;
-        self.index.lock().unwrap_or_else(|e| e.into_inner()).key_of(
-            ident,
-            &l.folder,
-            l.summary.uid,
-            &l.summary.message_id,
-        )
+    pub(crate) fn listed_key(&self, l: &Listed) -> Option<crate::index::Key> {
+        self.key_of(l.account, &l.folder, l.summary.uid, &l.summary.message_id)
+    }
+
+    /// What the index knows the message at `uid` in `folder` by. A draft is
+    /// not known by the copy All Mail holds, on the map or to teach it: it is
+    /// the user's own writing, as it is on an account with no All Mail.
+    pub(super) fn key_of(
+        &self,
+        account: usize,
+        folder: &str,
+        uid: u32,
+        id: &str,
+    ) -> Option<crate::index::Key> {
+        if self.role_is(account, folder, Role::Drafts) {
+            return None;
+        }
+        let ident = &self.accounts.get(account)?.ident;
+        self.index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .key_of(ident, folder, uid, id)
     }
 
     /// What a key does to what is marked in the list; whether it was its

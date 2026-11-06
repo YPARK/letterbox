@@ -167,9 +167,7 @@ impl Server {
                     crate::report::Action::File
                 };
                 let folders = self.store(account.as_deref())?.folders()?;
-                let of_drafts = folders
-                    .iter()
-                    .any(|f| f.path == folder && matches!(f.role, mail::Role::Drafts));
+                let of_drafts = mail::role_is(&folders, &folder, mail::Role::Drafts);
                 let to = self.destination(
                     account.as_deref(),
                     &folders,
@@ -186,16 +184,9 @@ impl Server {
                 } else {
                     (format!("File {n} from {folder} under {to}?"), "File them")
                 };
-                let answer = match self.confirm(&listing(&what, &moving, of_drafts), yes)? {
-                    Said::Yes => None,
-                    Said::No => Some("the user said no: nothing was moved"),
-                    Said::Unanswered => Some(
-                        "the user did not answer (the question was dismissed, or no one was \
-                         there to see it): nothing was moved",
-                    ),
-                };
-                if let Some(answer) = answer {
-                    return Ok(json!({ "moved": 0, "said": answer }));
+                let answer = self.confirm(&listing(&what, &moving, of_drafts), yes)?;
+                if let Some(why) = answer.refused("moved") {
+                    return Ok(json!({ "moved": 0, "said": why }));
                 }
                 let mut moved = Vec::new();
                 let mut failed = Vec::new();
@@ -231,13 +222,10 @@ impl Server {
                     }
                 }
                 // Moved, whether or not it is recorded to be put back: said apart.
-                let unrecorded = (!self.demo && !trashed.is_empty())
-                    .then(|| crate::trash::Ledger::load().record_many(trashed).err())
-                    .flatten()
-                    .map(|e| said(&e));
+                let unrecorded = self.record_trashed(trashed);
                 let gone: Vec<&Summary> =
                     moving.iter().filter(|s| moved.contains(&s.uid)).collect();
-                let learnt = self.advise(account.as_deref(), &folder, &gone, thrown);
+                let learnt = self.advise(account.as_deref(), &folder, &gone, thrown, of_drafts);
                 Ok(json!({
                     "moved": moved.len(),
                     "not_recorded_to_put_back": unrecorded,

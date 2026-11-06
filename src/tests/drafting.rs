@@ -4,7 +4,7 @@
 use super::*;
 use serde_json::json;
 
-fn in_folder(server: &mut crate::mcp::Server, folder: &str) -> Vec<serde_json::Value> {
+pub(super) fn in_folder(server: &mut crate::mcp::Server, folder: &str) -> Vec<serde_json::Value> {
     let r = call(
         server,
         "list_messages",
@@ -313,7 +313,7 @@ fn capital_e_elsewhere_says_what_it_is_for() {
 }
 
 /// A file of a folder not hidden, as a temporary folder's own name would be.
-fn a_file(name: &str, says: &str) -> (tempfile::TempDir, String) {
+pub(super) fn a_file(name: &str, says: &str) -> (tempfile::TempDir, String) {
     let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
     let path = dir.path().join(name);
     std::fs::write(&path, says).unwrap();
@@ -668,12 +668,31 @@ pub(super) fn answered(
     args: serde_json::Value,
     action: &str,
 ) -> (String, serde_json::Value) {
+    answered_with(
+        server,
+        asking,
+        tool,
+        args,
+        action,
+        json!({ "confirm": true }),
+    )
+}
+
+/// As `answered`, what they said given.
+pub(super) fn answered_with(
+    server: &mut crate::mcp::Server,
+    asking: u32,
+    tool: &str,
+    args: serde_json::Value,
+    action: &str,
+    content: serde_json::Value,
+) -> (String, serde_json::Value) {
     let script = vec![
         json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
             "params": { "name": tool, "arguments": args } })
         .to_string(),
         json!({ "jsonrpc": "2.0", "id": format!("letterbox-{asking}"),
-            "result": { "action": action, "content": { "confirm": true } } })
+            "result": { "action": action, "content": content } })
         .to_string(),
     ];
     let out = Written::default();

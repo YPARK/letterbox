@@ -304,7 +304,7 @@ fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
     let mut app = demo();
     press(&mut app, &["<enter>", "r"]);
     assert!(app.compose.is_some());
-    let screen = app::screen(&mut app, 160, 40);
+    let screen = app::screen(&mut app, 210, 40);
     let top = screen
         .lines()
         .find(|l| l.contains("From "))
@@ -313,7 +313,7 @@ fn the_message_written_is_sent_or_discarded_by_buttons_on_its_top_edge() {
     for b in [
         "Send  C-c C-c",
         "Attach  C-c C-a",
-        "Grammar  C-c C-s",
+        "Grammar  C-c C-g",
         "Discard  C-c C-k",
     ] {
         assert!(top.contains(b), "{top}");

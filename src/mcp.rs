@@ -762,6 +762,20 @@ enum Said {
     Unanswered,
 }
 
+impl Said {
+    /// Why nothing was `done`, moved or sent; none if they said yes.
+    fn refused(&self, done: &str) -> Option<String> {
+        match self {
+            Said::Yes => None,
+            Said::No => Some(format!("the user said no: nothing was {done}")),
+            Said::Unanswered => Some(format!(
+                "the user did not answer (the question was dismissed, or no one was there to \
+                 see it): nothing was {done}"
+            )),
+        }
+    }
+}
+
 /// The uids asked to be moved: at least one, at most `MOVED_LIMIT`, each
 /// once.
 fn uids(args: &Value) -> anyhow::Result<Vec<u32>> {

@@ -104,9 +104,14 @@ pub trait Store: Send {
         self.append(folder, raw, true)?;
         Ok(None)
     }
-    /// Whether `folder` holds a message of the Message-ID `message_id`.
-    fn holds(&mut self, _folder: &str, _message_id: &str) -> anyhow::Result<bool> {
+    /// The UID in `folder` of the message of the Message-ID `message_id`, the
+    /// newest if there are more.
+    fn uid_of(&mut self, _folder: &str, _message_id: &str) -> anyhow::Result<Option<u32>> {
         anyhow::bail!("this account cannot be asked what a folder holds")
+    }
+    /// Whether `folder` holds a message of the Message-ID `message_id`.
+    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
+        Ok(self.uid_of(folder, message_id)?.is_some())
     }
     /// Make a folder named `path`.
     fn create(&mut self, path: &str) -> anyhow::Result<()>;

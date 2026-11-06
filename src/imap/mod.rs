@@ -323,8 +323,13 @@ impl Store for Imap {
         }
     }
 
-    fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
-        Ok(self.uid_of(folder, message_id)?.is_some())
+    fn uid_of(&mut self, folder: &str, message_id: &str) -> anyhow::Result<Option<u32>> {
+        let id = mail::brackets(message_id);
+        self.run(|s, selected| {
+            select(s, selected, folder, true)?;
+            let found = s.uid_search(format!("HEADER Message-ID {}", astring(&id)))?;
+            Ok(found.into_iter().max())
+        })
     }
 
     fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> anyhow::Result<()> {
@@ -810,18 +815,6 @@ impl Imap {
         Ok(caps)
     }
 
-    /// The Sent folder, made if the server has none.
-    /// The UID in `folder` of the message of the Message-ID `message_id`, the
-    /// newest if there are more.
-    fn uid_of(&mut self, folder: &str, message_id: &str) -> anyhow::Result<Option<u32>> {
-        let id = mail::brackets(message_id);
-        self.run(|s, selected| {
-            select(s, selected, folder, true)?;
-            let found = s.uid_search(format!("HEADER Message-ID {}", astring(&id)))?;
-            Ok(found.into_iter().max())
-        })
-    }
-
     /// Whether the server has filed `sent` in `folder` itself, as Exchange
     /// does, a moment after taking it. Not being able to tell is no: a copy
     /// kept twice is better than none.
@@ -842,6 +835,7 @@ impl Imap {
         false
     }
 
+    /// The Sent folder, made if the server has none.
     fn sent_folder(&mut self) -> anyhow::Result<String> {
         let folders = self.folders()?;
         if let Some(folder) = mail::role_folder(&folders, Role::Sent) {

@@ -280,17 +280,7 @@ fn filed_as_an_agent_proposed_from_its_folder_not_the_one_you_are_looking_at() {
 /// `Message-ID` of what All Mail holds, as Gmail keeps a draft in both.
 fn in_gmail_drafts() -> App {
     let (mut app, boxes) = gmail_app(true);
-    {
-        let mut fake = boxes.lock().unwrap();
-        let raw = fake.iter().find(|b| b.name == "INBOX").unwrap().letters[0]
-            .raw
-            .clone();
-        let drafts = fake
-            .iter_mut()
-            .find(|b| b.name == "[Gmail]/Drafts")
-            .unwrap();
-        drafts.push(Letter::new(900, &["\\Seen", "\\Draft"], raw));
-    }
+    gmail_draft(&boxes);
     let row = app
         .rows
         .iter()
@@ -334,4 +324,16 @@ fn a_draft_archived_flagged_forwarded_or_taken_up_on_gmail_teaches_nothing() {
         app.settle(PATIENCE);
         assert_eq!(lessons(&app), (0, 0), "{keys:?}: {}", app.status);
     }
+}
+
+#[test]
+fn a_draft_on_gmail_is_not_known_by_all_mails_copy_so_no_route_can_teach_from_it() {
+    let app = in_gmail_drafts();
+    assert_eq!(app.listed_key(&app.shown[0]), None);
+}
+
+#[test]
+fn what_else_is_listed_on_gmail_is_known_as_ever() {
+    let (app, _boxes) = gmail_app(true);
+    assert!(app.listed_key(&app.shown[0]).is_some(), "{}", app.status);
 }

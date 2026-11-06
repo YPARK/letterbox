@@ -133,16 +133,16 @@ fn m_dollar_checks_what_is_written_and_each_change_is_taken_or_not() {
 }
 
 #[test]
-fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
+fn c_c_c_g_and_the_grammar_button_check_as_m_dollar_does() {
     let fix = |_: &str| -> anyhow::Result<Box<dyn grammar::Corrector>> {
         Ok(Box::new(grammar::Using(|s: &str| {
             Ok(s.replace("you time", "your time"))
         })))
     };
-    // C-c C-s, no Meta needed.
+    // C-c C-g, no Meta needed.
     let mut app = writing("Thank you for you time.");
     app.grammar_open = fix;
-    press(&mut app, &["<c-c>", "<c-s>"]);
+    press(&mut app, &["<c-c>", "<c-g>"]);
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     // The Grammar button on the message's top edge, clicked.
     let mut app = writing("Thank you for you time.");
@@ -150,7 +150,7 @@ fn c_c_c_s_and_the_grammar_button_check_as_m_dollar_does() {
     let _ = app::screen(&mut app, 160, 40);
     let chord = (
         crate::keymap::key_named("C-c").unwrap(),
-        crate::keymap::key_named("C-s").unwrap(),
+        crate::keymap::key_named("C-g").unwrap(),
     );
     let (rect, _) = *app
         .targets
@@ -208,12 +208,11 @@ fn sending(body: &str) -> App {
     app
 }
 
-/// Whether the model was ever read.
-static READ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 #[test]
 fn sending_asks_first_whether_to_check_the_grammar_and_reads_no_model_till_told() {
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    /// Whether the model was ever read.
+    static READ: AtomicBool = AtomicBool::new(false);
     let asked = "Check the grammar first?";
     // n: sent as it is, no model read.
     let mut app = sending("Thank you for you time.");
@@ -232,6 +231,7 @@ fn sending_asks_first_whether_to_check_the_grammar_and_reads_no_model_till_told(
     assert!(app.checking.is_none());
     press(&mut app, &["n"]);
     assert!(app.compose.is_none(), "{}", app.status);
+    app.settle(Duration::from_millis(200));
     assert!(!READ.load(Ordering::SeqCst), "no model read");
     // Any other key: goes on writing, nothing sent or checked, nothing typed.
     let mut app = sending("Thank you for you time.");
@@ -322,7 +322,7 @@ fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
                 .replace("monday", "Monday"))
         })))
     };
-    press(&mut app, &["<c-c>", "<c-s>"]);
+    press(&mut app, &["<c-c>", "<c-g>"]);
     let screen = app::screen(&mut app, 150, 40);
     for said in [
         "Grammar · 1 of 3",
@@ -350,7 +350,7 @@ fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
     let screen = app::screen(&mut app, 150, 40);
     assert!(!screen.contains("Grammar ·"), "{screen}");
     // Ignore all: none taken.
-    press(&mut app, &["<c-c>", "<c-s>"]);
+    press(&mut app, &["<c-c>", "<c-g>"]);
     let _ = app::screen(&mut app, 150, 40);
     click_key(&mut app, 'i');
     assert!(app.checking.is_none());

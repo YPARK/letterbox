@@ -211,17 +211,10 @@ impl App {
         self.teach_of(account, folder, uid, &id, thrown);
     }
 
-    /// As `teach_at`, its `Message-ID` known. Nothing done in Drafts is learnt,
-    /// though All Mail holds the draft too, marked so or not.
+    /// As `teach_at`, its `Message-ID` known.
     fn teach_of(&mut self, account: usize, folder: &str, uid: u32, id: &str, thrown: bool) {
-        if self.role_is(account, folder, Role::Drafts) {
-            return;
-        }
-        let Some(ident) = self.accounts.get(account).map(|a| a.ident.clone()) else {
-            return;
-        };
-        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(key) = index.key_of(&ident, folder, uid, id) {
+        if let Some(key) = self.key_of(account, folder, uid, id) {
+            let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
             let _ = index.teach(&key, thrown);
         }
     }

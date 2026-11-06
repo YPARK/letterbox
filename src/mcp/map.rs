@@ -168,8 +168,9 @@ impl Server {
         folder: &str,
         messages: &[&Summary],
         thrown: bool,
+        of_drafts: bool,
     ) -> Value {
-        match self.written_down(account, folder, messages, thrown, false) {
+        match self.written_down(account, folder, messages, thrown, false, of_drafts) {
             Ok(n) => json!(n),
             Err(e) => json!(format!("none: {}", said(&e))),
         }
@@ -184,14 +185,11 @@ impl Server {
         messages: &[&Summary],
         thrown: bool,
         asked: bool,
+        of_drafts: bool,
     ) -> anyhow::Result<usize> {
         // Nothing done in Drafts is learnt, though All Mail holds the draft
         // too, marked so or not.
-        let folders = self.store(account)?.folders()?;
-        if folders
-            .iter()
-            .any(|f| f.path == folder && matches!(f.role, mail::Role::Drafts))
-        {
+        if of_drafts {
             return Ok(0);
         }
         let ident = self.store(account)?.ident();
@@ -263,6 +261,9 @@ impl Server {
         folder: &str,
         moving: &[Summary],
     ) -> anyhow::Result<Value> {
+        // Asked before they are asked: their answers are not lost to it.
+        let folders = self.store(account)?.folders()?;
+        let of_drafts = mail::role_is(&folders, folder, mail::Role::Drafts);
         let schema = json!({ "answer": {
             "type": "string",
             "title": "Junk, or keep?",
@@ -292,8 +293,8 @@ impl Server {
                 _ => passed += 1,
             }
         }
-        let learnt = self.written_down(account, folder, &junk, true, true)?
-            + self.written_down(account, folder, &keep, false, true)?;
+        let learnt = self.written_down(account, folder, &junk, true, true, of_drafts)?
+            + self.written_down(account, folder, &keep, false, true, of_drafts)?;
         Ok(json!({
             "junk": junk.len(),
             "keep": keep.len(),

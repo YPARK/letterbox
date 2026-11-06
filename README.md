@@ -32,7 +32,7 @@ It is built with two features, both on by default:
   images (kitty, WezTerm, Ghostty, iTerm2). That brings typst, so it
   builds for longer, and typst's evaluator assembles one small file with
   the system's C toolchain.
-- `grammar`, to check the grammar of what you write, `C-c C-s`, with a
+- `grammar`, to check the grammar of what you write, `C-c C-g`, with a
   small model.
 
 The model is a T5 from Hugging Face, made to correct English grammar, read
@@ -222,7 +222,11 @@ lets go of a search, the mark, or a `C-c` begun, as Emacs's does; with
 nothing to let go, it leaves the message, from wherever the cursor is,
 asking first if you changed it or it carries files. `esc` does as `C-g`. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
 
-`C-c C-s`, or the Grammar button on its top edge, checks the grammar of
+`C-x C-s`, or the Save button on its top edge, keeps what you are writing in
+Drafts and goes on: saved again it replaces what was saved, which goes to Trash,
+and sent, what was saved goes too. It may be to no one yet.
+
+`C-c C-g`, or the Grammar button on its top edge, checks the grammar of
 what you wrote; `M-$`, as Emacs checks
 spelling, does too, where the terminal sends Option as Meta: not the head, what it quotes, the line
 saying who wrote it, the message it forwards, nor the signature. Each change the model would make
