@@ -322,8 +322,13 @@ fn a_draft_thrown_away_by_hand_on_gmail_teaches_nothing() {
 }
 
 #[test]
-fn a_draft_archived_or_flagged_or_taken_up_on_gmail_teaches_nothing() {
-    for keys in [&["e"][..], &["f"][..], &["E", "<c-c>", "<c-k>"][..]] {
+fn a_draft_archived_flagged_forwarded_or_taken_up_on_gmail_teaches_nothing() {
+    for keys in [
+        &["e"][..],
+        &["!"][..],
+        &["f"][..],
+        &["E", "<c-c>", "<c-k>"][..],
+    ] {
         let mut app = in_gmail_drafts();
         press(&mut app, keys);
         app.settle(PATIENCE);
