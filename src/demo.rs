@@ -744,6 +744,11 @@ impl Store for Demo {
         Ok(())
     }
 
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<Option<u32>> {
+        self.append(folder, raw, true)?;
+        Ok(self.mail().letters(folder)?.last().map(|l| l.uid))
+    }
+
     fn holds(&mut self, folder: &str, message_id: &str) -> anyhow::Result<bool> {
         let bare = |s: &str| s.trim().trim_matches(['<', '>']).to_lowercase();
         let id = bare(message_id);

@@ -444,6 +444,18 @@ fn to_all(message: &Message, me: &str) -> (Vec<String>, Vec<String>) {
     (to, cc)
 }
 
+/// Who a reply to all would reach that a reply to the sender alone does not.
+pub(crate) fn not_copied(message: &Message, me: &str) -> Vec<String> {
+    let spec = |a: &str| addr_spec(a).map(|s| s.to_lowercase());
+    let mut going: Vec<String> = sender(message).iter().filter_map(|a| spec(a)).collect();
+    going.extend(spec(me));
+    let (to, cc) = to_all(message, me);
+    to.into_iter()
+        .chain(cc)
+        .filter(|a| spec(a).is_some_and(|s| !going.contains(&s)))
+        .collect()
+}
+
 /// The buffer a reply opens with: to `to`, `cc` copied.
 fn answer(message: &Message, to: &[String], cc: &[String]) -> (String, usize) {
     let (head, quoted) = parts(message, to, cc);

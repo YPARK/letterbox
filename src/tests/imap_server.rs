@@ -5,6 +5,10 @@ use super::*;
 
 // ---- an IMAP server, just enough of one, on this machine ----
 
+/// The header a message begins with to be appended as to a server that does
+/// not say what UID it took.
+pub(super) const NO_APPENDUID: &str = "X-Not-Told: yes";
+
 #[derive(Clone)]
 pub(super) struct Letter {
     pub(super) uid: u32,
@@ -733,6 +737,7 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                 let mut tail = [0u8; 2];
                 let _ = lines.get_mut().read_exact(&mut tail);
                 let new_uid = next_uid(&boxes);
+                let says_uid = !body.starts_with(NO_APPENDUID.as_bytes());
                 let flags: Vec<&str> = ["\\Seen", "\\Draft"]
                     .into_iter()
                     .filter(|f| args.contains(f))
@@ -742,7 +747,17 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                     None => done = format!("{tag} NO no such folder\r\n"),
                 }
                 if !done.starts_with(&format!("{tag} NO")) {
-                    done = format!("{tag} OK appended\r\n");
+                    let told = boxes
+                        .iter()
+                        .find(|b| b.name == name)
+                        .map(|b| b.validity)
+                        .filter(|_| says_uid);
+                    done = match told {
+                        Some(validity) => {
+                            format!("{tag} OK [APPENDUID {validity} {new_uid}] appended\r\n")
+                        }
+                        None => format!("{tag} OK appended\r\n"),
+                    };
                 }
             }
             "LOGOUT" => {

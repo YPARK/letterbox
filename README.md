@@ -644,7 +644,7 @@ have your shell's `PATH`.
 
 | Tool | | |
 |---|---|---|
-| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread | reads |
+| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread; one account, or only their names, if asked; and the version of letterbox | reads |
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
@@ -653,12 +653,12 @@ have your shell's `PATH`.
 | `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
 | `recent_messages` | what came to each Inbox in the last hours, every account or one | reads |
 | `triage` | the same, each with how likely you are to throw it away and where it would be filed | reads |
-| `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back | moves, once you say yes |
+| `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back; what you say yes to is learnt, but a draft teaches nothing, so this is how an agent drops a draft it wrote again | moves, once you say yes |
 | `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
-| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named, kept in Drafts; never sent | writes a draft |
-| `draft_message` | a new letter, with any files you named, kept in Drafts; never sent | writes a draft |
+| `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; never sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
+| `draft_message` | a new letter, with any files you named or described, kept in Drafts; never sent. Says its uid, who it goes to and how big its files are | writes a draft |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

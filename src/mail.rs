@@ -323,10 +323,7 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
         .map(clean)
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| address.clone());
-    let preview: String = m
-        .body_text(0)
-        .map(|t| preview(&t, PREVIEW_CHARS))
-        .unwrap_or_default();
+    let preview = preview(&listed_text(raw), PREVIEW_CHARS);
     Summary {
         uid,
         from,
@@ -344,6 +341,53 @@ pub fn summary(uid: u32, flags: Flags, size: u32, raw: &[u8]) -> Summary {
             .map(|s| brackets(&s))
             .unwrap_or_default(),
     }
+}
+
+/// The text of `raw`, as much of a message as is fetched to list it: a server
+/// gives only its start, and a part cut off before its boundary is not read as
+/// a part at all, so its parts are ended where that lost the text.
+pub fn listed_text(raw: &[u8]) -> String {
+    let text_of = |raw: &[u8]| {
+        MessageParser::default()
+            .parse(raw)
+            .and_then(|m| m.body_text(0).map(|t| t.into_owned()))
+            .filter(|t| !t.trim().is_empty())
+    };
+    text_of(raw)
+        .or_else(|| text_of(&ended(raw)?))
+        .unwrap_or_default()
+}
+
+/// `raw` with each boundary it declares closed, the last declared first;
+/// nothing if it declares none.
+fn ended(raw: &[u8]) -> Option<Vec<u8>> {
+    const DECLARED: &[u8] = b"boundary=";
+    let mut boundaries: Vec<&[u8]> = Vec::new();
+    let mut at = 0;
+    while let Some(found) = raw[at..]
+        .windows(DECLARED.len())
+        .position(|w| w.eq_ignore_ascii_case(DECLARED))
+    {
+        at += found + DECLARED.len();
+        let rest = &raw[at..];
+        let value = match rest.strip_prefix(b"\"") {
+            Some(quoted) => quoted.split(|b| *b == b'"').next(),
+            None => rest.split(|b| b.is_ascii_whitespace() || *b == b';').next(),
+        };
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            boundaries.push(value);
+        }
+    }
+    if boundaries.is_empty() {
+        return None;
+    }
+    let mut out = raw.to_vec();
+    for b in boundaries.iter().rev() {
+        out.extend_from_slice(b"\r\n--");
+        out.extend_from_slice(b);
+        out.extend_from_slice(b"--\r\n");
+    }
+    Some(out)
 }
 
 /// The text's first words, no more than `chars` of them, on one line, without

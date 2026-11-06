@@ -43,23 +43,27 @@ pub struct Imap {
 }
 
 impl Imap {
-    /// Add `raw` to the end of `folder`, with `flags`.
+    /// Add `raw` to the end of `folder`, with `flags`. The UID it took, if
+    /// the server says.
     fn append_flagged(
         &mut self,
         folder: &str,
         raw: &[u8],
         flags: &[imap::types::Flag<'static>],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<u32>> {
         self.run(|s, selected| {
             let mut cmd = s.append(folder, raw);
             for flag in flags {
                 cmd.flag(flag.clone());
             }
-            cmd.finish()?;
+            let appended = cmd.finish()?;
             if selected.as_ref().is_some_and(|sel| sel.folder == folder) {
                 *selected = None;
             }
-            Ok(())
+            Ok(appended.uids.and_then(|uids| match uids.first() {
+                Some(imap_proto::UidSetMember::Uid(uid)) => Some(*uid),
+                _ => None,
+            }))
         })
     }
 
@@ -330,12 +334,30 @@ impl Store for Imap {
         } else {
             &[]
         };
-        self.append_flagged(folder, raw, flags)
+        self.append_flagged(folder, raw, flags).map(|_| ())
     }
 
-    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<()> {
+    fn append_draft(&mut self, folder: &str, raw: &[u8]) -> anyhow::Result<Option<u32>> {
         use imap::types::Flag;
-        self.append_flagged(folder, raw, &[Flag::Seen, Flag::Draft])
+        let told = self.append_flagged(folder, raw, &[Flag::Seen, Flag::Draft])?;
+        if told.is_some() {
+            return Ok(told);
+        }
+        // As relocate finds what it moved: by Message-ID, as the highest UID
+        // there might be some other message. It is kept by now, so not being
+        // able to tell which it is is no failure, for it to be drafted again.
+        let Some(id) = mail::field(raw, "Message-ID").filter(|id| !id.is_empty()) else {
+            return Ok(None);
+        };
+        let id = mail::brackets(&id);
+        Ok(self
+            .run(|s, selected| {
+                select(s, selected, folder, true)?;
+                let found = s.uid_search(format!("HEADER Message-ID {}", astring(&id)))?;
+                Ok(found.into_iter().max())
+            })
+            .ok()
+            .flatten())
     }
 
     fn create(&mut self, path: &str) -> anyhow::Result<()> {

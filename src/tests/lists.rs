@@ -750,3 +750,140 @@ fn the_message_read_is_let_go_when_the_list_gives_way_to_the_map_and_back() {
     assert!(app.reading.is_none(), "{screen}");
     assert!(screen.contains("reads the message picked"), "{screen}");
 }
+
+/// A message as a server gives it to be listed: its headers, and only the
+/// first `bytes` of what follows.
+fn as_listed(raw: &[u8], bytes: usize) -> Vec<u8> {
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let (head, text) = raw.split_at(split);
+    let mut cut = head.to_vec();
+    cut.extend_from_slice(&text[..text.len().min(bytes)]);
+    cut
+}
+
+fn preview_of(raw: &[u8]) -> String {
+    mail::summary(1, Default::default(), 0, raw).preview
+}
+
+#[test]
+fn a_long_text_with_files_cut_short_by_what_is_fetched_has_its_preview() {
+    let file = crate::compose::File {
+        name: "report.pdf".into(),
+        mime: "application/pdf".into(),
+        bytes: vec![7; 50_000],
+    };
+    let body = "Dear all, the words of it. ".repeat(200);
+    let raw = crate::compose::new_draft(
+        "me@example.com",
+        &["a@b.example".into()],
+        &[],
+        "Files",
+        &body,
+        &[file],
+    )
+    .unwrap();
+    // Wherever the cut falls in a line of base64, as the next four are.
+    for bytes in 2045..=2048 {
+        let cut = as_listed(&raw, bytes);
+        assert!(
+            preview_of(&cut).starts_with("Dear all, the words of it."),
+            "cut at {bytes}: {:?}",
+            preview_of(&cut)
+        );
+    }
+}
+
+#[test]
+fn a_long_text_with_no_files_in_a_message_of_parts_has_its_preview_too() {
+    let text = "Plain words again. ".repeat(200);
+    let html = format!("<p>{}</p>", "Marked up words. ".repeat(200));
+    let head = "From: a@b.example\r\nSubject: s\r\nMIME-Version: 1.0\r\n";
+    let alternative = format!(
+        "{head}Content-Type: multipart/alternative; boundary=\"i\"\r\n\r\n\
+         --i\r\nContent-Type: text/plain\r\n\r\n{text}\r\n\
+         --i\r\nContent-Type: text/html\r\n\r\n{html}\r\n--i--\r\n"
+    );
+    assert!(
+        preview_of(&as_listed(alternative.as_bytes(), 2048)).starts_with("Plain words again."),
+        "{alternative}"
+    );
+    let html_only = format!(
+        "{head}Content-Type: multipart/mixed; boundary=\"o\"\r\n\r\n\
+         --o\r\nContent-Type: text/html\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n\
+         {html}\r\n--o--\r\n"
+    );
+    assert!(
+        preview_of(&as_listed(html_only.as_bytes(), 2048)).starts_with("Marked up words."),
+        "{html_only}"
+    );
+    let nested = format!(
+        "{head}Content-Type: multipart/mixed; boundary=\"o\"\r\n\r\n\
+         --o\r\nContent-Type: multipart/alternative; boundary=\"i\"\r\n\r\n\
+         --i\r\nContent-Type: text/plain\r\n\r\n{text}\r\n--i--\r\n--o--\r\n"
+    );
+    assert!(
+        preview_of(&as_listed(nested.as_bytes(), 2048)).starts_with("Plain words again."),
+        "{nested}"
+    );
+}
+
+#[test]
+fn a_message_of_parts_with_no_text_at_all_still_previews_as_nothing() {
+    let raw = "From: a@b.example\r\nSubject: s\r\nMIME-Version: 1.0\r\n\
+               Content-Type: multipart/mixed; boundary=\"o\"\r\n\r\n\
+               --o\r\nContent-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\n\
+               Content-Disposition: attachment; filename=a.pdf\r\n\r\nAAAA";
+    assert_eq!(preview_of(raw.as_bytes()), "");
+}
+
+#[test]
+fn a_long_message_of_parts_listed_by_a_server_has_its_preview() {
+    let (account, boxes) = server();
+    let text = "Plain words again. ".repeat(200);
+    let raw = format!(
+        "From: a@b.example\r\nSubject: Long\r\nMIME-Version: 1.0\r\n\
+         Date: Sat, 1 Jan 2050 00:00:00 +0000\r\n\
+         Content-Type: multipart/mixed; boundary=\"i\"\r\n\r\n\
+         --i\r\nContent-Type: text/plain\r\n\r\n{text}\r\n--i--\r\n"
+    );
+    boxes
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|b| b.name == "INBOX")
+        .unwrap()
+        .push(Letter::new(99, &[], raw.into_bytes()));
+    let mut imap = Imap::new(account);
+    let found = imap.search("INBOX", "Long", 5).unwrap();
+    assert!(
+        found[0].preview.starts_with("Plain words again."),
+        "{:?}",
+        found[0].preview
+    );
+}
+
+#[test]
+fn the_map_reads_the_start_of_a_long_message_of_parts_as_the_list_does() {
+    let text = "Plain words again. ".repeat(200);
+    let raw = format!(
+        "From: a@b.example\r\nSubject: Long\r\nMIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=\"i\"\r\n\r\n\
+         --i\r\nContent-Type: text/plain\r\n\r\n{text}\r\n--i--\r\n"
+    );
+    let indexed = crate::index::record::Indexed {
+        uid: 1,
+        raw: as_listed(raw.as_bytes(), 2048),
+        ..Default::default()
+    };
+    let record = index::Record::of("a@b.c", "INBOX", 7, &indexed, 1_000);
+    assert!(
+        record.preview.starts_with("Plain words again."),
+        "{:?}",
+        record.preview
+    );
+    assert!(
+        record.preview.len() > 240,
+        "as much as the map keeps, not the list's: {}",
+        record.preview.len()
+    );
+}
