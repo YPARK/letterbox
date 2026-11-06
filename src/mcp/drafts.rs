@@ -99,3 +99,102 @@ pub(super) fn told_apart(s: &Summary) -> String {
         s.size.div_ceil(1024).max(1)
     )
 }
+
+/// The most a draft's files may come to, as most servers take a message of
+/// 25 MB, and base64 makes a file a third larger.
+pub(crate) const ATTACHED_AT_MOST: u64 = 18 * 1024 * 1024;
+
+/// Whether `real`, a path links are resolved in, is something no agent attaches:
+/// hidden, within what is hidden, or among what the system or letterbox keeps
+/// to itself, the sign-ins and the keychain among it. Files in the cloud folders
+/// of `~/Library` are the user's own.
+pub(crate) fn off_limits(real: &Path, config: &Path) -> bool {
+    // macOS's other name for the same files: resolving a path leaves it so.
+    let real = match real.strip_prefix("/System/Volumes/Data") {
+        Ok(rest) => Path::new("/").join(rest),
+        Err(_) => real.to_path_buf(),
+    };
+    let hidden = real
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+    let raw_home = crate::compose::home();
+    let home = raw_home.canonicalize().unwrap_or(raw_home);
+    // The folder of a file of letterbox's, unless that is all there is.
+    let beside = |file: &Path| {
+        file.parent()
+            .filter(|p| p.parent().is_some() && *p != home)
+            .map(Path::to_path_buf)
+    };
+    let vault = crate::vault::path();
+    let own = [
+        Some(config.to_path_buf()),
+        beside(config),
+        beside(&vault),
+        Some(vault),
+        Some(crate::vault::key_path()),
+        Some(crate::index::key::dir()),
+    ];
+    let library = real.strip_prefix(home.join("Library")).is_ok_and(|rest| {
+        !rest.starts_with("Mobile Documents") && !rest.starts_with("CloudStorage")
+    });
+    hidden
+        || library
+        || ["/proc", "/sys", "/dev", "/etc", "/private/etc"]
+            .iter()
+            .any(|p| real.starts_with(p))
+        || own
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.canonicalize().ok())
+            .any(|p| real.starts_with(p))
+}
+
+/// The files a letter is to take, as an agent names them. A file named in
+/// mail an agent read could be anything on this machine, so only a whole path,
+/// to a file not `off_limits`, whatever a link makes it look like; none of it,
+/// nothing is drafted.
+fn attached(args: &Value, config: &Path) -> anyhow::Result<Vec<crate::compose::File>> {
+    let Some(given) = args.get("attachments") else {
+        return Ok(Vec::new());
+    };
+    let paths: Vec<String> =
+        serde_json::from_value(given.clone()).context("attachments is a list of paths")?;
+    let mut total = 0;
+    let mut files = Vec::with_capacity(paths.len());
+    for path in &paths {
+        if !path.starts_with('/') && !path.starts_with("~/") {
+            bail!("{path}: give its whole path");
+        }
+        let named = crate::compose::path_of(path);
+        let cannot = || format!("{path}: cannot read it");
+        let real = named.canonicalize().with_context(cannot)?;
+        if off_limits(&real, config) {
+            bail!(
+                "{path} is hidden, or among what this machine keeps to itself: the user \
+                 attaches it themselves, in letterbox"
+            );
+        }
+        let about = real.metadata().with_context(cannot)?;
+        if !about.is_file() {
+            bail!("{path} is not a file");
+        }
+        total += about.len();
+        if total > ATTACHED_AT_MOST {
+            bail!(
+                "too much to attach: {} MB at most",
+                ATTACHED_AT_MOST / (1024 * 1024)
+            );
+        }
+        // By the name it was given, not that of what a link leads to.
+        files.push(crate::compose::read_file(&named).with_context(cannot)?);
+    }
+    Ok(files)
+}
+
+/// The addresses `args` give as `key`: a list of them, or none given.
+fn addresses(args: &Value, key: &str) -> anyhow::Result<Vec<String>> {
+    let Some(given) = args.get(key) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(given.clone()).with_context(|| format!("{key} is a list of addresses"))
+}
