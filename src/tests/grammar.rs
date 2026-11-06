@@ -249,40 +249,108 @@ fn sending_asks_first_whether_to_check_the_grammar_and_reads_no_model_till_told(
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
 }
 
+/// As `sending`, with a store to see what was sent by.
+fn sending_kept(body: &str) -> (App, Box<dyn Store>) {
+    let demo = Demo::new();
+    let store = demo.twin().unwrap();
+    let mut app = App::new(
+        vec![("Demo".to_string(), Box::new(demo) as Box<dyn Store>)],
+        PathBuf::from("/nowhere/accounts.toml"),
+    );
+    app.ledger = scratch_ledger();
+    app.settle(PATIENCE);
+    press(
+        &mut app,
+        &[
+            "c",
+            "ada@analytical.example",
+            "<c-n>",
+            "<c-n>",
+            "Hello",
+            "<c-n>",
+            "<c-n>",
+            body,
+        ],
+    );
+    app.check_on_send = true;
+    app.grammar_open = |_| {
+        Ok(Box::new(grammar::Using(|s: &str| {
+            Ok(s.replace("you time", "your time"))
+        })))
+    };
+    (app, store)
+}
+
+fn last_sent(store: &mut Box<dyn Store>) -> String {
+    let newest = store.page("Sent", 0, 1).unwrap().summaries[0].uid;
+    String::from_utf8_lossy(&store.raw("Sent", newest).unwrap()).to_string()
+}
+
 #[test]
-fn checked_as_it_is_asked_it_is_gone_through_and_then_asked_if_it_is_to_go() {
+fn checked_as_it_is_to_be_sent_it_goes_once_it_is_gone_through() {
     // Nothing to change: sent at once.
     let mut app = sending("All is well.");
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
     assert!(app.compose.is_none(), "{}", app.status);
-    // Something: gone through first, then asked; y sends it.
-    let mut app = sending("Thank you for you time.");
+    // Something taken: gone through, and sent with it, unasked again.
+    let (mut app, mut store) = sending_kept("Thank you for you time.");
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
     assert!(app.compose.is_some());
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     press(&mut app, &["y"]);
-    assert!(app.status.contains("Send it now?"), "{}", app.status);
-    assert!(written(&app).contains("your time"), "{}", written(&app));
-    let screen = app::screen(&mut app, 150, 40);
-    assert!(
-        screen.contains("Send  y") && screen.contains("Keep writing  n"),
-        "{screen}"
-    );
-    click_key(&mut app, 'y');
     app.settle(PATIENCE);
     assert!(app.compose.is_none(), "{}", app.status);
-    // Stopped, and any key but y: not sent, the message kept as it is.
-    let mut app = sending("Thank you for you time.");
-    press(&mut app, &["<c-c>", "<c-c>", "y"]);
-    press(&mut app, &["q"]);
-    assert!(app.status.contains("Send it now?"), "{}", app.status);
-    press(&mut app, &["x"]);
-    assert!(app.compose.is_some());
-    assert!(written(&app).contains("for you time."), "{}", written(&app));
+    assert!(last_sent(&mut store).contains("your time"));
+    // Skipped, or all ignored: sent as it was written.
+    for key in ["n", "i", "q"] {
+        let (mut app, mut store) = sending_kept("Thank you for you time.");
+        press(&mut app, &["<c-c>", "<c-c>", "y", key]);
+        app.settle(PATIENCE);
+        assert!(app.compose.is_none(), "{key}: {}", app.status);
+        assert!(last_sent(&mut store).contains("for you time"), "{key}");
+    }
     // C-c C-c while it is gone through: sent as it is, at once.
     let mut app = sending("Thank you for you time.");
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
     press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.compose.is_none(), "{}", app.status);
+}
+
+#[test]
+fn stopped_while_it_is_gone_through_it_is_not_sent_and_goes_on_being_written() {
+    for key in ["<c-g>", "<esc>", "<enter>"] {
+        let mut app = sending("Thank you for you time.");
+        press(&mut app, &["<c-c>", "<c-c>", "y", key]);
+        app.settle(PATIENCE);
+        let compose = app
+            .compose
+            .as_ref()
+            .unwrap_or_else(|| panic!("{key}: sent"));
+        assert!(compose.held.is_none(), "{key}: {}", app.status);
+        assert!(written(&app).contains("for you time."), "{key}");
+    }
+}
+
+#[test]
+fn a_message_goes_with_no_hold() {
+    let mut app = demo();
+    assert!(app.send_hold.is_zero());
+    press(
+        &mut app,
+        &[
+            "c",
+            "ada@analytical.example",
+            "<c-n>",
+            "<c-n>",
+            "Off",
+            "<c-n>",
+            "<c-n>",
+            "Hi",
+            "<c-c>",
+            "<c-c>",
+        ],
+    );
+    app.settle(PATIENCE);
     assert!(app.compose.is_none(), "{}", app.status);
 }
 

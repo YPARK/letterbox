@@ -196,3 +196,91 @@ fn how_long_sent_is_looked_in_goes_by_what_the_server_has_done() {
     // Having filed its own, a miss or two does not stop the looking.
     assert_eq!(sent_looks(true, 9), sent_looks(true, 0));
 }
+
+// ---- What is said as it goes ----
+
+#[test]
+fn held_a_pop_up_counts_down_and_says_how_to_send_now_or_take_it_back() {
+    let mut app = demo();
+    app.send_hold = Duration::from_secs(10);
+    write_and_send(&mut app, "ada@analytical.example", "Held", "Hi");
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Sending in"), "{screen}");
+    assert!(screen.contains("C-c C-c sends now"), "{screen}");
+    assert!(screen.contains("C-g takes it back"), "{screen}");
+    press(&mut app, &["<c-g>"]);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Sending in"), "{screen}");
+}
+
+#[test]
+fn sending_a_pop_up_says_it_is_being_sent_till_it_has_been() {
+    let mut app = demo();
+    app.send_hold = Duration::from_secs(10);
+    write_and_send(&mut app, "ada@analytical.example", "Going", "Hi");
+    press_unsettled(&mut app, &["<c-c>", "<c-c>"]);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Sending…"), "{screen}");
+    app.settle(PATIENCE);
+    assert!(app.compose.is_none(), "{}", app.status);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Sending…"), "{screen}");
+}
+
+#[test]
+fn what_could_not_be_sent_stays_in_a_pop_up_till_a_key_and_the_letter_is_kept() {
+    let demo = Demo::new();
+    demo.refuse("Bounces");
+    let mut app = App::new(
+        vec![("Demo".to_string(), Box::new(demo) as Box<dyn Store>)],
+        PathBuf::from("/nowhere/accounts.toml"),
+    );
+    app.ledger = scratch_ledger();
+    app.send_hold = Duration::ZERO;
+    app.settle(PATIENCE);
+    write_and_send(&mut app, "ada@analytical.example", "Bounces", "Hi");
+    app.settle(PATIENCE);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Not sent"), "{screen}");
+    assert!(screen.contains("the server said no"), "{screen}");
+    let before = app.compose.as_ref().expect("kept").buffer.text();
+    press(&mut app, &["x"]);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Not sent"), "{screen}");
+    let compose = app.compose.as_ref().expect("still kept");
+    assert_eq!(compose.buffer.text(), before, "the key only lets it go");
+}
+
+#[test]
+fn saving_and_checking_say_so_in_a_pop_up_too() {
+    let mut app = demo();
+    app.grammar_open = |_| {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(Box::new(crate::grammar::Using(|s: &str| Ok(s.to_string()))))
+    };
+    press(
+        &mut app,
+        &[
+            "c",
+            "ada@analytical.example",
+            "<c-n>",
+            "<c-n>",
+            "Words",
+            "<c-n>",
+            "<c-n>",
+            "Hi",
+        ],
+    );
+    press_unsettled(&mut app, &["<c-c>", "g"]);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Checking the grammar…"), "{screen}");
+    app.settle(PATIENCE);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Checking the grammar…"), "{screen}");
+    press_unsettled(&mut app, &["<c-x>", "<c-s>"]);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(screen.contains("Saving…"), "{screen}");
+    app.settle(PATIENCE);
+    let screen = app::screen(&mut app, 150, 40);
+    assert!(!screen.contains("Saving…"), "{screen}");
+}

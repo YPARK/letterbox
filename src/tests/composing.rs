@@ -52,7 +52,7 @@ fn after_a_send_warning_c_c_c_c_sends_without_asking_the_grammar_again() {
         );
         press(&mut app, &["<c-c>", "<c-c>", "y"]);
         assert!(app.checking.is_some(), "{}", app.status);
-        press(&mut app, &[answer, "y"]);
+        press(&mut app, &[answer]);
         assert!(app.status.contains("no subject"), "{}", app.status);
         press(&mut app, &["<c-c>", "<c-c>"]);
         assert!(app.checking.is_none(), "{}", app.status);
@@ -74,7 +74,7 @@ fn after_a_send_warning_c_c_c_c_sends_without_asking_the_grammar_again() {
         &mut app,
         &["c", "bob@x.org", "<tab>", "<tab>", "<tab>", "thanks i will"],
     );
-    press(&mut app, &["<c-c>", "<c-c>", "y", "i", "y", "!"]);
+    press(&mut app, &["<c-c>", "<c-c>", "y", "i", "!"]);
     press(&mut app, &["<c-c>", "<c-c>", "y"]);
     assert!(app.checking.is_some(), "{}", app.status);
 }

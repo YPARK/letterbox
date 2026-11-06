@@ -740,7 +740,13 @@ impl App {
                         };
                         self.reload(a);
                     }
-                    Err(e) => self.status = first_line(&e).to_string(),
+                    Err(e) => {
+                        let why = first_line(&e).to_string();
+                        if let Some(compose) = &mut self.compose {
+                            compose.not_sent = Some(why.clone());
+                        }
+                        self.status = why;
+                    }
                 }
             }
             Answer::DraftSaved {

@@ -15,6 +15,8 @@ pub struct Compose {
     pub scroll: usize,
     /// A send has been asked and not yet answered; the pane stays up.
     pub sending: bool,
+    /// Why it could not be sent, said till a key is pressed.
+    pub not_sent: Option<String>,
     /// Which save this is, and what is being saved in Drafts, while it is.
     pub saving: Option<(u64, String)>,
     /// The files of the message it forwards, sent with it while an
@@ -41,8 +43,9 @@ pub const KILL_ANYWAY: &str =
 /// How much attached most servers take, in bytes.
 pub(super) const LARGE: usize = 25 * 1024 * 1024;
 
-/// How long a message sent is held before it goes, to be taken back.
-pub const SEND_HOLD: Duration = Duration::from_secs(10);
+/// How long a message sent is held before it goes, to be taken back: not at
+/// all, as a send is asked for deliberately and said in a pop-up as it goes.
+pub const SEND_HOLD: Duration = Duration::ZERO;
 
 /// Over this many it goes to, a send is asked about once.
 pub(super) const MANY: usize = 10;
@@ -53,7 +56,7 @@ pub struct Holding {
     raw: Vec<u8>,
     answer: Option<(String, u32)>,
     /// The seconds left, as last said.
-    shown: u64,
+    pub shown: u64,
 }
 
 /// What is said of a message held: how long until it goes, and how it is
@@ -240,6 +243,7 @@ impl App {
             prefix: None,
             scroll: 0,
             sending: false,
+            not_sent: None,
             saving: None,
             files,
             warned: None,
@@ -260,13 +264,20 @@ impl App {
     }
 
     pub(super) fn compose_key(&mut self, key: KeyEvent) {
-        // Asked as it is to go: y checks it, or sends it; n sends it unchecked.
-        if let Some(asked) = self.asked.take() {
+        // Why it was not sent, seen: the key that says so does nothing else.
+        if self
+            .compose
+            .as_mut()
+            .is_some_and(|c| c.not_sent.take().is_some())
+        {
+            return;
+        }
+        // Asked as it is to go: y checks it, n sends it unchecked.
+        if std::mem::take(&mut self.check_asked) {
             let plain = key.modifiers.is_empty();
-            match (asked, key.code) {
-                (SendAsked::Check, KeyCode::Char('y' | 'Y')) if plain => self.check_grammar(true),
-                (SendAsked::Check, KeyCode::Char('n' | 'N')) if plain => self.send_compose(),
-                (SendAsked::Send, KeyCode::Char('y' | 'Y')) if plain => self.send_compose(),
+            match key.code {
+                KeyCode::Char('y' | 'Y') if plain => self.check_grammar(true),
+                KeyCode::Char('n' | 'N') if plain => self.send_compose(),
                 _ => self.status = "kept · C-c C-c sends it".to_string(),
             }
             return;
