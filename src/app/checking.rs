@@ -13,15 +13,6 @@ pub struct Checking {
     pub for_send: bool,
 }
 
-/// What is asked as a message is to go, answered by the next key.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SendAsked {
-    /// Whether its grammar is checked first.
-    Check,
-    /// Whether it goes now, its grammar gone through.
-    Send,
-}
-
 impl Checking {
     /// The change looked at.
     pub fn edit(&self) -> Option<&Edit> {
@@ -37,7 +28,7 @@ impl App {
         if std::mem::take(&mut self.send_as_is) || !self.check_on_send {
             return self.send_compose();
         }
-        self.asked = Some(SendAsked::Check);
+        self.check_asked = true;
         self.status =
             "Check the grammar first? y checks it · n sends it as it is · any other key goes on writing"
                 .to_string();
@@ -85,6 +76,7 @@ impl App {
         }
         if self.checker.as_ref().is_some_and(|c| c.send(text).is_ok()) {
             self.pending += 1;
+            self.grammar_waiting = true;
             self.status = if first {
                 format!(
                     "checking the grammar · {} read the first time…",
@@ -104,8 +96,9 @@ impl App {
     /// to change, or no model to say: sent, as it is.
     pub(super) fn checked(&mut self, text: &str, edits: Result<Vec<Edit>, String>) {
         let for_send = std::mem::take(&mut self.checking_for_send);
+        self.grammar_waiting = false;
         // What it found is asked now, not what was asked while it looked.
-        self.asked = None;
+        self.check_asked = false;
         let Some(compose) = &self.compose else {
             return;
         };
@@ -147,12 +140,10 @@ impl App {
             let (taken, for_send) = (c.taken, c.for_send);
             self.checking = None;
             self.status = format!("the grammar: {taken} changed");
-            // Gone through to be sent: asked if it is to go now.
+            // Gone through to be sent: it goes, as was asked of it.
             if for_send {
-                self.asked = Some(SendAsked::Send);
-                self.status = format!(
-                    "the grammar: {taken} changed · Send it now? y sends it, any other key goes on writing"
-                );
+                self.send_note = Some(format!("the grammar: {taken} changed"));
+                self.send_compose();
             }
             return;
         };
@@ -195,8 +186,8 @@ impl App {
                 }
             }
             KeyCode::Char('i' | 'q') if plain => self.stop_checking(),
-            KeyCode::Enter | KeyCode::Esc => self.stop_checking(),
-            KeyCode::Char('g') if ctrl => self.stop_checking(),
+            KeyCode::Enter | KeyCode::Esc => self.keep_writing(),
+            KeyCode::Char('g') if ctrl => self.keep_writing(),
             _ => {
                 let for_send = self.checking.take().is_some_and(|c| c.for_send);
                 self.send_as_is = for_send && ctrl && key.code == KeyCode::Char('c');
@@ -232,6 +223,14 @@ impl App {
         if let Some(c) = &mut self.checking {
             c.at += 1;
         }
+    }
+
+    /// No more gone through, and not sent if it was to be: stopped.
+    fn keep_writing(&mut self) {
+        if let Some(c) = &mut self.checking {
+            c.for_send = false;
+        }
+        self.stop_checking();
     }
 
     /// No more gone through: what is left, left.

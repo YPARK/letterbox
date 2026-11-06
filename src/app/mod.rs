@@ -398,7 +398,10 @@ pub struct App {
     /// it is to go now; whether the next send goes as it is, its checking
     /// let go by C-c; and what is said of the grammar once it is sent.
     pub check_on_send: bool,
-    pub asked: Option<SendAsked>,
+    /// Asked, as it is to be sent, whether its grammar is checked first.
+    pub check_asked: bool,
+    /// Whether the grammar is being checked, its answer waited for.
+    pub grammar_waiting: bool,
     /// How many saves were asked for, each answer known by its own.
     saves: u64,
     send_as_is: bool,
@@ -772,7 +775,8 @@ impl App {
             checking: None,
             // Never in tests, which would fetch the model: those of it say so.
             check_on_send: cfg!(feature = "grammar") && !cfg!(test),
-            asked: None,
+            check_asked: false,
+            grammar_waiting: false,
             saves: 0,
             send_as_is: false,
             send_note: None,
@@ -781,12 +785,7 @@ impl App {
             batch: crate::confirm::Batch::default(),
             choosing: std::collections::BTreeMap::new(),
             quiet: false,
-            // Tests send at once, but those of the hold itself.
-            send_hold: if cfg!(test) {
-                Duration::ZERO
-            } else {
-                writing::SEND_HOLD
-            },
+            send_hold: writing::SEND_HOLD,
             undoable: undoing::Moves::default(),
             moves_begun: false,
             pick_back: None,

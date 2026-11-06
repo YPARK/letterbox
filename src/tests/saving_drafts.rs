@@ -219,7 +219,7 @@ fn asked_to_send_as_a_check_comes_back_n_skips_the_change_and_sends_nothing() {
     app.check_on_send = true;
     begun(&mut app, "Words", "Thank you for you time.");
     press_unsettled(&mut app, &["<c-c>", "g", "<c-c>", "<c-c>"]);
-    assert_eq!(app.asked, Some(app::SendAsked::Check), "{}", app.status);
+    assert!(app.check_asked, "{}", app.status);
     app.settle(PATIENCE);
     assert!(app.status.contains("“you” → “your”"), "{}", app.status);
     press(&mut app, &["n"]);

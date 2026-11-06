@@ -32,7 +32,8 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     // Narrow, it is the screen's, with no border to take its room.
     if main.width < MEDIUM + 4 {
         f.render_widget(Clear, main);
-        return compose_pane(f, app, main);
+        compose_pane(f, app, main);
+        return grammar_popup(f, app, main);
     }
     let area = over(main);
     let from = app
@@ -92,8 +93,8 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
 
 /// Over the message being written, the change a model would make, asked:
 /// the sentence it is in, what it is in red, what it would be, and a button
-/// for each answer, each pressed by its key; or, gone through to be sent,
-/// whether it is to go now.
+/// for each answer, each pressed by its key; or whether it is checked before
+/// it goes; or what is going on with it.
 fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let t = app.theme;
     let (title, foot, lines, buttons) = if let Some(e) = app.checking.as_ref().and_then(|c| {
@@ -158,33 +159,32 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
             ("Ignore all", 'i', t.error, t.on_accent),
         ];
         (format!("Grammar · {at} of {of}"), "y n a i", lines, buttons)
-    } else if let Some(asked) = app.asked {
-        let (title, foot, said, buttons) = match asked {
-            crate::app::SendAsked::Check => (
-                "Check the grammar first?",
-                "y checks · n sends · any other key goes on writing",
+    } else if app.check_asked {
+        let lines = vec![
+            Line::raw(""),
+            Line::styled(
                 "It goes as it is, or its grammar is gone through first.",
-                vec![
-                    ("Check", 'y', t.accent, t.on_accent),
-                    ("Send as it is", 'n', t.focus, t.title),
-                ],
+                Style::new().fg(t.title),
             ),
-            crate::app::SendAsked::Send => (
-                "Send it now?",
-                "y sends · any other key goes on writing",
-                "Its grammar is gone through.",
-                vec![
-                    ("Send", 'y', t.accent, t.on_accent),
-                    ("Keep writing", 'n', t.focus, t.title),
-                ],
-            ),
-        };
+            Line::raw(""),
+        ];
+        let buttons = vec![
+            ("Check", 'y', t.accent, t.on_accent),
+            ("Send as it is", 'n', t.focus, t.title),
+        ];
+        (
+            "Check the grammar first?".to_string(),
+            "y checks · n sends · any other key goes on writing",
+            lines,
+            buttons,
+        )
+    } else if let Some((title, foot, said)) = going_on(app) {
         let lines = vec![
             Line::raw(""),
             Line::styled(said, Style::new().fg(t.title)),
             Line::raw(""),
         ];
-        (title.to_string(), foot, lines, buttons)
+        (title, foot, lines, Vec::new())
     } else {
         return;
     };
@@ -229,6 +229,47 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .push((Rect::new(bx, row, w, 1), Target::Key(pressed)));
         bx += w + 1;
     }
+}
+
+/// What is going on with the message, while it is, for a pop-up to say: its
+/// title, what may be done, and what is happening.
+fn going_on(app: &App) -> Option<(String, &'static str, String)> {
+    let compose = app.compose.as_ref()?;
+    if let Some(why) = &compose.not_sent {
+        return Some((
+            "Not sent".to_string(),
+            "any key goes on writing, to try again or keep it",
+            why.clone(),
+        ));
+    }
+    if let Some(held) = &compose.held {
+        return Some((
+            format!("Sending in {} s", held.shown),
+            "C-c C-c sends now · C-g takes it back",
+            "Held a moment, for you to take it back.".to_string(),
+        ));
+    }
+    if compose.sending {
+        return Some((
+            "Sending…".to_string(),
+            "it closes once it has gone",
+            "Sending it through the server, and keeping a copy in Sent.".to_string(),
+        ));
+    }
+    if compose.saving.is_some() {
+        return Some((
+            "Saving…".to_string(),
+            "you may go on writing",
+            "Keeping it in Drafts.".to_string(),
+        ));
+    }
+    app.grammar_waiting.then(|| {
+        (
+            "Checking the grammar…".to_string(),
+            "you may go on writing",
+            "The model reads it, and the first time is read itself.".to_string(),
+        )
+    })
 }
 
 /// What an `Attach` line's file is: its size, or why it cannot be sent.
