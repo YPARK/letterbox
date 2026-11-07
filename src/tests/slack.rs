@@ -408,3 +408,37 @@ fn emoji_names_are_the_emoji() {
     // Not within a link's address.
     assert_eq!(plain("<https://a.org/:smile:>"), "https://a.org/:smile:");
 }
+
+#[test]
+fn a_message_goes_as_written_into_its_thread() {
+    let (base, asked) = server(vec![ok(json!({"ok": true, "ts": "10.0"}))]);
+    let ts = Slack::at(&base, session())
+        .post("C1", "a < b & c > d", Some("1.0"))
+        .unwrap();
+    assert_eq!(ts, "10.0");
+    let asked = asked.lock().unwrap();
+    assert!(
+        asked[0].starts_with("POST /chat.postMessage "),
+        "{}",
+        asked[0]
+    );
+    assert!(asked[0].contains("channel=C1") && asked[0].contains("thread_ts=1.0"));
+    // Slack reads <, > and & as its own: they go escaped, to be read as typed.
+    assert!(
+        asked[0].contains("text=a+%26lt%3B+b+%26amp%3B+c+%26gt%3B+d"),
+        "{}",
+        asked[0]
+    );
+}
+
+#[test]
+fn a_message_not_let_go_says_what_the_app_needs() {
+    let (base, _) = server(vec![ok(json!({"ok": false, "error": "missing_scope"}))]);
+    let said = format!(
+        "{:#}",
+        Slack::at(&base, session())
+            .post("C1", "hi", None)
+            .unwrap_err()
+    );
+    assert!(said.contains("chat:write"), "{said}");
+}

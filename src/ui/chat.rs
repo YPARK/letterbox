@@ -154,6 +154,10 @@ pub(super) fn conversation(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.targets.push((area, Target::List));
+    let inner = writing_under(f, app, inner, false);
+    let Some(open) = app.chat.open.as_ref() else {
+        return;
+    };
     let lines = transcript(&t, open, inner.width as usize, app.focus == Focus::List);
     let lines = match lines {
         Ok((lines, picked_end)) => {
@@ -198,6 +202,82 @@ fn transcript(
     Ok((lines, picked_end.max(1)))
 }
 
+/// The message being written, under the conversation, or under the thread
+/// for a reply in it, if one is: what it says, where it goes, and how it is
+/// sent; the room left above it.
+fn writing_under(f: &mut Frame, app: &App, area: Rect, in_thread: bool) -> Rect {
+    let t = app.theme;
+    let Some(w) = app
+        .chat
+        .writing
+        .as_ref()
+        .filter(|w| w.thread.is_some() == in_thread)
+    else {
+        return area;
+    };
+    let width = area.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for (row, line) in w.buffer.lines().iter().enumerate() {
+        let mut line = line.clone();
+        if row == w.buffer.row() && !w.asking && !w.sending {
+            let at = line
+                .char_indices()
+                .nth(w.buffer.col())
+                .map_or(line.len(), |(i, _)| i);
+            line.insert(at, '▏');
+        }
+        for part in wrap(&line, width) {
+            lines.push(Line::styled(part, Style::new().fg(t.text)));
+        }
+    }
+    if let Some(why) = &w.error {
+        for part in wrap(&format!("not sent: {why}"), width) {
+            lines.push(Line::styled(part, Style::new().fg(t.error)));
+        }
+    }
+    let tall = (lines.len() as u16 + 2).clamp(3, (area.height / 2).max(3));
+    let [above, under] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(tall)]).areas(area);
+    let place = if w.thread.is_some() {
+        " in its thread"
+    } else {
+        ""
+    };
+    let (title, colour) = if w.sending {
+        (format!(" Sending to {}{place}… ", w.name), t.dim)
+    } else if w.asking {
+        (
+            format!(
+                " Send this to {}{place} as you? y sends it · n goes back to it ",
+                w.name
+            ),
+            t.flag,
+        )
+    } else {
+        (
+            format!(
+                " To {}{place} · C-c C-c asks to send it · esc lets it go ",
+                w.name
+            ),
+            t.accent,
+        )
+    };
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(colour))
+        .title(Line::styled(title, Style::new().fg(colour).bold()))
+        .style(Style::new().bg(t.page));
+    let inside = block.inner(under);
+    f.render_widget(Clear, under);
+    f.render_widget(block, under);
+    let skip = lines.len().saturating_sub(inside.height as usize);
+    f.render_widget(
+        Paragraph::new(lines.into_iter().skip(skip).collect::<Vec<_>>()),
+        inside,
+    );
+    above
+}
+
 /// The thread read, in the message's place.
 pub(super) fn thread(f: &mut Frame, app: &mut App, area: Rect, edge: Borders) {
     let t = app.theme;
@@ -213,6 +293,7 @@ pub(super) fn thread(f: &mut Frame, app: &mut App, area: Rect, edge: Borders) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.targets.push((area, Target::Reader));
+    let inner = writing_under(f, app, inner, true);
     let Some(thread) = app.chat.open.as_mut().and_then(|o| o.thread.as_mut()) else {
         let hint = " ⏎ on a message reads its thread here";
         f.render_widget(

@@ -335,4 +335,29 @@ impl Slack {
         )?;
         Ok(v["messages"].as_array().map_or(0, Vec::len) as u32)
     }
+
+    /// Send `text` to a conversation as you, in the thread begun by
+    /// `thread` if there is one; its ID, as Slack gives it.
+    pub fn post(&self, channel: &str, text: &str, thread: Option<&str>) -> anyhow::Result<String> {
+        // Slack reads <, > and & as its own: escaped, they are read as typed.
+        let text = text
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let mut form = vec![("channel", channel), ("text", text.as_str())];
+        if let Some(ts) = thread {
+            form.push(("thread_ts", ts));
+        }
+        let v = self.call("chat.postMessage", &form).map_err(|e| {
+            if format!("{e:#}").contains("missing_scope") {
+                anyhow::anyhow!(
+                    "your app may not send yet: add chat:write to its User Token Scopes \
+                     (OAuth & Permissions), reinstall it, then letterbox slack add"
+                )
+            } else {
+                e
+            }
+        })?;
+        Ok(v["ts"].as_str().unwrap_or("").to_string())
+    }
 }

@@ -1,7 +1,8 @@
 //! Slack beside the mail: each workspace's conversations in the sidebar, the
 //! busiest first, a few shown and the rest folded but for those with anything
 //! unread; one read in the list's place, and a thread in the message's.
-//! Reading marks nothing read in Slack, and nothing here posts anything.
+//! Reading marks nothing read in Slack. What is written, `r`, goes only once
+//! it is shown whole, with where it goes, and y is pressed: never on its own.
 //! While a conversation is read, the keys that act on mail do nothing: the
 //! mail behind it is out of sight.
 use super::*;
@@ -58,9 +59,25 @@ pub struct OpenThread {
     pub scroll: usize,
 }
 
+/// A message being written: to which conversation, in which thread, if a
+/// reply; what is written; whether it is asked to go, and whether it is on
+/// its way; and why it did not go, if it did not.
+pub struct Writing {
+    pub space: usize,
+    pub channel: String,
+    pub name: String,
+    pub thread: Option<String>,
+    pub buffer: crate::edit::Buffer,
+    prefix: Option<char>,
+    pub asking: bool,
+    pub sending: bool,
+    pub error: Option<String>,
+}
+
 pub struct Chat {
     pub spaces: Vec<Space>,
     pub open: Option<Open>,
+    pub writing: Option<Writing>,
     replies: Receiver<slack_worker::Reply>,
     replies_to: Sender<slack_worker::Reply>,
     /// Answers asked for and not yet had.
@@ -73,6 +90,7 @@ impl Default for Chat {
         Chat {
             spaces: Vec::new(),
             open: None,
+            writing: None,
             replies,
             replies_to,
             pending: 0,
@@ -228,8 +246,10 @@ impl App {
             Act::End if !reader => self.talk_pick(isize::MAX / 2),
             Act::Open | Act::Right if !reader => self.open_thread(),
             Act::NewMail => self.read_talk_again(),
-            Act::Reply | Act::ReplyAll | Act::Forward => {
-                self.status = "Slack: writing is not here yet, only reading".to_string();
+            Act::Reply => self.write_talk(reader),
+            Act::ReplyAll | Act::Forward => {
+                self.status =
+                    "in Slack, r writes: to the conversation, or in the thread read".to_string();
             }
             _ => {
                 self.status = "in Slack: tab or ← to the sidebar, then a mail folder".to_string();
@@ -275,6 +295,100 @@ impl App {
         let (space, id) = (open.space, open.id.clone());
         self.chat.ask(space, SlackAsk::Thread(id, ts));
         self.focus = Focus::Reader;
+    }
+
+    /// Write to the conversation read; or, from the thread read, in it.
+    fn write_talk(&mut self, in_thread: bool) {
+        let Some(open) = &self.chat.open else {
+            return;
+        };
+        let thread = in_thread
+            .then(|| open.thread.as_ref().map(|t| t.ts.clone()))
+            .flatten();
+        self.chat.writing = Some(Writing {
+            space: open.space,
+            channel: open.id.clone(),
+            name: open.name.clone(),
+            thread,
+            buffer: crate::edit::Buffer::from_text(""),
+            prefix: None,
+            asking: false,
+            sending: false,
+            error: None,
+        });
+        self.status = "C-c C-c asks to send it · esc lets it go".to_string();
+    }
+
+    /// A key while a message is written: to it; or, asked whether it goes,
+    /// y sends it, n goes back to it. Nothing else sends.
+    pub(super) fn chat_write_key(&mut self, key: KeyEvent) {
+        let Some(writing) = &mut self.chat.writing else {
+            return;
+        };
+        if writing.sending {
+            self.status = "sending…".to_string();
+            return;
+        }
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        if writing.asking {
+            match key.code {
+                KeyCode::Char('y' | 'Y') if plain => {
+                    writing.asking = false;
+                    writing.sending = true;
+                    writing.error = None;
+                    let ask = SlackAsk::Post {
+                        channel: writing.channel.clone(),
+                        thread: writing.thread.clone(),
+                        // The line the buffer ends with is not sent.
+                        text: writing.buffer.text().trim_end().to_string(),
+                    };
+                    let space = writing.space;
+                    self.status = format!("sending to {}…", writing.name);
+                    self.chat.ask(space, ask);
+                }
+                KeyCode::Char('n' | 'N') if plain => {
+                    writing.asking = false;
+                    self.status = "not sent · C-c C-c asks again, esc lets it go".to_string();
+                }
+                KeyCode::Esc => {
+                    writing.asking = false;
+                    self.status = "not sent".to_string();
+                }
+                _ => self.status = "y sends it, n goes back to it".to_string(),
+            }
+            return;
+        }
+        match crate::edit::handle(&mut writing.buffer, &mut writing.prefix, key) {
+            Done::Send if writing.buffer.text().trim().is_empty() => {
+                self.status = "nothing written to send".to_string();
+            }
+            Done::Send => {
+                writing.asking = true;
+                self.status = format!(
+                    "send this to {} as you? y sends it, n goes back to it",
+                    writing.name
+                );
+            }
+            Done::Cancel => {
+                self.chat.writing = None;
+                self.status = "let go, not sent".to_string();
+            }
+            _ => {}
+        }
+    }
+
+    /// What is pasted, into the message being written.
+    pub(super) fn chat_paste(&mut self, text: &str) -> bool {
+        match &mut self.chat.writing {
+            Some(w) if !w.asking && !w.sending => {
+                w.buffer.paste(text);
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     /// The conversation read, and its thread, read again; and the counts.
@@ -363,6 +477,38 @@ impl App {
                 }
             }
             Heard::Counted => {}
+            Heard::Posted(channel, thread, sent) => {
+                let Some(writing) = self
+                    .chat
+                    .writing
+                    .as_mut()
+                    .filter(|w| w.channel == channel && w.thread == thread && w.sending)
+                else {
+                    return;
+                };
+                writing.sending = false;
+                match sent {
+                    Ok(_) => {
+                        let name = writing.name.clone();
+                        self.chat.writing = None;
+                        self.status = format!("sent to {name}");
+                        if self.chat.open.as_ref().is_some_and(|o| o.id == channel) {
+                            let m = crate::slack::live::Live {
+                                channel,
+                                ts: String::new(),
+                                user: String::new(),
+                                thread,
+                                new: true,
+                            };
+                            self.read_again_for(&m);
+                        }
+                    }
+                    Err(why) => {
+                        self.status = format!("not sent: {why}");
+                        writing.error = Some(why);
+                    }
+                }
+            }
             Heard::Live(crate::slack::live::Event::Connected, _) => space.live = true,
             Heard::Live(crate::slack::live::Event::Lost(_), _) => space.live = false,
             Heard::Live(crate::slack::live::Event::Message(m), mine) => {

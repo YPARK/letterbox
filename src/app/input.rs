@@ -229,6 +229,10 @@ impl App {
             }
             return self.compose_key(key);
         }
+        // A Slack message being written takes every key, as mail's does.
+        if self.chat.writing.is_some() && !self.dialog.is_open() {
+            return self.chat_write_key(key);
+        }
         // C-x C-c quits, as Emacs does, and C-x u undoes; C-x and anything
         // else, nothing. C-c C-c does what was chosen in the Inbox looked
         // through; C-c elsewhere, nothing: compose's C-c C-c, pressed once

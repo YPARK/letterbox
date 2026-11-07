@@ -12,6 +12,13 @@ pub enum Ask {
     History(String),
     /// A thread, by its conversation and the message it began with.
     Thread(String, String),
+    /// Send, as you, what was written and said yes to: to a conversation,
+    /// in a thread if one is given.
+    Post {
+        channel: String,
+        thread: Option<String>,
+        text: String,
+    },
 }
 
 pub enum Answer {
@@ -22,6 +29,8 @@ pub enum Answer {
     Counted,
     History(String, Result<Vec<Message>, String>),
     Thread(String, String, Result<Vec<Message>, String>),
+    /// What was sent, to where, or why it was not.
+    Posted(String, Option<String>, Result<String, String>),
     /// What happened, as it happened, and whether it was yours.
     Live(super::live::Event, bool),
 }
@@ -96,6 +105,14 @@ fn reads(
             Ask::Thread(id, ts) => {
                 let read = slack.thread(&id, &ts, &known).map_err(said);
                 Answer::Thread(id, ts, read)
+            }
+            Ask::Post {
+                channel,
+                thread,
+                text,
+            } => {
+                let sent = slack.post(&channel, &text, thread.as_deref()).map_err(said);
+                Answer::Posted(channel, thread, sent)
             }
         };
         if replies.send(Reply { space, answer }).is_err() {

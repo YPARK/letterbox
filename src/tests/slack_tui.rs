@@ -60,6 +60,11 @@ fn slack(answers: Vec<(&'static str, Value)>) -> (String, Arc<Mutex<Vec<String>>
 /// busy longer ago than the one before; of those only the last, `ch13`, has
 /// anything unread, four messages.
 fn workspace() -> (String, Arc<Mutex<Vec<String>>>) {
+    workspace_posting(json!({"ok": true, "ts": "1700000600.0"}))
+}
+
+/// The workspace, answering what is sent with `posted`.
+fn workspace_posting(posted: Value) -> (String, Arc<Mutex<Vec<String>>>) {
     let mut channels = vec![json!({"id": "D1", "is_im": true, "user": "U1", "updated": 2_000_000})];
     for i in 0..14 {
         channels.push(json!({
@@ -69,6 +74,7 @@ fn workspace() -> (String, Arc<Mutex<Vec<String>>>) {
     }
     let message = |ts: &str, user: &str, text: &str| json!({"ts": ts, "user": user, "text": text});
     slack(vec![
+        ("chat.postMessage", posted),
         (
             "users.list",
             json!({"ok": true, "members": [
@@ -367,4 +373,123 @@ fn the_heading_says_whether_slack_is_heard_as_it_happens() {
     assert!(app::screen(app, 120, 40).contains("SLACK · ACME · live"));
     heard(app, crate::slack::live::Event::Lost("gone".into()), false);
     assert!(!app::screen(app, 120, 40).contains("· live"));
+}
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c));
+    }
+}
+
+fn ctrl(app: &mut App, c: char) {
+    app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    app.settle_chat(PATIENCE);
+}
+
+/// What was sent, each its request.
+fn posts(asked: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    let asked = asked.lock().unwrap();
+    asked
+        .iter()
+        .filter(|r| r.contains("/chat.postMessage"))
+        .cloned()
+        .collect()
+}
+
+fn open_ch00(app: &mut App) {
+    pick_talk(app, "ch00");
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn a_message_is_written_shown_and_sent_only_on_yes() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    // A y written is written, not taken for a yes.
+    typed(app, "yes, hi all");
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    let screen = app::screen(app, 120, 40);
+    assert!(screen.contains("Send this to #ch00"), "{screen}");
+    assert!(screen.contains("yes, hi all"), "{screen}");
+    assert!(posts(&asked).is_empty(), "nothing sent before y");
+    press(app, KeyCode::Char('y'));
+    let sent = posts(&asked);
+    assert_eq!(sent.len(), 1);
+    assert!(
+        sent[0].contains("channel=C00") && sent[0].contains("text=yes%2C+hi+all"),
+        "{}",
+        sent[0]
+    );
+    assert!(!sent[0].contains("thread_ts"), "{}", sent[0]);
+    assert!(!sent[0].contains("%0A"), "no line after it: {}", sent[0]);
+    assert!(app.chat.writing.is_none());
+    assert!(app.status.contains("sent to #ch00"), "{}", app.status);
+}
+
+#[test]
+fn no_goes_back_to_writing_and_esc_lets_it_go() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    typed(app, "draft");
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    press(app, KeyCode::Char('n'));
+    assert!(app.chat.writing.as_ref().is_some_and(|w| !w.asking));
+    typed(app, " more");
+    assert!(app::screen(app, 120, 40).contains("draft more"));
+    press(app, KeyCode::Esc);
+    assert!(app.chat.writing.is_none());
+    assert!(posts(&asked).is_empty());
+}
+
+#[test]
+fn a_reply_goes_into_the_thread_read() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('k'));
+    press(app, KeyCode::Enter);
+    press(app, KeyCode::Char('r'));
+    typed(app, "thanks");
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    assert!(app::screen(app, 120, 40).contains("in its thread"));
+    press(app, KeyCode::Char('y'));
+    let sent = posts(&asked);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].contains("thread_ts=1700000100.0"), "{}", sent[0]);
+}
+
+#[test]
+fn what_could_not_be_sent_is_kept_and_why_said() {
+    let (base, asked) = workspace_posting(json!({"ok": false, "error": "missing_scope"}));
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    typed(app, "lost?");
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    press(app, KeyCode::Char('y'));
+    assert_eq!(posts(&asked).len(), 1);
+    let writing = app.chat.writing.as_ref().expect("still written");
+    assert_eq!(writing.buffer.text().trim_end(), "lost?");
+    assert!(app::screen(app, 120, 40).contains("chat:write"));
+}
+
+#[test]
+fn nothing_written_is_not_asked_about() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    assert!(app.chat.writing.as_ref().is_some_and(|w| !w.asking));
+    press(app, KeyCode::Char('y'));
+    assert!(posts(&asked).is_empty());
 }
