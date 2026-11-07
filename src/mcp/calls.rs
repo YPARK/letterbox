@@ -252,6 +252,32 @@ impl Server {
                     "messages": found.iter().map(summary).collect::<Vec<_>>(),
                 }))
             }
+            "find_address" => {
+                let query = text("query").context("give a name or part of an address")?;
+                let limit = number("limit").unwrap_or(10).clamp(1, 50);
+                let ident = match &account {
+                    Some(_) => Some(self.store(account.as_deref())?.ident()),
+                    None => None,
+                };
+                let found = self
+                    .mapped()?
+                    .index
+                    .find_contacts(&query, ident.as_deref(), limit);
+                let contacts: Vec<Value> = found
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "address": c.address,
+                            "name": mail::clean(&c.name),
+                            "written_as": mail::clean(&c.addressed()),
+                            "sent": c.sent,
+                            "received": c.received,
+                            "last": c.last.map(date),
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "query": query, "found": contacts.len(), "contacts": contacts }))
+            }
             "read_message" => {
                 let uid = number("uid").context("give the message's uid")? as u32;
                 let from = number("from_char").unwrap_or(0);

@@ -33,6 +33,7 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
     if main.width < MEDIUM + 4 {
         f.render_widget(Clear, main);
         compose_pane(f, app, main);
+        suggestions(f, app, main);
         return grammar_popup(f, app, main);
     }
     let area = over(main);
@@ -88,6 +89,7 @@ pub(super) fn compose_popup(f: &mut Frame, app: &mut App, main: Rect) {
         }
     }
     compose_pane(f, app, inner);
+    suggestions(f, app, inner);
     grammar_popup(f, app, area);
 }
 
@@ -229,6 +231,51 @@ fn grammar_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .push((Rect::new(bx, row, w, 1), Target::Key(pressed)));
         bx += w + 1;
     }
+}
+
+/// Who fits what is being typed in who it is to, beneath its line: the first,
+/// which tab takes, marked.
+fn suggestions(f: &mut Frame, app: &App, area: Rect) {
+    let Some(compose) = &app.compose else {
+        return;
+    };
+    if compose.suggesting.is_empty() {
+        return;
+    }
+    let t = app.theme;
+    let room = area.width.saturating_sub(4);
+    let lines: Vec<Line> = compose
+        .suggesting
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let style = if i == 0 {
+                Style::new().bg(t.focus).fg(t.title)
+            } else {
+                Style::new().fg(t.text)
+            };
+            Line::styled(
+                clip(&crate::mail::clean(&c.addressed()), usize::from(room)),
+                style,
+            )
+        })
+        .collect();
+    let height = lines.len() as u16 + 2;
+    let y = area.y + compose.buffer.row() as u16 + 1;
+    if y + height > area.bottom() {
+        return;
+    }
+    let popup = Rect::new(area.x + 1, y, area.width.saturating_sub(2).min(72), height);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            &t,
+            popup.width,
+            "People",
+            "tab takes it · esc lets it go",
+        )),
+        popup,
+    );
 }
 
 /// What is going on with the message, while it is, for a pop-up to say: its

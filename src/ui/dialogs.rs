@@ -93,6 +93,53 @@ pub(super) fn calendars_dialog(f: &mut Frame, t: &Theme, pick: &crate::app::Cale
     area
 }
 
+/// Everyone written to or heard from: who is picked, and what is typed.
+pub(super) fn people_dialog(f: &mut Frame, t: &Theme, people: &crate::app::People) -> Rect {
+    let width = f.area().width.min(100);
+    let room = usize::from(width).saturating_sub(4);
+    let tall = usize::from(f.area().height.saturating_sub(8)).max(3);
+    let shown = people.shown();
+    let from = (people.at + 1).saturating_sub(tall);
+    let mut lines = vec![
+        Line::styled(format!("Find: {}▏", people.typed), Style::new().fg(t.title)),
+        Line::raw(""),
+    ];
+    if shown.is_empty() {
+        lines.push(Line::styled(
+            if people.all.is_empty() {
+                "No one yet: they are found from the mail the map has read, as M begins it."
+            } else {
+                "No one fits that."
+            },
+            Style::new().fg(t.dim),
+        ));
+    }
+    for (i, c) in shown.iter().enumerate().skip(from).take(tall) {
+        let style = if i == people.at {
+            Style::new().bg(t.focus).fg(t.title)
+        } else {
+            Style::new().fg(t.text)
+        };
+        lines.push(Line::styled(
+            clip(&crate::commands::contact_line(c), room),
+            style,
+        ));
+    }
+    let area = centered(f.area(), width, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    let title = format!("People · {}", shown.len());
+    f.render_widget(
+        Paragraph::new(lines).block(dialog(
+            t,
+            width,
+            &title,
+            "type to find · ↑ ↓ pick · ⏎ writes to them · esc leaves",
+        )),
+        area,
+    );
+    area
+}
+
 /// What the calendar's popup shows.
 pub(super) struct CalendarShown<'a> {
     pub coming: &'a [crate::agenda::Coming],

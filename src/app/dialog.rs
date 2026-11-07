@@ -107,10 +107,27 @@ pub struct CalendarPick {
     pub at: usize,
 }
 
+/// Everyone written to or heard from, looked through: what is typed narrows
+/// them; and the one picked of those.
+pub struct People {
+    pub all: Vec<crate::index::contacts::Contact>,
+    pub typed: String,
+    pub at: usize,
+}
+
+impl People {
+    /// Those who fit what is typed.
+    pub fn shown(&self) -> Vec<crate::index::contacts::Contact> {
+        crate::index::contacts::found(&self.all, &self.typed, self.all.len())
+    }
+}
+
 #[derive(Default)]
 pub enum Dialog {
     #[default]
     Closed,
+    /// Who was written to and heard from.
+    People(People),
     Help(usize),
     /// The calendars set, to untick those to forget.
     Calendars(CalendarPick),
@@ -255,6 +272,7 @@ impl Dialog {
             | Dialog::Label(typed)
             | Dialog::RenameLabel(_, typed)
             | Dialog::AddCalendar(typed) => Some(typed),
+            Dialog::People(people) => Some(&mut people.typed),
             _ => None,
         }
     }
@@ -270,6 +288,10 @@ impl Dialog {
             Dialog::Files(files) => (&mut files.at, files.items.len()),
             Dialog::Trash(pick) => (&mut pick.at, pick.folders.len()),
             Dialog::Calendars(pick) => (&mut pick.at, pick.items.len()),
+            Dialog::People(people) => {
+                let len = people.shown().len();
+                (&mut people.at, len)
+            }
             Dialog::Attach(picker) => return picker.step(by),
             Dialog::SaveTo(s) => return s.picker.step(by),
             _ => return,
@@ -331,6 +353,25 @@ impl App {
                     Some(Act::Up) => self.dialog.step(-1),
                     _ => {}
                 },
+            },
+            Dialog::People(people) => match key.code {
+                KeyCode::Esc => self.dialog = Dialog::Closed,
+                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.dialog = Dialog::Closed;
+                }
+                KeyCode::Down => self.dialog.step(1),
+                KeyCode::Up => self.dialog.step(-1),
+                KeyCode::Enter => {
+                    let picked = people.shown().get(people.at).cloned();
+                    if let Some(picked) = picked {
+                        self.dialog = Dialog::Closed;
+                        self.write_to(&picked);
+                    }
+                }
+                _ => {
+                    edit_line(&mut people.typed, key);
+                    people.at = 0;
+                }
             },
             Dialog::AddCalendar(typed) => match key.code {
                 KeyCode::Esc => self.dialog = Dialog::Calendar(0),
@@ -477,6 +518,7 @@ impl App {
                 | Dialog::NoAgent
                 | Dialog::AddCalendar(_)
                 | Dialog::Calendars(_)
+                | Dialog::People(_)
                 | Dialog::Rename(..)
                 | Dialog::Label(_)
                 | Dialog::RenameLabel(..),

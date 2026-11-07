@@ -327,6 +327,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "list_accounts",
             "list_messages",
             "search_messages",
+            "find_address",
             "read_message",
             "nearest_messages",
             "suggest_label",

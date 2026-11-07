@@ -70,6 +70,8 @@ pub enum Act {
     Help,
     /// What is coming up in the calendar, in a popup.
     Calendar,
+    /// Who was written to and heard from.
+    People,
     /// The map's view, to be changed: the keys of `VIEW`.
     View,
     /// In the map, read mail shown or hidden.
@@ -695,6 +697,13 @@ pub const KEYS: &[Binding] = &[
         hint: "",
         foot: &[],
         help: "in the message being written, as C-c g: Emacs's key to check spelling",
+    },
+    Binding {
+        keys: &[("W", People)],
+        name: "W",
+        hint: "",
+        foot: &[],
+        help: "everyone you have written to or heard from, as the map read your mail, those written to first, with how many messages each way and when the last was: typing narrows it, ⏎ begins a letter to the one picked, esc leaves it",
     },
     Binding {
         keys: &[("C", Calendar)],

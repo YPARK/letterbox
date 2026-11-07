@@ -6,6 +6,7 @@
 //! yet confirmed by a server. The app and each account's sync share one
 //! index, locked only to take in a batch.
 
+pub mod contacts;
 pub mod journal;
 pub mod key;
 pub mod labels;

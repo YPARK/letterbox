@@ -836,3 +836,56 @@ pub(super) fn remove_calendar(config: &std::path::Path) -> anyhow::Result<()> {
     println!("no calendar is read");
     Ok(())
 }
+
+/// The index, read and nothing written, as letterbox may be writing it.
+fn read_index(args: &Args) -> anyhow::Result<index::Index> {
+    if args.demo {
+        return Ok(index::Index::memory());
+    }
+    if config::load(&args.config)?.iter().any(in_vault) {
+        open_vault(false)?;
+    }
+    let dir = index::key::dir();
+    let Some(card) = index::key::card(&dir)? else {
+        anyhow::bail!("the map is not begun: open letterbox and press M to begin it");
+    };
+    let identity = index::key::identity(&card, secret::find)?;
+    Ok(index::Index::read_only(&dir, &identity))
+}
+
+/// `lbx contacts`: who was written to and heard from, as the map read it.
+pub(super) fn contacts(
+    args: &Args,
+    words: &str,
+    account: Option<&str>,
+    limit: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let ident = match account {
+        Some(_) => Some(store(args, account)?.ident()),
+        None => None,
+    };
+    let index = read_index(args)?;
+    let found = index.find_contacts(words, ident.as_deref(), limit);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&found)?);
+    } else if found.is_empty() {
+        println!("no one: they are found from the mail the map has read, as M in letterbox begins");
+    } else {
+        for c in &found {
+            println!("{}", contact_line(c));
+        }
+    }
+    Ok(())
+}
+
+/// One person, as `lbx contacts` prints them.
+pub(crate) fn contact_line(c: &crate::index::contacts::Contact) -> String {
+    let last = c.last.map(crate::ui::long_date).unwrap_or_default();
+    format!(
+        "{:<36} {} sent, {} received  {last}",
+        crate::mail::clean(&c.addressed()),
+        c.sent,
+        c.received
+    )
+}

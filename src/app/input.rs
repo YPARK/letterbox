@@ -343,6 +343,7 @@ impl App {
         match act {
             Act::Help => self.dialog = Dialog::Help(0),
             Act::Calendar => self.dialog = Dialog::Calendar(0),
+            Act::People => self.open_people(),
             Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
             Act::Search => {

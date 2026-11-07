@@ -8,7 +8,7 @@ compile_error!("letterbox runs on macOS and Linux");
 mod agenda;
 mod app;
 mod cli;
-mod commands;
+pub(crate) mod commands;
 mod compose;
 mod config;
 mod confirm;
@@ -225,6 +225,12 @@ fn command(args: &Args) -> anyhow::Result<()> {
             let page = store.page(&which.folder, 0, *limit)?;
             print_list(&page.summaries, *json)
         }
+        Some(Command::Contacts {
+            words,
+            account,
+            limit,
+            json,
+        }) => commands::contacts(args, &words.join(" "), account.as_deref(), *limit, *json),
         Some(Command::Search {
             words,
             which,

@@ -60,7 +60,7 @@ pub struct Known {
 
 /// Whether `address` is one that takes no answer: `noreply`, `do-not-reply`,
 /// `notifications` and the like.
-fn takes_no_answer(address: &str) -> bool {
+pub(crate) fn takes_no_answer(address: &str) -> bool {
     let local = address
         .rsplit_once('@')
         .map_or(address, |(l, _)| l)
