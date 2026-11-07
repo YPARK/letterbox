@@ -124,8 +124,9 @@ fn app_on(base: &str) -> App {
     let session = Session {
         domain: "acme".into(),
         token: "xoxp-test".into(),
+        app: None,
     };
-    app.chat_add("acme".into(), Slack::at(base, session));
+    app.chat_add("acme".into(), Slack::at(base, session), None);
     app.settle_chat(PATIENCE);
     app
 }
@@ -268,4 +269,102 @@ fn a_conversation_opened_from_the_map_is_read_in_the_list() {
     press(app, KeyCode::Enter);
     assert_eq!(app.map.mode, crate::map::Mode::List);
     assert!(app::screen(app, 120, 40).contains("newest note"));
+}
+
+fn live(channel: &str, ts: &str, thread: Option<&str>, new: bool) -> crate::slack::live::Event {
+    crate::slack::live::Event::Message(crate::slack::live::Live {
+        channel: channel.into(),
+        ts: ts.into(),
+        user: "U2".into(),
+        thread: thread.map(String::from),
+        new,
+    })
+}
+
+fn heard(app: &mut App, event: crate::slack::live::Event, mine: bool) {
+    app.chat_hear(0, crate::slack::worker::Answer::Live(event, mine));
+    app.settle_chat(PATIENCE);
+}
+
+fn unread(app: &App, name: &str) -> Option<u32> {
+    app.chat.spaces[0]
+        .talks
+        .iter()
+        .find(|t| t.channel.name == name)
+        .and_then(|t| t.unread)
+}
+
+#[test]
+fn a_message_come_elsewhere_is_counted_and_shown() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    assert!(!talks(app).contains(&"ch12".to_string()), "folded at first");
+    heard(app, live("C12", "9.0", None, true), false);
+    assert_eq!(unread(app, "ch12"), Some(1));
+    assert!(
+        talks(app).contains(&"ch12".to_string()),
+        "shown once unread"
+    );
+    heard(app, live("C12", "9.5", None, true), false);
+    assert_eq!(unread(app, "ch12"), Some(2));
+}
+
+#[test]
+fn ones_own_messages_edits_and_replies_are_not_counted() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    heard(app, live("C12", "9.0", None, true), true);
+    heard(app, live("C12", "8.0", None, false), false);
+    heard(app, live("C12", "9.1", Some("8.0"), true), false);
+    assert_eq!(unread(app, "ch12"), Some(0));
+}
+
+#[test]
+fn a_message_come_in_the_conversation_read_is_read_at_once() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    pick_talk(app, "ch00");
+    press(app, KeyCode::Enter);
+    press(app, KeyCode::Char('k'));
+    press(app, KeyCode::Enter);
+    let count = |what: &str| {
+        let asked = asked.lock().unwrap();
+        asked
+            .iter()
+            .filter(|r| r.contains(what) && r.contains("channel=C00") && !r.contains("oldest="))
+            .count()
+    };
+    let (history, replies) = (
+        count("/conversations.history"),
+        count("/conversations.replies"),
+    );
+    heard(app, live("C00", "1700000400.0", None, true), false);
+    assert_eq!(count("/conversations.history"), history + 1);
+    heard(
+        app,
+        live("C00", "1700000500.0", Some("1700000100.0"), true),
+        false,
+    );
+    assert_eq!(
+        count("/conversations.replies"),
+        replies + 1,
+        "the thread read again"
+    );
+    assert_eq!(
+        count("/conversations.history"),
+        history + 2,
+        "and its count of replies"
+    );
+    assert_eq!(unread(app, "ch00"), Some(0), "what is read is not counted");
+}
+
+#[test]
+fn the_heading_says_whether_slack_is_heard_as_it_happens() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    assert!(!app::screen(app, 120, 40).contains("live"));
+    heard(app, crate::slack::live::Event::Connected, false);
+    assert!(app::screen(app, 120, 40).contains("SLACK · ACME · live"));
+    heard(app, crate::slack::live::Event::Lost("gone".into()), false);
+    assert!(!app::screen(app, 120, 40).contains("· live"));
 }

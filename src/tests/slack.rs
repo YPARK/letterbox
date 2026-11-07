@@ -53,6 +53,7 @@ fn session() -> Session {
     Session {
         domain: "acme".into(),
         token: "xoxp-secret".into(),
+        app: None,
     }
 }
 

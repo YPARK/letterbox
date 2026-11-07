@@ -3,7 +3,7 @@
 //! One connection, opened when first needed and again if it is lost.
 
 mod parse;
-mod wire;
+pub(crate) mod wire;
 pub(crate) use self::parse::*;
 pub use self::wire::*;
 

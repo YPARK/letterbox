@@ -28,6 +28,8 @@ pub fn run(config: &Path, action: Option<&SlackAction>) -> anyhow::Result<()> {
             thread.as_deref(),
             *count,
         ),
+        Some(SlackAction::Live { workspace }) => live(config, workspace.as_deref()),
+        Some(SlackAction::Watch { workspace }) => watch(config, workspace.as_deref()),
         Some(SlackAction::Remove { workspace }) => remove(config, workspace),
     }
 }
@@ -38,6 +40,7 @@ fn add(config: &Path) -> anyhow::Result<()> {
     let who = Slack::new(Session {
         domain: String::new(),
         token: token.clone(),
+        app: None,
     })
     .whoami()?;
     if who.domain.is_empty() {
@@ -49,6 +52,7 @@ fn add(config: &Path) -> anyhow::Result<()> {
     let session = Session {
         domain: who.domain.clone(),
         token,
+        app: None,
     };
     session.keep(keep)?;
     remember(
@@ -155,6 +159,66 @@ fn print_message(message: &Message) {
     if message.replies > 0 {
         println!("  {} replies: --thread {}", message.replies, message.ts);
     }
+}
+
+fn live(config: &Path, asked: Option<&str>) -> anyhow::Result<()> {
+    let workspace = choose(config, asked)?;
+    let mut session = Session::kept(&workspace)?;
+    let typed = ask_password(
+        "Your app's app-level token (xapp-…, under Basic Information; not shown as you paste it)",
+    )?;
+    let token = typed.trim();
+    if !token.starts_with("xapp-") {
+        bail!(
+            "that is not an app-level token: it starts xapp-, under your app's Basic Information"
+        );
+    }
+    super::live::Socket::new(token).link()?;
+    session.app = Some(token.to_string());
+    session.keep(workspace.keep)?;
+    println!(
+        "{} will be heard as things happen, in letterbox from when it next starts. \
+         letterbox slack watch shows what comes, but not what is said.",
+        workspace.domain
+    );
+    Ok(())
+}
+
+fn watch(config: &Path, asked: Option<&str>) -> anyhow::Result<()> {
+    use super::live::{Event, Socket};
+    let workspace = choose(config, asked)?;
+    let session = Session::kept(&workspace)?;
+    let Some(app) = session.app.clone() else {
+        bail!("no app-level token yet: letterbox slack live");
+    };
+    let slack = Slack::new(session);
+    let me = slack.whoami()?.user_id;
+    let names: std::collections::HashMap<String, String> = named(slack.mine()?, &slack.people()?)
+        .into_iter()
+        .map(|c| (c.id, c.name))
+        .collect();
+    let now = || jiff::Zoned::now().strftime("%H:%M:%S").to_string();
+    println!("listening to {}; C-c ends it", workspace.domain);
+    Socket::new(&app).listen(&mut |event| {
+        match event {
+            Event::Connected => println!("{} connected", now()),
+            Event::Lost(why) => println!("{} lost, trying again: {why}", now()),
+            Event::Message(m) => {
+                let name = names
+                    .get(&m.channel)
+                    .map_or(m.channel.as_str(), String::as_str);
+                let what = match (m.new, &m.thread) {
+                    (true, None) => "a message",
+                    (true, Some(_)) => "a reply in a thread",
+                    (false, _) => "a message changed or gone",
+                };
+                let whose = if m.user == me { ", yours" } else { "" };
+                println!("{} {name}: {what}{whose}", now());
+            }
+        }
+        true
+    });
+    Ok(())
 }
 
 fn remove(config: &Path, name: &str) -> anyhow::Result<()> {

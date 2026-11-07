@@ -25,6 +25,8 @@ pub struct Space {
     pub error: Option<String>,
     /// Whether every conversation is shown, not a few.
     pub unfolded: bool,
+    /// Whether what happens is heard as it does, its socket open.
+    pub live: bool,
     asks: Sender<SlackAsk>,
     asked: Instant,
 }
@@ -118,15 +120,16 @@ impl Chat {
 
 impl App {
     /// Read Slack's workspace `name` too, by `slack`.
-    pub fn chat_add(&mut self, name: String, slack: Slack) {
+    pub fn chat_add(&mut self, name: String, slack: Slack, app: Option<String>) {
         let space = self.chat.spaces.len();
-        let asks = slack_worker::spawn(space, slack, self.chat.replies_to.clone());
+        let asks = slack_worker::spawn(space, slack, app, self.chat.replies_to.clone());
         self.chat.spaces.push(Space {
             name,
             talks: Vec::new(),
             loading: true,
             error: None,
             unfolded: false,
+            live: false,
             asks,
             asked: Instant::now(),
         });
@@ -290,6 +293,25 @@ impl App {
         self.status = "reading Slack again".to_string();
     }
 
+    /// The conversation read, read again for a message come in it; and its
+    /// thread, if the message is of the thread read.
+    fn read_again_for(&mut self, m: &crate::slack::live::Live) {
+        let Some(open) = &mut self.chat.open else {
+            return;
+        };
+        open.asked = Instant::now();
+        let (space, id) = (open.space, open.id.clone());
+        let thread = open
+            .thread
+            .as_ref()
+            .map(|t| t.ts.clone())
+            .filter(|ts| m.thread.as_ref() == Some(ts) || m.ts == *ts);
+        self.chat.ask(space, SlackAsk::History(id.clone()));
+        if let Some(ts) = thread {
+            self.chat.ask(space, SlackAsk::Thread(id, ts));
+        }
+    }
+
     /// What Slack's threads have answered; whether anything was.
     pub(super) fn chat_pump(&mut self) -> bool {
         let mut any = false;
@@ -341,6 +363,31 @@ impl App {
                 }
             }
             Heard::Counted => {}
+            Heard::Live(crate::slack::live::Event::Connected, _) => space.live = true,
+            Heard::Live(crate::slack::live::Event::Lost(_), _) => space.live = false,
+            Heard::Live(crate::slack::live::Event::Message(m), mine) => {
+                let read_here = self
+                    .chat
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.space == reply.space && o.id == m.channel);
+                if read_here {
+                    self.read_again_for(&m);
+                } else if m.new && !mine && m.thread.is_none() {
+                    let Some(talk) = self.chat.spaces[reply.space]
+                        .talks
+                        .iter_mut()
+                        .find(|t| t.channel.id == m.channel)
+                    else {
+                        return;
+                    };
+                    let was = talk.unread.unwrap_or(0);
+                    talk.unread = Some(was + 1);
+                    if was == 0 {
+                        self.rebuild();
+                    }
+                }
+            }
             Heard::History(id, read) => {
                 let Some(open) = self.chat.open.as_mut().filter(|o| o.id == id) else {
                     return;
@@ -410,6 +457,13 @@ impl App {
             }
         }
         any
+    }
+
+    /// Take `answer` as if Slack's threads had given it: for tests.
+    #[cfg(test)]
+    pub fn chat_hear(&mut self, space: usize, answer: slack_worker::Answer) {
+        self.chat.pending += 1;
+        self.chat_heard(slack_worker::Reply { space, answer });
     }
 
     /// Wait until Slack's threads have answered all that was asked, or until

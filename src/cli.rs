@@ -66,6 +66,18 @@ pub(crate) enum SlackAction {
         #[arg(long, short)]
         workspace: Option<String>,
     },
+    /// Hear a workspace as things happen: keep your app's app-level token
+    /// (xapp-…), for Socket Mode
+    Live {
+        #[arg(long, short)]
+        workspace: Option<String>,
+    },
+    /// What happens in a workspace as it happens: which conversation and
+    /// when, never what is said; till C-c
+    Watch {
+        #[arg(long, short)]
+        workspace: Option<String>,
+    },
     /// Forget a workspace and its token here
     Remove { workspace: String },
 }

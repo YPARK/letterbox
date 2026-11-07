@@ -17,8 +17,9 @@ pub(super) fn head(app: &App, space: usize, width: usize) -> ListItem<'static> {
         after.push(Span::styled(" cannot read", Style::new().fg(t.error)));
     }
     let used: usize = after.iter().map(Span::width).sum();
+    let live = if s.live { " · live" } else { "" };
     let name = clip(
-        &format!("SLACK · {}", s.name.to_uppercase()),
+        &format!("SLACK · {}{live}", s.name.to_uppercase()),
         width.saturating_sub(used + 2).max(4),
     );
     let mut spans = vec![Span::styled(

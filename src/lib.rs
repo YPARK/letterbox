@@ -114,7 +114,8 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 for workspace in slack::workspaces(&args.config).unwrap_or_default() {
                     match slack::Session::kept(&workspace) {
                         Ok(session) => {
-                            app.chat_add(workspace.domain.clone(), slack::Slack::new(session))
+                            let live = session.app.clone();
+                            app.chat_add(workspace.domain.clone(), slack::Slack::new(session), live)
                         }
                         Err(e) => app.status = format!("Slack, {}: {e:#}", workspace.domain),
                     }

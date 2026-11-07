@@ -4,6 +4,7 @@
 //! workspaces.
 
 pub mod commands;
+pub mod live;
 pub mod reading;
 pub mod worker;
 
@@ -30,6 +31,9 @@ pub const UNREAD_MOST: u32 = 100;
 pub struct Session {
     pub domain: String,
     pub token: String,
+    /// The app's own token, for Socket Mode: what happens heard as it does.
+    #[serde(default)]
+    pub app: Option<String>,
 }
 
 impl std::fmt::Debug for Session {
@@ -40,16 +44,29 @@ impl std::fmt::Debug for Session {
 
 impl Session {
     /// Keep it in `keep`.
+    /// Both tokens are kept together, so they are asked for together.
     pub fn keep(&self, keep: Keeper) -> anyhow::Result<()> {
-        secret::store(keep, KEPT_AT, &self.domain, &self.token)
+        let kept = match &self.app {
+            Some(_) => serde_json::to_string(self)?,
+            None => self.token.clone(),
+        };
+        secret::store(keep, KEPT_AT, &self.domain, &kept)
     }
 
     /// The session kept for a workspace.
     pub fn kept(workspace: &Workspace) -> anyhow::Result<Session> {
+        let kept = secret::find(workspace.keep, KEPT_AT, &workspace.domain)
+            .context("add the workspace again: letterbox slack add")?;
+        if kept.starts_with('{') {
+            let mut session: Session = serde_json::from_str(&kept)
+                .context("what is kept of the Slack workspace cannot be read")?;
+            session.domain = workspace.domain.clone();
+            return Ok(session);
+        }
         Ok(Session {
             domain: workspace.domain.clone(),
-            token: secret::find(workspace.keep, KEPT_AT, &workspace.domain)
-                .context("add the workspace again: letterbox slack add")?,
+            token: kept,
+            app: None,
         })
     }
 
@@ -170,6 +187,7 @@ impl Channel {
 #[derive(Debug)]
 pub struct Who {
     pub user: String,
+    pub user_id: String,
     pub team: String,
     pub domain: String,
 }
@@ -258,6 +276,7 @@ impl Slack {
         let text = |name: &str| v[name].as_str().unwrap_or("").to_string();
         Ok(Who {
             user: text("user"),
+            user_id: text("user_id"),
             team: text("team"),
             domain: domain_of(v["url"].as_str().unwrap_or("")),
         })

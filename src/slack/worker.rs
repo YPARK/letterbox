@@ -22,6 +22,8 @@ pub enum Answer {
     Counted,
     History(String, Result<Vec<Message>, String>),
     Thread(String, String, Result<Vec<Message>, String>),
+    /// What happened, as it happened, and whether it was yours.
+    Live(super::live::Event, bool),
 }
 
 pub struct Reply {
@@ -33,8 +35,18 @@ fn said(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
-/// Start asking `slack` for the workspace `space`, answering on `replies`.
-pub fn spawn(space: usize, slack: Slack, replies: Sender<Reply>) -> Sender<Ask> {
+/// Start asking `slack` for the workspace `space`, answering on `replies`;
+/// and hearing what happens as it does, by the app's token, if there is one.
+pub fn spawn(
+    space: usize,
+    slack: Slack,
+    app: Option<String>,
+    replies: Sender<Reply>,
+) -> Sender<Ask> {
+    if let Some(token) = app {
+        let (slack, replies) = (slack.clone(), replies.clone());
+        std::thread::spawn(move || hears(space, slack, &token, replies));
+    }
     let (asks, asked) = mpsc::channel();
     let (count, counting) = mpsc::channel::<Vec<Channel>>();
     let counter = (slack.clone(), replies.clone());
@@ -90,6 +102,16 @@ fn reads(
             return;
         }
     }
+}
+
+fn hears(space: usize, slack: Slack, token: &str, replies: Sender<Reply>) {
+    let me = slack.whoami().map(|w| w.user_id).unwrap_or_default();
+    super::live::Socket::new(token).listen(&mut |event| {
+        let mine =
+            matches!(&event, super::live::Event::Message(m) if !me.is_empty() && m.user == me);
+        let answer = Answer::Live(event, mine);
+        replies.send(Reply { space, answer }).is_ok()
+    });
 }
 
 /// How many of a conversation's last messages are read.
