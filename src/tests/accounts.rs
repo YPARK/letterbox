@@ -737,3 +737,34 @@ fn the_systems_store_keeps_a_password() {
     assert!(crate::secret::forget(&a));
     assert!(crate::secret::find(Keeper::Keyring, host, user).is_err());
 }
+
+#[test]
+fn accounts_are_checked_with_the_vault_opened_by_its_key() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
+    let (fake, _) = super::imap_server::server();
+    let dir = tempfile::tempdir().unwrap();
+    // SAFETY: tests that read it hold VAULT_AT.
+    unsafe { std::env::set_var("LETTERBOX_VAULT", dir.path().join("vault.age")) };
+    crate::vault::lock();
+    crate::vault::make_key().unwrap();
+    crate::vault::put("127.0.0.1", "me", "secret").unwrap();
+    // As letterbox finds it when a command starts: not yet opened.
+    crate::vault::lock();
+    let path = dir.path().join("accounts.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[[account]]\nname = \"Fake\"\nemail = \"me@example.com\"\nhost = \"127.0.0.1\"\n\
+             port = {}\nuser = \"me\"\nsecurity = \"none\"\nkeep = \"vault\"\n",
+            fake.port.unwrap()
+        ),
+    )
+    .unwrap();
+    let said = crate::commands::check_accounts(&path).unwrap().join("\n");
+    assert!(
+        said.contains("Fake") && said.contains("signed in"),
+        "{said}"
+    );
+    assert!(!said.contains("locked"), "{said}");
+    crate::vault::lock();
+}

@@ -889,3 +889,23 @@ pub(crate) fn contact_line(c: &crate::index::contacts::Contact) -> String {
         c.received
     )
 }
+
+/// Each account, signed in to, a line each: the vault opened first, if any
+/// of their passwords are kept there, as every other command opens it.
+pub(crate) fn check_accounts(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let accounts = config::load(path)?;
+    if accounts.iter().any(super::in_vault) {
+        open_vault(false)?;
+    }
+    Ok(accounts
+        .into_iter()
+        .map(|a| {
+            let head = format!("  {}: {} at {}:{}", a.name, a.user(), a.host, a.port());
+            let name = a.name.clone();
+            match imap::Imap::new(a).folders() {
+                Ok(f) => format!("{head} — signed in, {} folders", f.len()),
+                Err(e) => format!("{head} — {name} cannot connect: {}", worker::text(e)),
+            }
+        })
+        .collect())
+}

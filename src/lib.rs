@@ -194,16 +194,14 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 return Ok(());
             }
             println!("{}", args.config.display());
-            for a in accounts {
-                print!("  {}: {} at {}:{}", a.name, a.user(), a.host, a.port());
-                if *check {
-                    let name = a.name.clone();
-                    match imap::Imap::new(a).folders() {
-                        Ok(f) => print!(" — signed in, {} folders", f.len()),
-                        Err(e) => print!(" — {name} cannot connect: {}", worker::text(e)),
-                    }
+            if *check {
+                for line in check_accounts(&args.config)? {
+                    println!("{line}");
                 }
-                println!();
+                return Ok(());
+            }
+            for a in accounts {
+                println!("  {}: {} at {}:{}", a.name, a.user(), a.host, a.port());
             }
             Ok(())
         }

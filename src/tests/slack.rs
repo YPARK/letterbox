@@ -492,7 +492,10 @@ fn a_workspace_kept_in_the_keychain_moves_to_the_vault_and_leaves_it() {
     let (now, moved) = slack::into_vault(&accounts, &acme, true, &keeping(&kept)).unwrap();
     assert!(moved);
     assert_eq!(now.keep, Keeper::Vault);
-    assert_eq!(slack::workspaces(&accounts).unwrap(), std::slice::from_ref(&now));
+    assert_eq!(
+        slack::workspaces(&accounts).unwrap(),
+        std::slice::from_ref(&now)
+    );
     let kept = kept.into_inner();
     assert!(
         kept[&at(Keeper::Vault)].contains("xapp-1"),
