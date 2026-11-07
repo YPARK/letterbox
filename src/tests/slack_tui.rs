@@ -657,3 +657,73 @@ fn ctrl_or_alt_enter_sends_and_enter_is_a_new_line() {
         assert!(app.chat.writing.is_none());
     }
 }
+
+fn jump(app: &mut App) {
+    app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.settle_chat(PATIENCE);
+}
+
+#[test]
+fn ctrl_k_finds_any_conversation_by_part_of_its_name() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    app.focus = Focus::Side;
+    jump(app);
+    assert!(app.chat.jump.is_some());
+    typed(app, "CH1");
+    let screen = app::screen(app, 120, 40);
+    assert!(screen.contains("Go to"), "{screen}");
+    // Folded away, it is found all the same.
+    assert!(screen.contains("ch12"), "{screen}");
+    // The one with anything unread first, of those that fit as well.
+    press(app, KeyCode::Enter);
+    assert!(app.chat.jump.is_none());
+    assert!(app.chat.open.as_ref().is_some_and(|o| o.id == "C13"));
+    assert_eq!(app.focus, Focus::List);
+}
+
+#[test]
+fn the_arrows_pick_among_those_found_and_esc_lets_it_go() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    jump(app);
+    typed(app, "ch0");
+    press(app, KeyCode::Down);
+    press(app, KeyCode::Enter);
+    assert!(
+        app.chat.open.as_ref().is_some_and(|o| o.id == "C01"),
+        "the second found"
+    );
+    jump(app);
+    typed(app, "ana");
+    press(app, KeyCode::Esc);
+    assert!(app.chat.jump.is_none());
+    assert!(
+        app.chat.open.as_ref().is_some_and(|o| o.id == "C01"),
+        "nothing else opened"
+    );
+}
+
+#[test]
+fn nothing_found_opens_nothing() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    jump(app);
+    typed(app, "nobody here");
+    assert!(app::screen(app, 120, 40).contains("nothing fits"));
+    press(app, KeyCode::Enter);
+    assert!(app.chat.jump.is_some(), "still asked");
+    assert!(app.chat.open.is_none());
+}
+
+#[test]
+fn ctrl_k_while_writing_is_the_editors_not_a_jump() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    typed(app, "keep this");
+    jump(app);
+    assert!(app.chat.jump.is_none());
+    assert!(app.chat.writing.is_some());
+}

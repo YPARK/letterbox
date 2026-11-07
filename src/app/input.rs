@@ -229,9 +229,13 @@ impl App {
             }
             return self.compose_key(key);
         }
-        // A Slack message being written takes every key, as mail's does.
+        // A Slack message being written takes every key, as mail's does; and
+        // a conversation being gone to by name, the keys typed.
         if self.chat.writing.is_some() && !self.dialog.is_open() {
             return self.chat_write_key(key);
+        }
+        if self.chat.jump.is_some() && !self.dialog.is_open() {
+            return self.jump_key(key);
         }
         // C-x C-c quits, as Emacs does, and C-x u undoes; C-x and anything
         // else, nothing. C-c C-c does what was chosen in the Inbox looked
@@ -355,6 +359,7 @@ impl App {
             Act::Calendar => self.dialog = Dialog::Calendar(0),
             Act::People => self.open_people(),
             Act::Slack => self.toggle_chat(),
+            Act::Jump => self.open_jump(),
             Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
             Act::Search => {

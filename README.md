@@ -697,8 +697,10 @@ is one, and move with them by `letterbox keep vault` or `keep keyring`. They
 act as you: anyone with the user token reads and writes as you, and anyone
 with both hears what comes as it comes. Keep them as a password.
 
-In letterbox, ⏎ on a conversation reads it in the list's place, newest
-last, and ⏎ on a message its thread, in the message's. `r` writes to the
+`C-k`, from anywhere but a message being written, goes to a conversation
+by any part of its name, folded away or not: those it begins first, then
+those with anything unread. In letterbox, ⏎ on a conversation reads it in
+the list's place, newest last, and ⏎ on a message its thread, in the message's. `r` writes to the
 conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
 does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
 ⏎ is a new line, and esc lets it go. `U` reads it again. Reading marks

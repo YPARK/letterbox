@@ -341,3 +341,66 @@ pub(super) fn thread(f: &mut Frame, app: &mut App, area: Rect, edge: Borders) {
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
 }
+
+/// The box a conversation is gone to by name in: what is typed, and those
+/// it finds, the one picked lit.
+pub(super) fn jump(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
+    let Some(jump) = &app.chat.jump else {
+        return;
+    };
+    let found = app.jump_found();
+    let screen = f.area();
+    let width = 52.min(screen.width);
+    let height = (found.len().max(1) as u16 + 4).min(screen.height);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        y: screen.y + (screen.height.saturating_sub(height)) / 3,
+        width,
+        height,
+    };
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(t.accent))
+        .title(Line::styled(" Go to ", Style::new().fg(t.accent).bold()))
+        .title_bottom(Line::styled(
+            " ⏎ reads it · ↑↓ pick · esc ",
+            Style::new().fg(t.faint),
+        ))
+        .style(Style::new().bg(t.page));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    let room = inner.width as usize;
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!(" {}", jump.query), Style::new().fg(t.text)),
+            Span::styled("▏", Style::new().fg(t.accent)),
+        ]),
+        Line::raw(""),
+    ];
+    if found.is_empty() {
+        lines.push(Line::styled(" nothing fits", Style::new().fg(t.dim)));
+    }
+    for (n, &(s, i)) in found.iter().enumerate() {
+        let talk = &app.chat.spaces[s].talks[i];
+        let count = match talk.unread.unwrap_or(0) {
+            0 => String::new(),
+            n => n.to_string(),
+        };
+        let name = clip(&talk.channel.name, room.saturating_sub(4 + count.len() + 1));
+        let pad = room.saturating_sub(4 + name.width() + count.len());
+        let style = if n == jump.at {
+            Style::new().bg(t.focus).fg(t.title).bold()
+        } else {
+            Style::new().fg(t.soft)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", talk.channel.kind.mark()), style),
+            Span::styled(name, style),
+            Span::styled(format!("{}{count}", " ".repeat(pad)), style),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+    app.targets.push((area, Target::Popup));
+}

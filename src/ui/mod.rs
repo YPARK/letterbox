@@ -465,6 +465,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let spots = border_keys(f.buffer_mut(), area);
         app.targets.extend(spots);
     }
+    if app.chat.jump.is_some() {
+        chat::jump(f, app);
+    }
 }
 
 /// What a click on a hint naming `keys` presses: a key, or two in turn.

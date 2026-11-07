@@ -74,6 +74,8 @@ pub enum Act {
     People,
     /// Slack's column, shown or hidden.
     Slack,
+    /// A Slack conversation gone to by its name.
+    Jump,
     /// The map's view, to be changed: the keys of `VIEW`.
     View,
     /// In the map, read mail shown or hidden.
@@ -713,6 +715,13 @@ pub const KEYS: &[Binding] = &[
         hint: "",
         foot: &[],
         help: "Slack's column at the right, shown or hidden: channels and people, the busiest first; ⏎ reads one",
+    },
+    Binding {
+        keys: &[("C-k", Jump)],
+        name: "C-k",
+        hint: "",
+        foot: &[],
+        help: "go to a Slack conversation: type any part of its name, ⏎ reads the one picked",
     },
     Binding {
         keys: &[("C", Calendar)],

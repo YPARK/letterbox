@@ -10,6 +10,15 @@ use crate::slack::Slack;
 use crate::slack::reading::Message as Said;
 use crate::slack::worker::{self as slack_worker, Answer as Heard, Ask as SlackAsk};
 
+#[derive(Default)]
+pub struct Jump {
+    pub query: String,
+    pub at: usize,
+}
+
+/// How many conversations the jump box shows.
+pub const FOUND: usize = 10;
+
 /// The two parts of a workspace in Slack's column.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Part {
@@ -116,6 +125,9 @@ pub struct Chat {
     pub rows: Vec<ChatRow>,
     pub row: usize,
     pub shown: bool,
+    /// A conversation being gone to by name, C-k: what is typed, and which
+    /// of those found is picked.
+    pub jump: Option<Jump>,
     pub open: Option<Open>,
     pub writing: Option<Writing>,
     replies: Receiver<slack_worker::Reply>,
@@ -132,6 +144,7 @@ impl Default for Chat {
             rows: Vec::new(),
             row: 0,
             shown: false,
+            jump: None,
             open: None,
             writing: None,
             replies,
@@ -278,21 +291,101 @@ impl App {
         }
     }
 
+    /// The conversation `i` of `space` read in the list's place, from the map
+    /// too, and gone to; picked in the column, where it is.
+    fn read_talk(&mut self, space: usize, i: usize) {
+        if self.map.mode == Mode::Map {
+            self.looked_now();
+            self.map.mode = Mode::List;
+            self.map.region = None;
+        }
+        self.open_talk(space, i);
+        self.chat_rebuild();
+        if let Some(at) = self
+            .chat
+            .rows
+            .iter()
+            .position(|r| *r == ChatRow::Talk(space, i))
+        {
+            self.chat.row = at;
+        }
+        self.focus = Focus::List;
+    }
+
     /// The row picked in Slack's column opened: a conversation read in the
-    /// list's place, from the map too; a heading or more, every one shown.
+    /// list's place; a heading or more, every one shown.
     fn chat_open_row(&mut self) {
         match self.chat.rows.get(self.chat.row).copied() {
-            Some(ChatRow::Talk(s, i)) => {
-                if self.map.mode == Mode::Map {
-                    self.looked_now();
-                    self.map.mode = Mode::List;
-                    self.map.region = None;
-                }
-                self.open_talk(s, i);
-                self.focus = Focus::List;
-            }
+            Some(ChatRow::Talk(s, i)) => self.read_talk(s, i),
             Some(ChatRow::Head(s) | ChatRow::More(s)) => self.chat_fold(s),
             _ => {}
+        }
+    }
+
+    /// C-k: a conversation gone to by name.
+    pub(super) fn open_jump(&mut self) {
+        if self.chat.spaces.is_empty() {
+            self.status = "no Slack workspace yet: letterbox slack add".to_string();
+            return;
+        }
+        self.chat.jump = Some(Jump::default());
+    }
+
+    /// The conversations whose names hold what is typed, any case, every one
+    /// of each workspace, folded or not: those it begins first, then those
+    /// with anything unread, then the busiest; by workspace and place.
+    pub fn jump_found(&self) -> Vec<(usize, usize)> {
+        let Some(jump) = &self.chat.jump else {
+            return Vec::new();
+        };
+        let asked = jump.query.trim().to_lowercase();
+        let mut found: Vec<(usize, usize, bool, bool, i64)> = Vec::new();
+        for (s, space) in self.chat.spaces.iter().enumerate() {
+            for (i, talk) in space.talks.iter().enumerate() {
+                let name = talk.channel.name.to_lowercase();
+                if name.contains(&asked) {
+                    let unread = talk.unread.is_some_and(|n| n > 0);
+                    found.push((s, i, name.starts_with(&asked), unread, talk.channel.updated));
+                }
+            }
+        }
+        found.sort_by_key(|&(_, _, begins, unread, updated)| {
+            (!begins, !unread, std::cmp::Reverse(updated))
+        });
+        found
+            .into_iter()
+            .take(FOUND)
+            .map(|(s, i, ..)| (s, i))
+            .collect()
+    }
+
+    /// A key while a conversation is gone to by name.
+    pub(super) fn jump_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let found = self.jump_found();
+        let Some(jump) = &mut self.chat.jump else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.chat.jump = None,
+            KeyCode::Char('g') if ctrl => self.chat.jump = None,
+            KeyCode::Enter => {
+                if let Some(&(s, i)) = found.get(jump.at) {
+                    self.chat.jump = None;
+                    self.read_talk(s, i);
+                }
+            }
+            KeyCode::Down => jump.at = (jump.at + 1).min(found.len().saturating_sub(1)),
+            KeyCode::Char('n') if ctrl => {
+                jump.at = (jump.at + 1).min(found.len().saturating_sub(1))
+            }
+            KeyCode::Up => jump.at = jump.at.saturating_sub(1),
+            KeyCode::Char('p') if ctrl => jump.at = jump.at.saturating_sub(1),
+            _ => {
+                if edit_line(&mut jump.query, key) {
+                    jump.at = 0;
+                }
+            }
         }
     }
 
