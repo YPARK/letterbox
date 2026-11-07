@@ -193,3 +193,20 @@ fn replies_edits_and_deletions_are_heard_as_messages_of_their_conversation() {
         ]
     );
 }
+
+#[test]
+fn only_slacks_own_secure_sockets_are_opened() {
+    use crate::slack::live::slacks;
+    assert!(slacks("wss://wss-primary.slack.com/link/?ticket=1"));
+    assert!(slacks("wss://slack.com/link"));
+    for not in [
+        "ws://wss-primary.slack.com/link",
+        "wss://evil.example/link",
+        "wss://slack.com.evil.example/link",
+        "wss://evilslack.com/link",
+        "https://wss-primary.slack.com/link",
+        "not a url",
+    ] {
+        assert!(!slacks(not), "{not}");
+    }
+}

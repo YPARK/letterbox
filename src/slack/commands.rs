@@ -106,7 +106,7 @@ fn channels(config: &Path, asked: Option<&str>, json: bool) -> anyhow::Result<()
         return Ok(());
     }
     for channel in channels {
-        println!("{}{}\t{}", channel.kind.mark(), channel.name, channel.id);
+        println!("{}", channel_line(&channel));
     }
     Ok(())
 }
@@ -146,9 +146,8 @@ fn when(ts: &str) -> String {
 }
 
 fn print_message(message: &Message) {
-    println!("{} {}: {}", when(&message.ts), message.who, message.text);
-    if message.replies > 0 {
-        println!("  {} replies: --thread {}", message.replies, message.ts);
+    for line in message_lines(message) {
+        println!("{line}");
     }
 }
 
@@ -204,7 +203,7 @@ fn watch(config: &Path, asked: Option<&str>) -> anyhow::Result<()> {
                     (false, _) => "a message changed or gone",
                 };
                 let whose = if m.user == me { ", yours" } else { "" };
-                println!("{} {name}: {what}{whose}", now());
+                println!("{} {}: {what}{whose}", now(), crate::mail::clean(name));
             }
         }
         true
@@ -221,4 +220,25 @@ fn remove(config: &Path, name: &str) -> anyhow::Result<()> {
          OAuth & Permissions."
     );
     Ok(())
+}
+
+/// A conversation as `slack channels` prints it: its name, chosen by others,
+/// with nothing a terminal would take as a command.
+pub(crate) fn channel_line(channel: &super::Channel) -> String {
+    let name = crate::mail::clean(&channel.name);
+    format!("{}{name}\t{}", channel.kind.mark(), channel.id)
+}
+
+/// A message as `slack read` prints it: who, as they chose to be called,
+/// cleaned as what they wrote is.
+pub(crate) fn message_lines(message: &Message) -> Vec<String> {
+    let who = crate::mail::clean(&message.who);
+    let mut lines = vec![format!("{} {who}: {}", when(&message.ts), message.text)];
+    if message.replies > 0 {
+        lines.push(format!(
+            "  {} replies: --thread {}",
+            message.replies, message.ts
+        ));
+    }
+    lines
 }

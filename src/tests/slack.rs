@@ -442,3 +442,34 @@ fn a_message_not_let_go_says_what_the_app_needs() {
     );
     assert!(said.contains("chat:write"), "{said}");
 }
+
+#[test]
+fn names_others_chose_are_printed_with_no_terminal_controls() {
+    let channel = slack::Channel {
+        id: "D1".into(),
+        name: "Mallory\u{1b}]52;c;bad\u{7}".into(),
+        kind: Kind::Direct,
+        updated: 0,
+    };
+    let line = slack::commands::channel_line(&channel);
+    assert!(
+        !line.contains('\u{1b}') && !line.contains('\u{7}'),
+        "{line:?}"
+    );
+    assert!(
+        line.starts_with("@Mallory") && line.ends_with("\tD1"),
+        "{line:?}"
+    );
+    let message = slack::reading::Message {
+        ts: "1700000000.0".into(),
+        who: "bot\u{1b}[2J".into(),
+        text: "hi".into(),
+        replies: 0,
+    };
+    let lines = slack::commands::message_lines(&message);
+    assert!(lines.iter().all(|l| !l.contains('\u{1b}')), "{lines:?}");
+    assert!(
+        lines[0].contains("bot") && lines[0].ends_with(": hi"),
+        "{lines:?}"
+    );
+}

@@ -78,11 +78,16 @@ pub struct Socket {
     base: String,
     token: String,
     agent: ureq::Agent,
+    /// Whether a socket anywhere is opened, as a test's on this machine is.
+    anywhere: bool,
 }
 
 impl Socket {
     pub fn new(token: &str) -> Socket {
-        Socket::at(API, token)
+        Socket {
+            anywhere: false,
+            ..Socket::at(API, token)
+        }
     }
 
     /// Slack, at `base`: elsewhere only for a test.
@@ -91,6 +96,7 @@ impl Socket {
             base: base.to_string(),
             token: token.to_string(),
             agent: net::agent(),
+            anywhere: true,
         }
     }
 
@@ -140,7 +146,11 @@ impl Socket {
     }
 
     fn session(&self, on: &mut dyn FnMut(Event) -> bool) -> anyhow::Result<Then> {
-        let mut ws = open(&self.link()?)?;
+        let link = self.link()?;
+        if !self.anywhere && !slacks(&link) {
+            bail!("Slack's answer named a socket not its own, or not over TLS: not opened");
+        }
+        let mut ws = open(&link)?;
         // Quiet once, a ping asks whether it is still there; quiet twice, gone.
         let mut quiet = false;
         loop {
@@ -185,6 +195,16 @@ impl Socket {
             }
         }
     }
+}
+
+/// Whether `url` is a socket of Slack's own, over TLS: no other is opened by
+/// a real session, whatever an answer says.
+pub fn slacks(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "wss"
+            && u.host_str()
+                .is_some_and(|h| h == "slack.com" || h.ends_with(".slack.com"))
+    })
 }
 
 /// A socket open at `url`: over TLS for `wss`, as Slack's are.

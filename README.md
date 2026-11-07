@@ -628,6 +628,83 @@ and buttons; drag the line before the message read, or press `<` and
 `>`, to make it wider or narrower. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
+## Slack
+
+Slack's conversations are in the sidebar too, under a SLACK heading for
+each workspace: yours, the busiest first, a dozen shown and the rest
+folded but for those with anything unread. Each workspace is read by an
+app of your own there, made once, as no app made by letterbox could be:
+Slack limits what one app read for many may do.
+
+At [api.slack.com/apps](https://api.slack.com/apps), **Create New App**,
+**From a manifest**, pick the workspace, and give it this:
+
+```yaml
+display_information:
+  name: letterbox
+oauth_config:
+  scopes:
+    user:
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+      - users:read
+      - search:read
+      - chat:write
+settings:
+  event_subscriptions:
+    user_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+```
+
+Install it to the workspace (one that asks its admins for apps asks them
+here), and give letterbox its **User OAuth Token**, `xoxp-…`, from
+**OAuth & Permissions**:
+
+```sh
+letterbox slack add          # asks for the token, not shown as it is pasted
+letterbox slack              # each workspace, and who you are in it
+letterbox slack channels     # its conversations
+letterbox slack read '#lab' -n 20       # by name, any part of it, or its ID
+letterbox slack read '@Ana' --thread 1730000000.000100
+letterbox slack remove acme
+```
+
+To hear things as they happen, generate an app-level token under **Basic
+Information**, **App-Level Tokens**, with the scope `connections:write`,
+`xapp-…`, and give it to letterbox: the heading then says `live`.
+
+```sh
+letterbox slack live         # asks for the app-level token
+letterbox slack watch        # which conversation and when, never what is said
+```
+
+The tokens are kept as passwords are, together, in the vault where there
+is one, and move with them by `letterbox keep vault` or `keep keyring`. They
+act as you: anyone with the user token reads and writes as you, and anyone
+with both hears what comes as it comes. Keep them as a password.
+
+In letterbox, ⏎ on a conversation reads it in the list's place, newest
+last, and ⏎ on a message its thread, in the message's. `r` writes to the
+conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
+does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
+⏎ is a new line, and esc lets it go. `U` reads it again. Reading marks
+nothing read in Slack, and the keys that act on mail do nothing while a
+conversation is read: the mail behind it is out of sight. What others
+wrote is shown with names for IDs, links as words, emoji as emoji, and
+nothing a terminal would take as a command.
+
 ## For AI agents: MCP
 
 `lbx mcp` serves your mail to an AI agent over the Model Context Protocol
