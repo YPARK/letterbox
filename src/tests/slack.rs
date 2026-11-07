@@ -392,3 +392,18 @@ fn a_channels_unread_are_those_since_it_was_last_read() {
     assert!(asked[1].starts_with("POST /conversations.history "));
     assert!(asked[1].contains("oldest=5.000100"), "{}", asked[1]);
 }
+
+#[test]
+fn emoji_names_are_the_emoji() {
+    let plain = |text| slack::reading::plain(text, &people());
+    assert_eq!(plain("cool :smiley: :tada:"), "cool 😃 🎉");
+    assert_eq!(plain("ok :+1::skin-tone-3:"), "ok 👍");
+    // A workspace's own emoji, and what only looks like one, stay as written.
+    assert_eq!(
+        plain(":party-parrot: at 10:30:45"),
+        ":party-parrot: at 10:30:45"
+    );
+    assert_eq!(plain("a :: b"), "a :: b");
+    // Not within a link's address.
+    assert_eq!(plain("<https://a.org/:smile:>"), "https://a.org/:smile:");
+}

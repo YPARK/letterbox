@@ -179,7 +179,7 @@ pub fn plain(text: &str, people: &People) -> String {
     let mut rest = text;
     while let Some(start) = rest.find('<') {
         let (before, from) = rest.split_at(start);
-        out.push_str(&unescape(before));
+        out.push_str(&emoji(&unescape(before)));
         let Some(end) = from.find('>') else {
             rest = from;
             break;
@@ -187,7 +187,7 @@ pub fn plain(text: &str, people: &People) -> String {
         out.push_str(&markup(&from[1..end], people));
         rest = &from[end + 1..];
     }
-    out.push_str(&unescape(rest));
+    out.push_str(&emoji(&unescape(rest)));
     out.chars()
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .collect()
@@ -216,6 +216,47 @@ fn markup(inner: &str, people: &People) -> String {
         Some(label) if label != address => format!("{label} ({address})"),
         _ => address,
     }
+}
+
+/// `:smiley:` as 😃, by the names GitHub and Slack share; a skin tone after
+/// one let go. A name not known, as a workspace's own emoji, stays as written.
+fn emoji(text: &str) -> String {
+    let named = |name: &str| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-'))
+    };
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(':') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let found = after
+            .find(':')
+            .map(|end| (end, &after[..end]))
+            .filter(|(_, name)| named(name))
+            .and_then(|(end, name)| Some((end, emojis::get_by_shortcode(name)?)));
+        match found {
+            Some((end, e)) => {
+                out.push_str(e.as_str());
+                rest = &after[end + 1..];
+                // A skin tone, as Slack writes one after the emoji.
+                if let Some(more) = rest.strip_prefix(":skin-tone-")
+                    && let Some(close) = more.find(':')
+                    && more[..close].bytes().all(|b| b.is_ascii_digit())
+                {
+                    rest = &more[close + 1..];
+                }
+            }
+            None => {
+                out.push(':');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn unescape(text: &str) -> String {
