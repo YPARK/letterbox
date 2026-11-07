@@ -658,6 +658,7 @@ oauth_config:
       - users:read
       - search:read
       - chat:write
+      - files:read
 settings:
   event_subscriptions:
     user_events:
@@ -703,7 +704,10 @@ those with anything unread. In letterbox, ⏎ on a conversation reads it in
 the list's place, newest last, and ⏎ on a message its thread, in the message's. `r` writes to the
 conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
 does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
-⏎ is a new line, and esc lets it go. `U` reads it again. Reading marks
+⏎ is a new line, and esc lets it go. `U` reads it again. A message's files
+are shown under it, 📎 and their size, and `s` saves those of the message
+picked where mail's are saved, under a name not yet taken there; the token
+goes to Slack's own hosts alone. Reading marks
 nothing read in Slack, and the keys that act on mail do nothing while a
 conversation is read: the mail behind it is out of sight. What others
 wrote is shown with names for IDs, links as words, emoji as emoji, and

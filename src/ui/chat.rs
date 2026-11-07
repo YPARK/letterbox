@@ -151,6 +151,16 @@ fn said(t: &Theme, message: &Said, width: usize, picked: bool) -> Vec<Line<'stat
             Span::styled(line, Style::new().fg(t.text)),
         ]));
     }
+    for file in &message.files {
+        let line = clip(
+            &format!("📎 {} ({})", file.name, size(file.size as usize)),
+            width.saturating_sub(2),
+        );
+        lines.push(Line::from(vec![
+            Span::styled(mark, Style::new().fg(t.accent)),
+            Span::styled(line, Style::new().fg(t.soft)),
+        ]));
+    }
     if message.replies > 0 {
         let s = if message.replies == 1 { "y" } else { "ies" };
         lines.push(Line::from(vec![

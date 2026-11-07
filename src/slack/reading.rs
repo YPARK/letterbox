@@ -18,6 +18,15 @@ pub struct Message {
     pub who: String,
     pub text: String,
     pub replies: u64,
+    pub files: Vec<File>,
+}
+
+/// A file a message came with: its name, its size, and where it is fetched.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct File {
+    pub name: String,
+    pub size: u64,
+    pub url: String,
 }
 
 impl Message {
@@ -33,6 +42,18 @@ impl Message {
             who: who.to_string(),
             text: plain(v["text"].as_str().unwrap_or(""), people),
             replies: v["reply_count"].as_u64().unwrap_or(0),
+            files: v["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|f| {
+                    Some(File {
+                        name: f["name"].as_str()?.to_string(),
+                        size: f["size"].as_u64().unwrap_or(0),
+                        url: f["url_private_download"].as_str()?.to_string(),
+                    })
+                })
+                .collect(),
         })
     }
 }

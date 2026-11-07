@@ -499,6 +499,7 @@ impl App {
             Act::Open | Act::Right if !reader => self.open_thread(),
             Act::NewMail => self.read_talk_again(),
             Act::Reply => self.write_talk(reader),
+            Act::Save | Act::SaveAll if !reader => self.save_talk_files(),
             Act::ReplyAll | Act::Forward => {
                 self.status =
                     "in Slack, r writes: to the conversation, or in the thread read".to_string();
@@ -616,6 +617,34 @@ impl App {
         }
     }
 
+    /// The files of the message picked, fetched and saved where mail's are,
+    /// each under a name not yet taken there.
+    fn save_talk_files(&mut self) {
+        let Some(open) = &self.chat.open else {
+            return;
+        };
+        let Some(message) = open.picked.and_then(|i| open.messages.get(i)) else {
+            return;
+        };
+        if message.files.is_empty() {
+            self.status = "no files with that message".to_string();
+            return;
+        }
+        let space = open.space;
+        let asks: Vec<SlackAsk> = message
+            .files
+            .iter()
+            .map(|f| SlackAsk::Download {
+                url: f.url.clone(),
+                name: f.name.clone(),
+            })
+            .collect();
+        self.status = format!("fetching {} file(s) from Slack…", asks.len());
+        for ask in asks {
+            self.chat.ask(space, ask);
+        }
+    }
+
     /// What is pasted, into the message being written.
     pub(super) fn chat_paste(&mut self, text: &str) -> bool {
         match &mut self.chat.writing {
@@ -706,6 +735,15 @@ impl App {
                 }
             }
             Heard::Counted => {}
+            Heard::Downloaded(name, got) => {
+                let dir = self.save_dir.clone().unwrap_or_else(files::downloads);
+                self.status = match got.and_then(|bytes| {
+                    saving::save_one(&dir, &name, &bytes).map_err(|e| e.to_string())
+                }) {
+                    Ok(path) => format!("saved {}", tilde(&path)),
+                    Err(why) => format!("{name} not saved: {why}"),
+                };
+            }
             Heard::Posted(channel, thread, sent) => {
                 let Some(writing) = self
                     .chat

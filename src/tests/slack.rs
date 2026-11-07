@@ -465,6 +465,7 @@ fn names_others_chose_are_printed_with_no_terminal_controls() {
         who: "bot\u{1b}[2J".into(),
         text: "hi".into(),
         replies: 0,
+        files: Vec::new(),
     };
     let lines = slack::commands::message_lines(&message);
     assert!(lines.iter().all(|l| !l.contains('\u{1b}')), "{lines:?}");
@@ -472,4 +473,68 @@ fn names_others_chose_are_printed_with_no_terminal_controls() {
         lines[0].contains("bot") && lines[0].ends_with(": hi"),
         "{lines:?}"
     );
+}
+
+#[test]
+fn a_messages_files_are_read_with_it() {
+    let m = json!({"ts": "1.0", "user": "U1", "text": "see", "files": [
+        {"name": "a.pdf", "size": 10, "url_private_download": "https://files.slack.com/files-pri/T-F/download/a.pdf"},
+        {"name": "gone"},
+    ]});
+    let (base, _) = server(vec![ok(json!({"ok": true, "messages": [m]}))]);
+    let read = Slack::at(&base, session())
+        .messages("C1", 1, &people())
+        .unwrap();
+    let files: Vec<_> = read[0]
+        .files
+        .iter()
+        .map(|f| (f.name.as_str(), f.size))
+        .collect();
+    assert_eq!(
+        files,
+        [("a.pdf", 10)],
+        "one with nothing to fetch it by is left out"
+    );
+}
+
+#[test]
+fn a_file_is_fetched_with_the_token_from_slack_alone() {
+    let (base, asked) = server(vec![
+        "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\ncontent-length: 4\r\nconnection: close\r\n\r\n%PDF"
+            .into(),
+    ]);
+    let bytes = Slack::at(&base, session())
+        .download(&format!("{base}/files-pri/T-F/download/a.pdf"))
+        .unwrap();
+    assert_eq!(bytes, b"%PDF");
+    assert!(
+        asked.lock().unwrap()[0]
+            .to_lowercase()
+            .contains("authorization: bearer xoxp-secret")
+    );
+    // A real session sends its token nowhere but Slack.
+    let real = Slack::new(session());
+    for elsewhere in [
+        "https://evil.example/files-pri/a.pdf",
+        "http://files.slack.com/files-pri/a.pdf",
+        "https://files.slack.com.evil.example/a.pdf",
+    ] {
+        let said = format!("{:#}", real.download(elsewhere).unwrap_err());
+        assert!(said.contains("not Slack's"), "{elsewhere}: {said}");
+    }
+}
+
+#[test]
+fn a_page_given_for_a_file_says_what_the_app_needs() {
+    let (base, _) = server(vec![
+        "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 6\r\nconnection: close\r\n\r\n<html>"
+            .into(),
+    ]);
+    let said = format!(
+        "{:#}",
+        Slack::at(&base, session())
+            .download(&format!("{base}/f"))
+            .unwrap_err()
+    );
+    assert!(said.contains("files:read"), "{said}");
 }

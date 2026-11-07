@@ -9,9 +9,12 @@ use serde_json::{Value, json};
 
 /// A server answering each request by the first of `answers` whose every
 /// word is in its first line or its body; the requests it took.
-fn slack(answers: Vec<(&'static str, Value)>) -> (String, Arc<Mutex<Vec<String>>>) {
+fn slack(
+    answers: impl FnOnce(&str) -> Vec<(&'static str, Value)>,
+) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let answers = answers(&base);
     let asked = Arc::new(Mutex::new(Vec::new()));
     let taken = asked.clone();
     let answers = Arc::new(answers);
@@ -73,55 +76,61 @@ fn workspace_posting(posted: Value) -> (String, Arc<Mutex<Vec<String>>>) {
         }));
     }
     let message = |ts: &str, user: &str, text: &str| json!({"ts": ts, "user": user, "text": text});
-    slack(vec![
-        ("chat.postMessage", posted),
-        (
-            "users.list",
-            json!({"ok": true, "members": [
-                {"id": "U1", "name": "ana", "profile": {"display_name": "Ana"}},
-                {"id": "U2", "name": "bo", "profile": {"display_name": "Bo"}},
-            ]}),
-        ),
-        (
-            "users.conversations",
-            json!({"ok": true, "channels": channels}),
-        ),
-        (
-            "conversations.info channel=D1",
-            json!({"ok": true, "channel": {"id": "D1", "is_im": true, "unread_count_display": 0}}),
-        ),
-        (
-            "conversations.info channel=C13",
-            json!({"ok": true, "channel": {"id": "C13", "last_read": "1.0"}}),
-        ),
-        (
-            "conversations.info",
-            json!({"ok": true, "channel": {"last_read": "9.0"}}),
-        ),
-        (
-            "conversations.history oldest=1.0",
-            json!({"ok": true, "messages": [{"ts": "5.0"}, {"ts": "4.0"}, {"ts": "3.0"}, {"ts": "2.0"}]}),
-        ),
-        (
-            "conversations.history oldest=",
-            json!({"ok": true, "messages": []}),
-        ),
-        (
-            "conversations.replies",
-            json!({"ok": true, "messages": [
-                message("1700000100.0", "U1", "hello <@U2>"),
-                message("1700000200.0", "U2", "a reply from Bo"),
-            ]}),
-        ),
-        (
-            "conversations.history",
-            json!({"ok": true, "messages": [
-                message("1700000300.0", "U2", "newest note"),
-                {"ts": "1700000100.0", "user": "U1", "text": "hello <@U2>",
-                 "thread_ts": "1700000100.0", "reply_count": 1},
-            ]}),
-        ),
-    ])
+    slack(move |base| {
+        vec![
+            ("chat.postMessage", posted),
+            ("files-pri", json!("the file's bytes")),
+            (
+                "users.list",
+                json!({"ok": true, "members": [
+                    {"id": "U1", "name": "ana", "profile": {"display_name": "Ana"}},
+                    {"id": "U2", "name": "bo", "profile": {"display_name": "Bo"}},
+                ]}),
+            ),
+            (
+                "users.conversations",
+                json!({"ok": true, "channels": channels}),
+            ),
+            (
+                "conversations.info channel=D1",
+                json!({"ok": true, "channel": {"id": "D1", "is_im": true, "unread_count_display": 0}}),
+            ),
+            (
+                "conversations.info channel=C13",
+                json!({"ok": true, "channel": {"id": "C13", "last_read": "1.0"}}),
+            ),
+            (
+                "conversations.info",
+                json!({"ok": true, "channel": {"last_read": "9.0"}}),
+            ),
+            (
+                "conversations.history oldest=1.0",
+                json!({"ok": true, "messages": [{"ts": "5.0"}, {"ts": "4.0"}, {"ts": "3.0"}, {"ts": "2.0"}]}),
+            ),
+            (
+                "conversations.history oldest=",
+                json!({"ok": true, "messages": []}),
+            ),
+            (
+                "conversations.replies",
+                json!({"ok": true, "messages": [
+                    message("1700000100.0", "U1", "hello <@U2>"),
+                    message("1700000200.0", "U2", "a reply from Bo"),
+                ]}),
+            ),
+            (
+                "conversations.history",
+                json!({"ok": true, "messages": [
+                    {"ts": "1700000300.0", "user": "U2", "text": "newest note", "files": [{
+                        "name": "data.csv", "size": 2048,
+                        "url_private_download": format!("{base}/files-pri/T1-F1/download/data.csv"),
+                    }]},
+                    {"ts": "1700000100.0", "user": "U1", "text": "hello <@U2>",
+                     "thread_ts": "1700000100.0", "reply_count": 1},
+                ]}),
+            ),
+        ]
+    })
 }
 
 fn app_on(base: &str) -> App {
@@ -726,4 +735,49 @@ fn ctrl_k_while_writing_is_the_editors_not_a_jump() {
     jump(app);
     assert!(app.chat.jump.is_none());
     assert!(app.chat.writing.is_some());
+}
+
+#[test]
+fn a_messages_files_are_shown_under_it() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    let screen = app::screen(app, 120, 40);
+    // The clip is two cells wide, as the screen draws it.
+    let line = screen
+        .lines()
+        .find(|l| l.contains("data.csv"))
+        .expect(&screen);
+    assert!(
+        line.contains("📎") && line.contains("data.csv (2 KB)"),
+        "{line}"
+    );
+}
+
+#[test]
+fn s_saves_the_files_of_the_message_picked_where_mail_is_saved() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    let dir = tempfile::tempdir().unwrap();
+    app.save_dir = Some(dir.path().to_path_buf());
+    open_ch00(app);
+    // The newest is picked, and has a file.
+    press(app, KeyCode::Char('s'));
+    let saved = std::fs::read_to_string(dir.path().join("data.csv")).unwrap();
+    assert_eq!(saved, "\"the file's bytes\"");
+    assert!(app.status.contains("data.csv"), "{}", app.status);
+    let fetched = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.contains("files-pri"))
+        .count();
+    assert_eq!(fetched, 1);
+    // Saved again, it is saved beside the first, not over it.
+    press(app, KeyCode::Char('s'));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    // One with none says so, and fetches nothing.
+    press(app, KeyCode::Char('k'));
+    press(app, KeyCode::Char('s'));
+    assert!(app.status.contains("no files"), "{}", app.status);
 }

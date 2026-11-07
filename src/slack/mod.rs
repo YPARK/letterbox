@@ -23,6 +23,8 @@ pub(crate) const KEPT_AT: &str = "slack.com";
 const TRIES: usize = 4;
 /// The longest Slack is waited for at a time.
 const LONGEST: u64 = 60;
+/// The largest file fetched.
+const FILE_MOST: u64 = 200 << 20;
 /// The most unread messages counted of a channel.
 pub const UNREAD_MOST: u32 = 100;
 
@@ -381,5 +383,46 @@ impl Slack {
             }
         })?;
         Ok(v["ts"].as_str().unwrap_or("").to_string())
+    }
+
+    /// A file a message came with, fetched with the token, from Slack alone:
+    /// a real session sends its token to no other host, whatever a message
+    /// names. A page in its place is Slack asking for a permission.
+    pub fn download(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+        let slacks = url::Url::parse(url).is_ok_and(|u| {
+            u.scheme() == "https"
+                && u.host_str()
+                    .is_some_and(|h| h == "slack.com" || h.ends_with(".slack.com"))
+        });
+        if self.base == API && !slacks {
+            bail!("that file is not Slack's to fetch: {url}");
+        }
+        let mut answer = self
+            .agent
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.session.token))
+            .call()
+            .context("cannot reach Slack for the file")?;
+        if !answer.status().is_success() {
+            bail!("Slack gave {} for the file", answer.status());
+        }
+        let page = answer
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|t| t.starts_with("text/html"));
+        if page {
+            bail!(
+                "Slack gave a page, not the file: your app may not read files yet. \
+                 Add files:read to its User Token Scopes (OAuth & Permissions), reinstall it, \
+                 then letterbox slack add"
+            );
+        }
+        answer
+            .body_mut()
+            .with_config()
+            .limit(FILE_MOST)
+            .read_to_vec()
+            .context("cannot read the file Slack gave")
     }
 }

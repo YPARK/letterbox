@@ -20,6 +20,11 @@ pub enum Ask {
         thread: Option<String>,
         text: String,
     },
+    /// A file fetched, to be saved under its name.
+    Download {
+        url: String,
+        name: String,
+    },
 }
 
 pub enum Answer {
@@ -30,6 +35,8 @@ pub enum Answer {
     Counted,
     History(String, Result<Vec<Message>, String>),
     Thread(String, String, Result<Vec<Message>, String>),
+    /// A file fetched, by its name: its bytes, or why not.
+    Downloaded(String, Result<Vec<u8>, String>),
     /// What was sent, to where, or why it was not.
     Posted(String, Option<String>, Result<String, String>),
     /// What happened, as it happened, and whether it was yours.
@@ -126,6 +133,9 @@ fn reads(
                         .or_insert_with(|| slack.thread(&id, &ts, known).map_err(said))
                         .clone();
                     Answer::Thread(id, ts, got)
+                }
+                Ask::Download { url, name } => {
+                    Answer::Downloaded(name, slack.download(&url).map_err(said))
                 }
                 Ask::Post {
                     channel,
