@@ -79,6 +79,17 @@ pub(super) enum Command {
         #[arg(long, conflicts_with = "json")]
         raw: bool,
     },
+    /// Who you have written to and heard from, as the map read your mail: those
+    /// with all of these words in their name or address, or everyone
+    Contacts {
+        words: Vec<String>,
+        #[arg(long, short)]
+        account: Option<String>,
+        #[arg(long, short = 'n', default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// The messages in a folder with all of these words, on the server
     Search {
         #[arg(required = true)]

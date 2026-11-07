@@ -309,6 +309,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Some((area, Vec::new()))
         }
         Dialog::Calendars(pick) => Some((calendars_dialog(f, &t, pick), Vec::new())),
+        Dialog::People(people) => Some((people_dialog(f, &t, people), Vec::new())),
         Dialog::AddCalendar(typed) => Some(asking(
             f,
             &t,

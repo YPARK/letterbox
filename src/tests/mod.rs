@@ -29,6 +29,7 @@ mod agents;
 mod asking;
 mod bulk;
 mod composing;
+mod contacts;
 mod drafting;
 mod editing;
 mod filing;

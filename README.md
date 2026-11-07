@@ -196,6 +196,7 @@ letterbox search grant report --account Work
 | `y` / `Y` / `-` | a message not yet filed, filed where it would go, or, `Y`, all like it, asked first, how many, in the list or down at a message on the map; once filed, the label's first suggestion filed too, or all of them; `-` says it is not one, and the map learns it |
 | `v`, `S-down` / `S-up` | select nothing: several are selected with the mouse, as above |
 | `M-r` | in the map, lay it out again from where it is, and show what moved: `enter` keeps it, `esc` drops it; `,` `l` too |
+| `W` | everyone you have written to or heard from, as the map read your mail, with how many messages each way and when the last was: typing narrows it, `⏎` begins a letter to the one picked. `lbx contacts` lists them too |
 | `C` | what is coming up in [your calendars](#your-calendar), in a popup: `tab` goes from the week to the month to the list; `a` adds a calendar, `r` lists them with `[x]` beside each, where `space` unticks one and `⏎` forgets those unticked; `j`, `k` and the page keys scroll, `esc` or `C` closes |
 | `?`, `F1` | all the keys; `F1` while writing too, the keys of writing first |
 | `C-x` `u`, `C-/`, `C-_` | undo what was done last, as Emacs's three do: what was moved put back as it was, however it went (trashed, archived, filed, moved onto a cluster, or what `C-c C-c` did in the Inbox looked through), its labels as they were, and what moving it taught taken back; or a label renamed, split or removed. Pressed before its server has answered, it says so: `C-x u` again then |
@@ -221,6 +222,11 @@ message-mode asks: `y` discards it, any other key goes on writing. `C-g`
 lets go of a search, the mark, or a `C-c` begun, as Emacs's does, so `C-c C-g` does nothing; with
 nothing to let go, it leaves the message, from wherever the cursor is,
 asking first if you changed it or it carries files. `esc` does as `C-g`. Outside it, `C-x` `C-c` quits; `C-c` alone, pressed once more than it was needed, does nothing.
+
+Typing who it is to, in `To` or `Cc`, suggests who you have written to or heard
+from, those written to first, once the map has read your mail: `tab` takes the first,
+`esc` lets them go, and with none suggested `tab` goes on to the next field as ever.
+Lists, bulk mail and addresses that take no answer are left out.
 
 `C-x C-s`, or the Save button on its top edge, keeps what you are writing in
 Drafts and goes on: saved again it replaces what was saved, which goes to Trash,
@@ -654,6 +660,7 @@ have your shell's `PATH`.
 | `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread; one account, or only their names, if asked; and the version of letterbox | reads |
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
 | `search_messages` | a folder's messages with the words given, as the server searches | reads |
+| `find_address` | who you have written to or heard from, by name or part of an address, for an agent to fill in who a letter is to rather than guess | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
 | `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
 | `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |

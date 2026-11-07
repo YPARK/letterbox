@@ -17,6 +17,10 @@ pub struct Compose {
     pub sending: bool,
     /// Why it could not be sent, said till a key is pressed.
     pub not_sent: Option<String>,
+    /// Who may be written to, as the map knows them, once asked; and those
+    /// of them who fit what is being typed in who it is to.
+    known: Option<Vec<crate::index::contacts::Contact>>,
+    pub suggesting: Vec<crate::index::contacts::Contact>,
     /// Which save this is, and what is being saved in Drafts, while it is.
     pub saving: Option<(u64, String)>,
     /// The files of the message it forwards, sent with it while an
@@ -62,6 +66,42 @@ fn held_said(secs: u64) -> String {
     format!("sending in {secs} s · C-g takes it back, C-c C-c sends it now")
 }
 
+/// The most suggested of who a letter may be to.
+const SUGGESTED: usize = 5;
+
+/// The word being typed of who a letter is to, at `col` of the `row` of a To or
+/// Cc line: where it starts and ends, and what it says, of two letters or more.
+fn typed_address(lines: &[String], row: usize, col: usize) -> Option<(usize, usize, String)> {
+    let line: Vec<char> = lines.get(row)?.chars().collect();
+    let colon = line.iter().position(|c| *c == ':')?;
+    let name: String = line[..colon].iter().collect::<String>().to_lowercase();
+    if !matches!(name.as_str(), "to" | "cc")
+        || col <= colon
+        || lines[..row].iter().any(|l| l.is_empty())
+    {
+        return None;
+    }
+    // At the end of the word: not within one, nor a name in quotes begun.
+    if line[col..]
+        .iter()
+        .take_while(|c| **c != ',')
+        .any(|c| !c.is_whitespace())
+    {
+        return None;
+    }
+    let start = line[colon + 1..col]
+        .iter()
+        .rposition(|c| *c == ',')
+        .map_or(colon + 1, |at| colon + 1 + at + 1);
+    let start = start
+        + line[start..col]
+            .iter()
+            .take_while(|c| c.is_whitespace())
+            .count();
+    let word: String = line[start..col].iter().collect();
+    (word.chars().count() >= 2 && !word.contains(['<', '"'])).then_some((start, col, word))
+}
+
 /// Whether what is written, not what it quotes or forwards, speaks of a
 /// file attached.
 fn speaks_of_files(body: &str) -> bool {
@@ -91,6 +131,33 @@ impl App {
         };
         let (text, row, col) = compose::blank();
         self.open_compose(account, text, (row, col), Thread::default(), Vec::new());
+    }
+
+    /// W: everyone written to or heard from, as the map read them.
+    pub(super) fn open_people(&mut self) {
+        let all = self
+            .index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contacts(None);
+        self.dialog = Dialog::People(People {
+            all,
+            typed: String::new(),
+            at: 0,
+        });
+    }
+
+    /// A new letter to `who`, on to its subject.
+    pub(super) fn write_to(&mut self, who: &crate::index::contacts::Contact) {
+        self.compose_new();
+        if let Some(compose) = &mut self.compose {
+            compose.buffer.begin_step();
+            compose
+                .buffer
+                .replace(0, "To: ".len(), "To: ".len(), &who.addressed());
+            compose.original = compose.buffer.text();
+            compose.buffer.field(2);
+        }
     }
 
     /// E: go on writing the draft picked, in Drafts.
@@ -242,6 +309,8 @@ impl App {
             sending: false,
             not_sent: None,
             saving: None,
+            known: None,
+            suggesting: Vec::new(),
             files,
             warned: None,
             held: None,
@@ -302,6 +371,23 @@ impl App {
             }
             return;
         }
+        // Suggested who it may be to: tab takes the first, esc or C-g lets
+        // them go, and not the message.
+        if !compose.suggesting.is_empty() && compose.prefix.is_none() {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            match key.code {
+                KeyCode::Tab => return self.take_suggestion(),
+                KeyCode::Esc => {
+                    compose.suggesting.clear();
+                    return;
+                }
+                KeyCode::Char('g') if ctrl => {
+                    compose.suggesting.clear();
+                    return;
+                }
+                _ => {}
+            }
+        }
         let before = compose.prefix;
         let done = edit::handle(&mut compose.buffer, &mut compose.prefix, key);
         let prefix = compose.prefix;
@@ -317,6 +403,7 @@ impl App {
         } else if before.is_some() {
             self.clear_passing(Transient::Prefix);
         }
+        self.suggest();
         match done {
             Done::Stay => {}
             Done::Undefined => {
@@ -417,6 +504,66 @@ impl App {
             self.found = None;
             self.narrow();
         }
+    }
+
+    /// Who fits what is being typed in who it is to, under the cursor: those
+    /// not there already, a word of two letters or more being typed.
+    fn suggest(&mut self) {
+        let Some(compose) = &self.compose else {
+            return;
+        };
+        let typing = typed_address(
+            compose.buffer.lines(),
+            compose.buffer.row(),
+            compose.buffer.col(),
+        )
+        .map(|(_, _, word)| word);
+        let account = compose.account;
+        let line = compose
+            .buffer
+            .lines()
+            .get(compose.buffer.row())
+            .map(|l| l.to_lowercase())
+            .unwrap_or_default();
+        let known = compose.known.is_some();
+        if typing.is_some() && !known {
+            let ident = self.accounts.get(account).map(|a| a.ident.clone());
+            let all = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contacts(ident.as_deref());
+            if let Some(compose) = &mut self.compose {
+                compose.known = Some(all);
+            }
+        }
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        compose.suggesting = match (&typing, &compose.known) {
+            (Some(word), Some(all)) => crate::index::contacts::found(all, word, SUGGESTED + 8)
+                .into_iter()
+                .filter(|c| !line.contains(&c.address))
+                .take(SUGGESTED)
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
+
+    /// The first suggested in place of what was typed, ready for another.
+    fn take_suggestion(&mut self) {
+        let Some(compose) = &mut self.compose else {
+            return;
+        };
+        let (row, col) = (compose.buffer.row(), compose.buffer.col());
+        if let Some((start, end, _)) = typed_address(compose.buffer.lines(), row, col)
+            && let Some(first) = compose.suggesting.first()
+        {
+            let with = format!("{}, ", first.addressed());
+            compose.buffer.begin_step();
+            compose.buffer.replace(row, start, end, &with);
+        }
+        compose.suggesting.clear();
     }
 
     /// Keep what is written in Drafts, and go on writing it: what was saved
