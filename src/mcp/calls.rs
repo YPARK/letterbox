@@ -175,16 +175,13 @@ impl Server {
                     action,
                     text("to").as_deref(),
                 )?;
-                let (what, yes) = if thrown {
+                let what = if thrown {
                     let them = if n == 1 { "it" } else { "them" };
-                    (
-                        format!("Move {n} from {folder} to {to}? letterbox can put {them} back."),
-                        "Move them to Trash",
-                    )
+                    format!("Move {n} from {folder} to {to}? letterbox can put {them} back.")
                 } else {
-                    (format!("File {n} from {folder} under {to}?"), "File them")
+                    format!("File {n} from {folder} under {to}?")
                 };
-                let answer = self.confirm(&listing(&what, &moving, of_drafts), yes)?;
+                let answer = self.confirm(&listing(&what, &moving, of_drafts))?;
                 if let Some(why) = answer.refused("moved") {
                     return Ok(json!({ "moved": 0, "said": why }));
                 }

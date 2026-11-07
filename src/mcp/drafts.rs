@@ -105,7 +105,7 @@ impl Server {
         let m = mail::message(uid, raw)?;
         let (to, cc) = goes_as_it_is(&m)?;
         let me = store.address().to_string();
-        let answer = self.confirm_as(&going(&m, &to, &cc), "Send it", false)?;
+        let answer = self.confirm(&going(&m, &to, &cc))?;
         if let Some(why) = answer.refused("sent") {
             return Ok(json!({ "sent": false, "said": why }));
         }
@@ -238,6 +238,12 @@ fn goes_as_it_is(m: &mail::Message) -> anyhow::Result<(Vec<String>, Vec<String>)
     );
     if to.is_empty() && cc.is_empty() {
         bail!("it goes to no one");
+    }
+    if to.len() + cc.len() > crate::compose::MANY {
+        bail!(
+            "it goes to more than {} people, which an agent does not send: {THEIRS}",
+            crate::compose::MANY
+        );
     }
     Ok((to, cc))
 }

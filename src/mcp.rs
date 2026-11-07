@@ -183,19 +183,13 @@ impl Server {
     /// `message` says; whether they said yes. Asked of them, never of the
     /// agent: where the program cannot ask, it is an error, and nothing is
     /// done.
-    fn confirm(&mut self, message: &str, yes: &str) -> anyhow::Result<Said> {
-        self.confirm_as(message, yes, true)
-    }
-
-    /// As `confirm`, what is offered unless they change it given: no, for what
-    /// cannot be taken back.
-    fn confirm_as(&mut self, message: &str, yes: &str, default: bool) -> anyhow::Result<Said> {
-        let schema = json!({ "confirm": { "type": "boolean", "title": yes, "default": default } });
-        let result = self.elicit(message, schema, "confirm")?;
-        let confirm = result["content"]["confirm"].as_bool();
-        Ok(match (result["action"].as_str(), confirm) {
-            (Some("accept"), Some(true)) => Said::Yes,
-            (Some("accept"), Some(false)) | (Some("decline"), _) => Said::No,
+    fn confirm(&mut self, message: &str) -> anyhow::Result<Said> {
+        // No field of its own: the program's Yes and No are the answer, and a
+        // box beside them could only say otherwise.
+        let result = self.elicit(message, json!({}), None)?;
+        Ok(match result["action"].as_str() {
+            Some("accept") => Said::Yes,
+            Some("decline") => Said::No,
             _ => Said::Unanswered,
         })
     }
@@ -206,7 +200,7 @@ impl Server {
         &mut self,
         message: &str,
         properties: Value,
-        required: &str,
+        required: Option<&str>,
     ) -> anyhow::Result<Value> {
         if self.io.is_none() {
             bail!("{CANNOT_ASK}");
@@ -222,7 +216,7 @@ impl Server {
                 "requestedSchema": {
                     "type": "object",
                     "properties": properties,
-                    "required": [required]
+                    "required": required.into_iter().collect::<Vec<_>>()
                 }
             }
         }))?;
