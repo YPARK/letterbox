@@ -705,7 +705,8 @@ conversation, its thread read if it is a reply. Elsewhere `/` is mail's.
 `C-k`, from anywhere but a message being written, goes to a conversation
 by any part of its name, folded away or not: those it begins first, then
 those with anything unread. In letterbox, ⏎ on a conversation reads it in
-the list's place, newest last, and ⏎ on a message its thread, in the message's. `r` writes to the
+the list's place, newest last, its last hundred, and `k` past the oldest
+reads those before it, and ⏎ on a message its thread, in the message's. `r` writes to the
 conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
 does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
 ⏎ is a new line, and esc lets it go. `U` reads it again. A message's files

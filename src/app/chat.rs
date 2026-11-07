@@ -99,6 +99,9 @@ pub struct Open {
     pub hits: Option<Vec<crate::slack::reading::Hit>>,
     /// The message to pick once the conversation is read: one gone to.
     pick_ts: Option<String>,
+    /// Older messages being read; and none older to read, its beginning.
+    reading_older: bool,
+    pub beginning: bool,
 }
 
 pub struct OpenThread {
@@ -476,6 +479,8 @@ impl App {
             asked: Instant::now(),
             hits: None,
             pick_ts: None,
+            reading_older: false,
+            beginning: false,
         });
         self.chat.ask(space, SlackAsk::History(id));
     }
@@ -516,6 +521,8 @@ impl App {
                     asked: Instant::now(),
                     hits: Some(Vec::new()),
                     pick_ts: None,
+                    reading_older: false,
+                    beginning: false,
                 });
                 self.focus = Focus::List;
                 self.chat.ask(space, SlackAsk::Search(words));
@@ -630,6 +637,19 @@ impl App {
         }
         let last = open.messages.len() - 1;
         let at = open.picked.unwrap_or(last);
+        // Up from the oldest read: those before it read, unless there are none.
+        if by < 0 && at == 0 && open.hits.is_none() {
+            if open.beginning {
+                self.status = "the beginning of the conversation".to_string();
+            } else if !open.reading_older {
+                open.reading_older = true;
+                let ask = SlackAsk::Older(open.id.clone(), open.messages[0].ts.clone());
+                let space = open.space;
+                self.status = "reading older messages…".to_string();
+                self.chat.ask(space, ask);
+            }
+            return;
+        }
         open.picked = Some(at.saturating_add_signed(by).min(last));
     }
 
@@ -846,6 +866,32 @@ impl App {
                 }
             }
             Heard::Counted => {}
+            Heard::Older(id, read) => {
+                let Some(open) = self.chat.open.as_mut().filter(|o| o.id == id) else {
+                    return;
+                };
+                open.reading_older = false;
+                match read {
+                    Ok(older) => {
+                        let first = open.messages.first().map(|m| m.ts.clone());
+                        let mut older: Vec<_> = older
+                            .into_iter()
+                            .filter(|m| first.as_ref().is_none_or(|f| earlier(&m.ts, f)))
+                            .collect();
+                        if older.is_empty() {
+                            open.beginning = true;
+                            self.status = "the beginning of the conversation".to_string();
+                            return;
+                        }
+                        let n = older.len();
+                        older.append(&mut open.messages);
+                        open.messages = older;
+                        open.picked = open.picked.map(|p| p + n);
+                        self.status = format!("{n} older messages read");
+                    }
+                    Err(why) => self.status = format!("older messages not read: {why}"),
+                }
+            }
             Heard::Searched(words, found) => {
                 let Some(open) = self
                     .chat
@@ -937,13 +983,23 @@ impl App {
                 };
                 open.loading = false;
                 match read {
-                    Ok(messages) => {
+                    Ok(mut messages) => {
                         // At the newest, or nowhere yet: the newest, still.
                         let newest = open.picked.is_none_or(|p| p + 1 >= open.messages.len());
                         let picked_ts = open
                             .picked
                             .and_then(|p| open.messages.get(p))
                             .map(|m| m.ts.clone());
+                        // Those read before the newest that are read again stay.
+                        if let Some(first) = messages.first().map(|m| m.ts.clone()) {
+                            let mut kept: Vec<_> = open
+                                .messages
+                                .drain(..)
+                                .filter(|m| earlier(&m.ts, &first))
+                                .collect();
+                            kept.append(&mut messages);
+                            messages = kept;
+                        }
                         open.messages = messages;
                         let gone_to = open
                             .pick_ts
@@ -1037,4 +1093,10 @@ impl App {
             }
         }
     }
+}
+
+/// Whether the message `a` was before `b`, by the times Slack writes them.
+fn earlier(a: &str, b: &str) -> bool {
+    let at = |ts: &str| ts.parse::<f64>().unwrap_or(0.0);
+    at(a) < at(b)
 }

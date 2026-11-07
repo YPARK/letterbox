@@ -114,6 +114,10 @@ fn workspace_posting(posted: Value) -> (String, Arc<Mutex<Vec<String>>>) {
                 json!({"ok": true, "channel": {"last_read": "9.0"}}),
             ),
             (
+                "conversations.history latest=",
+                json!({"ok": true, "messages": [message("1600000000.0", "U1", "an old one")]}),
+            ),
+            (
                 "conversations.history oldest=1.0",
                 json!({"ok": true, "messages": [{"ts": "5.0"}, {"ts": "4.0"}, {"ts": "3.0"}, {"ts": "2.0"}]}),
             ),
@@ -873,4 +877,39 @@ fn esc_lets_a_search_go_and_slash_elsewhere_is_mails() {
     press(app, KeyCode::Char('/'));
     assert!(app.searching, "mail's search, from the mail's sidebar");
     assert!(app.chat.search.is_none());
+}
+
+#[test]
+fn up_past_the_oldest_shown_reads_older_and_they_stay() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('k'));
+    press(app, KeyCode::Char('k'));
+    let open = app.chat.open.as_ref().unwrap();
+    assert_eq!(open.messages.len(), 3);
+    assert_eq!(open.messages[0].text, "an old one");
+    assert_eq!(open.picked, Some(1), "still on the one it was on");
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.contains("latest=1700000100.0")),
+        "asked for those before the oldest"
+    );
+    press(app, KeyCode::Char('k'));
+    assert!(app::screen(app, 120, 40).contains("an old one"));
+    // Slack has none older than what it gave: the beginning, said.
+    press(app, KeyCode::Char('k'));
+    assert!(app.status.contains("beginning"), "{}", app.status);
+    assert_eq!(app.chat.open.as_ref().unwrap().messages.len(), 3);
+    // Read again, what was read before stays.
+    press(app, KeyCode::Char('U'));
+    let open = app.chat.open.as_ref().unwrap();
+    assert_eq!(
+        open.messages.len(),
+        3,
+        "the older kept as the newest are read again"
+    );
 }

@@ -152,6 +152,35 @@ impl Slack {
         Ok(messages)
     }
 
+    /// Up to `count` messages of a conversation from before the message
+    /// `ts`, the oldest first.
+    pub fn before(
+        &self,
+        channel: &str,
+        ts: &str,
+        count: usize,
+        people: &People,
+    ) -> anyhow::Result<Vec<Message>> {
+        let limit = count.to_string();
+        let v = self.call(
+            "conversations.history",
+            &[
+                ("channel", channel),
+                ("latest", ts),
+                ("inclusive", "false"),
+                ("limit", &limit),
+            ],
+        )?;
+        let mut messages: Vec<_> = v["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| Message::read(m, people))
+            .collect();
+        messages.reverse();
+        Ok(messages)
+    }
+
     /// All of the thread begun by the message `ts`, in its order.
     pub fn thread(&self, channel: &str, ts: &str, people: &People) -> anyhow::Result<Vec<Message>> {
         let said = self.paged(
