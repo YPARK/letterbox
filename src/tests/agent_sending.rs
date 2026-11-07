@@ -444,3 +444,70 @@ fn a_reply_that_goes_marks_what_it_answers_wherever_it_is_filed_and_learns_it_is
     let learnt: Vec<bool> = server.learnt.iter().map(|t| t.thrown).collect();
     assert_eq!(learnt, [false], "kept, the original alone");
 }
+
+#[test]
+fn what_is_asked_has_no_field_of_its_own_the_programs_yes_and_no_are_the_answer() {
+    let mut server = demo_server(true);
+    let uid = drafted(&mut server, "No field");
+    let script = vec![
+        json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": { "name": "send_draft", "arguments": { "uid": uid } } })
+        .to_string(),
+        json!({ "jsonrpc": "2.0", "id": "letterbox-1", "result": { "action": "accept" } })
+            .to_string(),
+    ];
+    let out = super::agents::Written::default();
+    server
+        .serve(crate::mcp::Io {
+            lines: Box::new(script.into_iter().map(Ok)),
+            out: Box::new(out.clone()),
+        })
+        .unwrap();
+    let written = out.messages();
+    let asked = written
+        .iter()
+        .find(|m| m["method"] == "elicitation/create")
+        .unwrap();
+    let schema = &asked["params"]["requestedSchema"];
+    assert_eq!(schema["properties"], json!({}), "{asked}");
+    assert_eq!(schema["type"], "object", "{asked}");
+    let reply = written.iter().find(|m| m["id"] == 10).unwrap();
+    assert_eq!(
+        reply["result"]["structuredContent"]["sent"], true,
+        "yes alone: {reply}"
+    );
+}
+
+#[test]
+fn a_draft_to_many_is_left_for_the_user_and_not_asked_about() {
+    let to = |n: usize| -> Vec<String> { (0..n).map(|i| format!("p{i}@b.example")).collect() };
+    for (to_count, cc_count, sends) in [(10, 0, true), (6, 4, true), (11, 0, false), (6, 5, false)]
+    {
+        let mut server = demo_server(true);
+        let r = call(
+            &mut server,
+            "draft_message",
+            json!({ "to": to(to_count), "cc": to(cc_count).iter().map(|a| format!("c{a}")).collect::<Vec<_>>(),
+                    "subject": "Many", "body": "Hello" }),
+        );
+        let uid = r["structuredContent"]["uid"].clone();
+        let (asked, r) = answered(
+            &mut server,
+            1,
+            "send_draft",
+            json!({ "uid": uid }),
+            "accept",
+        );
+        assert_eq!(
+            has(&mut server, "Sent", "Many"),
+            sends,
+            "{to_count}+{cc_count}: {r}"
+        );
+        if !sends {
+            assert_eq!(r["isError"], true, "{r}");
+            assert!(r.to_string().contains("more than 10"), "{r}");
+            assert!(asked.is_empty(), "{asked}");
+            assert!(has(&mut server, "Drafts", "Many"));
+        }
+    }
+}

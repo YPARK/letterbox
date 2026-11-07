@@ -666,7 +666,7 @@ have your shell's `PATH`.
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
 | `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
 | `draft_message` | a new letter, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to and how big its files are | writes a draft |
-| `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; the draft then goes to Trash, teaching nothing | sends, once you say yes |
+| `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; never to more than 10 people; the draft then goes to Trash, teaching nothing | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

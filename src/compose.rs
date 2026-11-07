@@ -27,6 +27,10 @@ pub struct Draft {
     pub body: String,
 }
 
+/// Over this many it goes to, a send is asked about once in letterbox, and an
+/// agent does not send it at all.
+pub const MANY: usize = 10;
+
 /// Each file of `draft`, read now: one of `forwarded`, or this machine's.
 pub(crate) fn attached(draft: &Draft, forwarded: &[File]) -> Result<Vec<File>, String> {
     draft

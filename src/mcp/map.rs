@@ -272,7 +272,7 @@ impl Server {
                 mail::clean(&s.preview),
             );
             // As the program closes, what was answered is kept all the same.
-            let result = match self.elicit(&message, schema.clone(), "answer") {
+            let result = match self.elicit(&message, schema.clone(), Some("answer")) {
                 Ok(result) => result,
                 Err(_) if i > 0 => break,
                 Err(e) => return Err(e),

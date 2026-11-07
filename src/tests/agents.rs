@@ -1243,9 +1243,10 @@ fn a_body_that_is_not_ascii_is_quoted_when_the_server_cannot_take_it() {
 fn an_answer_that_is_not_yes_moves_nothing() {
     use serde_json::json;
     for answer in [
-        json!({ "action": "accept" }),
-        json!({ "action": "accept", "content": {} }),
-        json!({ "action": "accept", "content": { "confirm": "false" } }),
+        json!({ "action": "decline" }),
+        json!({ "action": "cancel" }),
+        json!({ "action": "yes" }),
+        json!({}),
     ] {
         let mut server = demo_server(true);
         let before = inbox(&mut server);

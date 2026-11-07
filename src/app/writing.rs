@@ -47,9 +47,6 @@ pub(super) const LARGE: usize = 25 * 1024 * 1024;
 /// all, as a send is asked for deliberately and said in a pop-up as it goes.
 pub const SEND_HOLD: Duration = Duration::ZERO;
 
-/// Over this many it goes to, a send is asked about once.
-pub(super) const MANY: usize = 10;
-
 /// A message sent, held until `until`: its bytes, and what it answers.
 pub struct Holding {
     pub(super) until: Instant,
@@ -531,7 +528,7 @@ impl App {
             said.push("it has no subject".to_string());
         }
         let many = draft.to.len() + draft.cc.len();
-        if many > MANY {
+        if many > compose::MANY {
             said.push(format!("it goes to {many} people"));
         }
         if files.is_empty() && speaks_of_files(&draft.body) {
