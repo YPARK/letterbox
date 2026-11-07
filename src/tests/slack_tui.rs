@@ -547,5 +547,8 @@ fn mail_searched_for_is_shown_in_the_conversations_place() {
     typed(app, "a");
     press(app, KeyCode::Enter);
     app.settle(PATIENCE);
-    assert!(app.chat.open.is_none(), "the conversation let go for what was found");
+    assert!(
+        app.chat.open.is_none(),
+        "the conversation let go for what was found"
+    );
 }

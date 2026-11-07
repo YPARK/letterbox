@@ -40,25 +40,20 @@ impl Message {
 impl Slack {
     /// Everyone in the workspace, by the name they show.
     pub fn people(&self) -> anyhow::Result<People> {
-        let (mut all, mut cursor) = (People::new(), String::new());
-        loop {
-            let v = self.call("users.list", &[("limit", "200"), ("cursor", &cursor)])?;
-            for member in v["members"].as_array().into_iter().flatten() {
-                let Some(id) = member["id"].as_str() else {
-                    continue;
-                };
-                let shown = |name: &str| member["profile"][name].as_str().filter(|s| !s.is_empty());
-                let name = shown("display_name")
-                    .or(shown("real_name"))
-                    .or(member["name"].as_str())
-                    .unwrap_or(id);
-                all.insert(id.to_string(), name.to_string());
-            }
-            cursor = next(&v);
-            if cursor.is_empty() {
-                return Ok(all);
-            }
+        let members = self.paged("users.list", &[], "members")?;
+        let mut all = People::new();
+        for member in &members {
+            let Some(id) = member["id"].as_str() else {
+                continue;
+            };
+            let shown = |name: &str| member["profile"][name].as_str().filter(|s| !s.is_empty());
+            let name = shown("display_name")
+                .or(shown("real_name"))
+                .or(member["name"].as_str())
+                .unwrap_or(id);
+            all.insert(id.to_string(), name.to_string());
         }
+        Ok(all)
     }
 
     /// The last `count` messages of a conversation, the oldest first.
@@ -85,32 +80,16 @@ impl Slack {
 
     /// All of the thread begun by the message `ts`, in its order.
     pub fn thread(&self, channel: &str, ts: &str, people: &People) -> anyhow::Result<Vec<Message>> {
-        let (mut all, mut cursor) = (Vec::new(), String::new());
-        loop {
-            let v = self.call(
-                "conversations.replies",
-                &[
-                    ("channel", channel),
-                    ("ts", ts),
-                    ("limit", "200"),
-                    ("cursor", &cursor),
-                ],
-            )?;
-            let page = v["messages"].as_array().into_iter().flatten();
-            all.extend(page.filter_map(|m| Message::read(m, people)));
-            cursor = next(&v);
-            if cursor.is_empty() {
-                return Ok(all);
-            }
-        }
+        let said = self.paged(
+            "conversations.replies",
+            &[("channel", channel), ("ts", ts)],
+            "messages",
+        )?;
+        Ok(said
+            .iter()
+            .filter_map(|m| Message::read(m, people))
+            .collect())
     }
-}
-
-fn next(v: &Value) -> String {
-    v["response_metadata"]["next_cursor"]
-        .as_str()
-        .unwrap_or("")
-        .to_string()
 }
 
 /// `channels`, with each direct message under the other person's name.
@@ -260,7 +239,5 @@ fn emoji(text: &str) -> String {
 }
 
 fn unescape(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    crate::papers::decode(text)
 }

@@ -2,7 +2,7 @@
 //! conversations, read one, remove it. Nothing here posts anything.
 
 use super::reading::{Message, find, named};
-use super::{Kind, Session, Slack, Workspace, remember, user_token, workspaces};
+use super::{Session, Slack, Workspace, remember, user_token, workspaces};
 use crate::cli::SlackAction;
 use crate::commands::ask_password;
 use crate::secret;
@@ -46,7 +46,8 @@ fn add(config: &Path) -> anyhow::Result<()> {
     if who.domain.is_empty() {
         bail!("Slack did not say which workspace this token is for");
     }
-    let keep = super::keeper_for_new(crate::vault::exists(), &secret::keepers());
+    // The vault, where there is one, as it never asks; else the system's store.
+    let keep = secret::keepers()[0];
     let session = Session {
         domain: who.domain.clone(),
         token,
@@ -75,7 +76,6 @@ fn list(config: &Path) -> anyhow::Result<()> {
         println!("No Slack workspace yet: letterbox slack add");
     }
     for workspace in all {
-        let workspace = settled(config, workspace);
         match Session::kept(&workspace).and_then(|s| Slack::new(s).whoami()) {
             Ok(who) => println!("{}: {} as {}", workspace.domain, who.team, who.user),
             Err(e) => println!("{}: {e:#}", workspace.domain),
@@ -84,30 +84,7 @@ fn list(config: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `workspace`, its tokens moved out of the keychain into the vault, if they
-/// are to be, and said so.
-fn settled(config: &Path, workspace: Workspace) -> Workspace {
-    match super::settle(config, &workspace) {
-        Ok((now, true)) => {
-            eprintln!(
-                "{}: Slack's tokens moved out of the macOS keychain into letterbox's vault",
-                now.domain
-            );
-            now
-        }
-        Ok((now, false)) => now,
-        Err(e) => {
-            eprintln!("{}: left in the keychain: {e:#}", workspace.domain);
-            workspace
-        }
-    }
-}
-
 fn choose(config: &Path, named: Option<&str>) -> anyhow::Result<Workspace> {
-    choose_kept(config, named).map(|w| settled(config, w))
-}
-
-fn choose_kept(config: &Path, named: Option<&str>) -> anyhow::Result<Workspace> {
     let mut all = workspaces(config)?;
     match named {
         Some(name) => all
@@ -129,13 +106,7 @@ fn channels(config: &Path, asked: Option<&str>, json: bool) -> anyhow::Result<()
         return Ok(());
     }
     for channel in channels {
-        let mark = match channel.kind {
-            Kind::Public => "#",
-            Kind::Private => "!",
-            Kind::Direct => "@",
-            Kind::Group => "&",
-        };
-        println!("{mark}{}\t{}", channel.name, channel.id);
+        println!("{}{}\t{}", channel.kind.mark(), channel.name, channel.id);
     }
     Ok(())
 }
@@ -164,9 +135,7 @@ fn read(
 
 /// A message's time, here, from Slack's `1730000000.000100`.
 fn when(ts: &str) -> String {
-    ts.split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
+    super::seconds(ts)
         .and_then(|s| jiff::Timestamp::from_second(s).ok())
         .map(|t| {
             t.to_zoned(jiff::tz::TimeZone::system())

@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::app::chat::Open;
-use crate::slack::Kind;
 use crate::slack::reading::Message as Said;
 
 /// A workspace's heading in the sidebar.
@@ -34,12 +33,7 @@ pub(super) fn head(app: &App, space: usize, width: usize) -> ListItem<'static> {
 pub(super) fn talk(app: &App, space: usize, i: usize, width: usize) -> ListItem<'static> {
     let t = app.theme;
     let talk = &app.chat.spaces[space].talks[i];
-    let mark = match talk.channel.kind {
-        Kind::Public => "#",
-        Kind::Private => "!",
-        Kind::Direct => "@",
-        Kind::Group => "&",
-    };
+    let mark = talk.channel.kind.mark();
     let unread = talk.unread.unwrap_or(0);
     let count = match unread {
         0 => String::new(),
@@ -85,12 +79,7 @@ pub(super) fn more(app: &App, space: usize) -> ListItem<'static> {
 
 /// When a message was, as the list says when mail came.
 fn when(ts: &str) -> String {
-    let Some(at) = ts
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .and_then(|s| Timestamp::from_second(s).ok())
-    else {
+    let Some(at) = crate::slack::seconds(ts).and_then(|s| Timestamp::from_second(s).ok()) else {
         return String::new();
     };
     let here = at.to_zoned(jiff::tz::TimeZone::system());
@@ -158,7 +147,7 @@ pub(super) fn conversation(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(open) = app.chat.open.as_ref() else {
         return;
     };
-    let lines = transcript(&t, open, inner.width as usize, app.focus == Focus::List);
+    let lines = transcript(&t, open, inner.width as usize);
     let lines = match lines {
         Ok((lines, picked_end)) => {
             // The message picked in sight, as near the foot as it can be.
@@ -173,12 +162,7 @@ pub(super) fn conversation(f: &mut Frame, app: &mut App, area: Rect) {
 
 /// The conversation's lines, and where the message picked ends; or what is
 /// said in their place.
-fn transcript(
-    t: &Theme,
-    open: &Open,
-    width: usize,
-    focused: bool,
-) -> Result<(Vec<Line<'static>>, usize), String> {
+fn transcript(t: &Theme, open: &Open, width: usize) -> Result<(Vec<Line<'static>>, usize), String> {
     if open.messages.is_empty() {
         return Err(waiting(open.loading, open.error.as_deref())
             .unwrap_or_else(|| "nothing said here yet".to_string()));
@@ -187,7 +171,7 @@ fn transcript(
     let mut picked_end = 0;
     for (i, message) in open.messages.iter().enumerate() {
         let picked = open.picked == Some(i);
-        lines.extend(said(t, message, width, picked && focused || picked));
+        lines.extend(said(t, message, width, picked));
         if picked {
             picked_end = lines.len();
         }

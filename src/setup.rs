@@ -86,6 +86,25 @@ pub fn move_secrets(
         }
         said.extend(left);
     }
+    for w in crate::slack::workspaces(path)? {
+        if w.keep == to {
+            continue;
+        }
+        let what = format!("Slack, {}", w.domain);
+        let tokens = find(w.keep, crate::slack::KEPT_AT, &w.domain)
+            .with_context(|| format!("cannot read {what}'s tokens"))?;
+        keep(to, crate::slack::KEPT_AT, &w.domain, &tokens)
+            .with_context(|| format!("cannot keep {what}'s tokens"))?;
+        let moved = crate::slack::Workspace {
+            domain: w.domain.clone(),
+            keep: to,
+        };
+        crate::slack::remember(path, &moved)?;
+        said.push(match forget(w.keep, crate::slack::KEPT_AT, &w.domain) {
+            Ok(()) => format!("{what}: kept {}", to.about()),
+            Err(e) => stays(&what, format!("{e:#}")),
+        });
+    }
     Ok(said)
 }
 

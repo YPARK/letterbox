@@ -18,7 +18,7 @@ use std::time::Duration;
 
 const API: &str = "https://slack.com/api";
 /// The "host" a token is kept under in the password store.
-const KEPT_AT: &str = "slack.com";
+pub(crate) const KEPT_AT: &str = "slack.com";
 /// How many times one call is made, while Slack says to slow down.
 const TRIES: usize = 4;
 /// The longest Slack is waited for at a time.
@@ -46,11 +46,7 @@ impl Session {
     /// Keep it in `keep`.
     /// Both tokens are kept together, so they are asked for together.
     pub fn keep(&self, keep: Keeper) -> anyhow::Result<()> {
-        let kept = match &self.app {
-            Some(_) => serde_json::to_string(self)?,
-            None => self.token.clone(),
-        };
-        secret::store(keep, KEPT_AT, &self.domain, &kept)
+        secret::store(keep, KEPT_AT, &self.domain, &serde_json::to_string(self)?)
     }
 
     /// The session kept for a workspace.
@@ -83,73 +79,6 @@ pub fn user_token(typed: &str) -> anyhow::Result<String> {
         bail!("that is not a user token: it starts xoxp-, under your app's OAuth & Permissions");
     }
     Ok(token.to_string())
-}
-
-/// Where a new workspace's tokens are kept: in the vault, where there is
-/// one, as it is never asked about; else the first of `keepers`.
-pub fn keeper_for_new(vault: bool, keepers: &[Keeper]) -> Keeper {
-    if vault {
-        Keeper::Vault
-    } else {
-        keepers.first().copied().unwrap_or(Keeper::Vault)
-    }
-}
-
-/// Where passwords are kept, by functions, for a test to stand in for them.
-#[allow(clippy::type_complexity)]
-pub struct Keeping<'a> {
-    pub find: Box<dyn Fn(Keeper, &str, &str) -> anyhow::Result<String> + 'a>,
-    pub store: Box<dyn Fn(Keeper, &str, &str, &str) -> anyhow::Result<()> + 'a>,
-    pub remove: Box<dyn Fn(Keeper, &str, &str) -> anyhow::Result<()> + 'a>,
-}
-
-/// The workspace's tokens taken out of the system's store into the vault,
-/// where there is a vault and they are in that store: read there one last
-/// time, kept in the vault and read back, the workspace written down as kept
-/// there, and only then taken out. The workspace as it is kept now, and
-/// whether it moved.
-pub fn into_vault(
-    accounts: &Path,
-    workspace: &Workspace,
-    vault: bool,
-    keeping: &Keeping,
-) -> anyhow::Result<(Workspace, bool)> {
-    if workspace.keep != Keeper::Keyring || !vault {
-        return Ok((workspace.clone(), false));
-    }
-    let domain = &workspace.domain;
-    let kept = (keeping.find)(Keeper::Keyring, KEPT_AT, domain)
-        .context("cannot read Slack's tokens in the system's store")?;
-    (keeping.store)(Keeper::Vault, KEPT_AT, domain, &kept)?;
-    if (keeping.find)(Keeper::Vault, KEPT_AT, domain)? != kept {
-        bail!("the vault did not keep Slack's tokens as they were given");
-    }
-    let now = Workspace {
-        domain: domain.clone(),
-        keep: Keeper::Vault,
-    };
-    remember(accounts, &now)?;
-    let _ = (keeping.remove)(Keeper::Keyring, KEPT_AT, domain);
-    Ok((now, true))
-}
-
-/// `workspace`, moved into the vault if it is to be, by the real stores:
-/// the vault opened by its key file if it is not open. A vault that asks for
-/// a passphrase, and is not open, is left as it is.
-pub fn settle(accounts: &Path, workspace: &Workspace) -> anyhow::Result<(Workspace, bool)> {
-    let vault = crate::vault::exists();
-    if vault && !crate::vault::is_open() {
-        match crate::vault::unlock_by_key() {
-            Some(opened) => opened?,
-            None => return Ok((workspace.clone(), false)),
-        }
-    }
-    let keeping = Keeping {
-        find: Box::new(secret::find),
-        store: Box::new(secret::store),
-        remove: Box::new(secret::remove),
-    };
-    into_vault(accounts, workspace, vault, &keeping)
 }
 
 /// A workspace added, by its name in `<name>.slack.com`, and where its token
@@ -215,6 +144,24 @@ pub enum Kind {
     Private,
     Direct,
     Group,
+}
+
+impl Kind {
+    /// The mark a conversation of this kind is shown with, before its name.
+    pub fn mark(self) -> &'static str {
+        match self {
+            Kind::Public => "#",
+            Kind::Private => "!",
+            Kind::Direct => "@",
+            Kind::Group => "&",
+        }
+    }
+}
+
+/// When a message was, in seconds since 1970, from its ID as Slack writes
+/// it, `1730000000.000100`.
+pub fn seconds(ts: &str) -> Option<i64> {
+    ts.split('.').next()?.parse().ok()
 }
 
 /// A conversation: a channel, a direct message, or a group of them. A direct
@@ -360,19 +307,27 @@ impl Slack {
     }
 
     fn conversations(&self, method: &str) -> anyhow::Result<Vec<Channel>> {
+        let found = self.paged(
+            method,
+            &[
+                ("types", "public_channel,private_channel,mpim,im"),
+                ("exclude_archived", "true"),
+            ],
+            "channels",
+        )?;
+        Ok(found.iter().filter_map(Channel::read).collect())
+    }
+
+    /// Every page of what `method` answers, the items under `key` of each
+    /// together, as Slack's cursor leads from one page to the next.
+    fn paged(&self, method: &str, form: &[(&str, &str)], key: &str) -> anyhow::Result<Vec<Value>> {
         let (mut all, mut cursor) = (Vec::new(), String::new());
         loop {
-            let v = self.call(
-                method,
-                &[
-                    ("types", "public_channel,private_channel,mpim,im"),
-                    ("exclude_archived", "true"),
-                    ("limit", "200"),
-                    ("cursor", &cursor),
-                ],
-            )?;
-            if let Some(page) = v["channels"].as_array() {
-                all.extend(page.iter().filter_map(Channel::read));
+            let mut fields = form.to_vec();
+            fields.extend([("limit", "200"), ("cursor", cursor.as_str())]);
+            let v = self.call(method, &fields)?;
+            if let Some(page) = v[key].as_array() {
+                all.extend(page.iter().cloned());
             }
             cursor = v["response_metadata"]["next_cursor"]
                 .as_str()

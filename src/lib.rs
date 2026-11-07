@@ -112,11 +112,6 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 app.recall_look();
                 // Slack's workspaces added, each read beside the mail.
                 for workspace in slack::workspaces(&args.config).unwrap_or_default() {
-                    // Out of the keychain into the vault, once, if it is there.
-                    let workspace = match slack::settle(&args.config, &workspace) {
-                        Ok((now, _)) => now,
-                        Err(_) => workspace,
-                    };
                     match slack::Session::kept(&workspace) {
                         Ok(session) => {
                             let live = session.app.clone();

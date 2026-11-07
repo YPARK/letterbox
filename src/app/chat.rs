@@ -14,8 +14,10 @@ use crate::slack::worker::{self as slack_worker, Answer as Heard, Ask as SlackAs
 pub const SHOWN: usize = 12;
 /// How often the conversation read is read again.
 const READ_AGAIN: Duration = Duration::from_secs(30);
-/// How often the conversations, and what they have unread, are read again.
+/// How often the conversations, and what they have unread, are read again;
+/// and while what happens is heard as it does, which keeps the counts.
 const COUNT_AGAIN: Duration = Duration::from_secs(5 * 60);
+const COUNT_AGAIN_LIVE: Duration = Duration::from_secs(30 * 60);
 
 /// A workspace: its name, its conversations, the busiest first, and what
 /// each has unread, once counted.
@@ -120,13 +122,11 @@ impl Chat {
     }
 
     fn ask(&mut self, space: usize, ask: SlackAsk) {
-        self.pending += if matches!(ask, SlackAsk::Conversations) {
-            2
-        } else {
-            1
-        };
+        // Conversations are answered twice: as they are, and once counted.
+        let whole = matches!(ask, SlackAsk::Conversations);
+        self.pending += if whole { 2 } else { 1 };
         if let Some(s) = self.spaces.get_mut(space) {
-            if matches!(ask, SlackAsk::Conversations) {
+            if whole {
                 s.asked = Instant::now();
             }
             if s.asks.send(ask).is_err() {
@@ -188,13 +188,7 @@ impl App {
             return;
         };
         let id = talk.channel.id.clone();
-        let mark = match talk.channel.kind {
-            crate::slack::Kind::Public => "#",
-            crate::slack::Kind::Private => "! ",
-            crate::slack::Kind::Direct => "@",
-            crate::slack::Kind::Group => "& ",
-        };
-        let name = format!("{mark}{}", talk.channel.name);
+        let name = format!("{}{}", talk.channel.kind.mark(), talk.channel.name);
         if self.chat.open.as_ref().is_some_and(|o| o.id == id) {
             return;
         }
@@ -393,37 +387,29 @@ impl App {
 
     /// The conversation read, and its thread, read again; and the counts.
     fn read_talk_again(&mut self) {
-        let Some(open) = &mut self.chat.open else {
+        let Some(space) = self.read_open_again(|_| true) else {
             return;
         };
-        open.asked = Instant::now();
-        let (space, id) = (open.space, open.id.clone());
-        let thread = open.thread.as_ref().map(|t| t.ts.clone());
-        self.chat.ask(space, SlackAsk::History(id.clone()));
-        if let Some(ts) = thread {
-            self.chat.ask(space, SlackAsk::Thread(id, ts));
-        }
         self.chat.ask(space, SlackAsk::Conversations);
         self.status = "reading Slack again".to_string();
     }
 
-    /// The conversation read, read again for a message come in it; and its
-    /// thread, if the message is of the thread read.
-    fn read_again_for(&mut self, m: &crate::slack::live::Live) {
-        let Some(open) = &mut self.chat.open else {
-            return;
-        };
+    /// The conversation read, read again; and its thread too, if
+    /// `thread_too` says so of the message it began with. Its workspace.
+    fn read_open_again(&mut self, thread_too: impl Fn(&str) -> bool) -> Option<usize> {
+        let open = self.chat.open.as_mut()?;
         open.asked = Instant::now();
         let (space, id) = (open.space, open.id.clone());
         let thread = open
             .thread
             .as_ref()
             .map(|t| t.ts.clone())
-            .filter(|ts| m.thread.as_ref() == Some(ts) || m.ts == *ts);
+            .filter(|ts| thread_too(ts));
         self.chat.ask(space, SlackAsk::History(id.clone()));
         if let Some(ts) = thread {
             self.chat.ask(space, SlackAsk::Thread(id, ts));
         }
+        Some(space)
     }
 
     /// What Slack's threads have answered; whether anything was.
@@ -493,14 +479,7 @@ impl App {
                         self.chat.writing = None;
                         self.status = format!("sent to {name}");
                         if self.chat.open.as_ref().is_some_and(|o| o.id == channel) {
-                            let m = crate::slack::live::Live {
-                                channel,
-                                ts: String::new(),
-                                user: String::new(),
-                                thread,
-                                new: true,
-                            };
-                            self.read_again_for(&m);
+                            self.read_open_again(|ts| thread.as_deref() == Some(ts));
                         }
                     }
                     Err(why) => {
@@ -518,7 +497,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|o| o.space == reply.space && o.id == m.channel);
                 if read_here {
-                    self.read_again_for(&m);
+                    self.read_open_again(|ts| m.thread.as_deref() == Some(ts) || m.ts == ts);
                 } else if m.new && !mine && m.thread.is_none() {
                     let Some(talk) = self.chat.spaces[reply.space]
                         .talks
@@ -586,18 +565,26 @@ impl App {
     }
 
     /// Slack read again where it is due; whether anything was asked.
+    /// Heard as things happen, the conversation read is read again as a
+    /// message comes in it, and counts go up as messages come elsewhere: it is
+    /// not read again on a clock, and the counts are made anew less often.
     pub(super) fn chat_tick(&mut self) -> bool {
         let mut any = false;
-        if let Some(open) = &mut self.chat.open
+        let live = |chat: &Chat, space: usize| chat.spaces.get(space).is_some_and(|s| s.live);
+        if let Some(open) = &self.chat.open
+            && !live(&self.chat, open.space)
             && open.asked.elapsed() >= READ_AGAIN
         {
-            open.asked = Instant::now();
-            let (space, id) = (open.space, open.id.clone());
-            self.chat.ask(space, SlackAsk::History(id));
+            self.read_open_again(|_| false);
             any = true;
         }
         for space in 0..self.chat.spaces.len() {
-            if self.chat.spaces[space].asked.elapsed() >= COUNT_AGAIN {
+            let again = if live(&self.chat, space) {
+                COUNT_AGAIN_LIVE
+            } else {
+                COUNT_AGAIN
+            };
+            if self.chat.spaces[space].asked.elapsed() >= again {
                 self.chat.ask(space, SlackAsk::Conversations);
                 any = true;
             }

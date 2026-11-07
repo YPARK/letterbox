@@ -4,6 +4,7 @@
 
 use super::reading::{Message, People, named};
 use super::{Channel, Slack};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 pub enum Ask {
@@ -40,8 +41,10 @@ pub struct Reply {
     pub answer: Answer,
 }
 
+/// What went wrong, as letterbox says what a server said: nothing in it a
+/// terminal would take as a command.
 fn said(e: anyhow::Error) -> String {
-    format!("{e:#}")
+    crate::worker::text(e)
 }
 
 /// Start asking `slack` for the workspace `space`, answering on `replies`;
@@ -58,11 +61,16 @@ pub fn spawn(
     }
     let (asks, asked) = mpsc::channel();
     let (count, counting) = mpsc::channel::<Vec<Channel>>();
-    let counter = (slack.clone(), replies.clone());
-    std::thread::spawn(move || counts(space, counter.0, counting, counter.1));
+    {
+        let (slack, replies) = (slack.clone(), replies.clone());
+        std::thread::spawn(move || counts(space, slack, counting, replies));
+    }
     std::thread::spawn(move || reads(space, slack, asked, count, replies));
     asks
 }
+
+/// A conversation, or a thread of it, as it is read.
+type Read = Result<Vec<Message>, String>;
 
 fn reads(
     space: usize,
@@ -71,52 +79,67 @@ fn reads(
     count: Sender<Vec<Channel>>,
     replies: Sender<Reply>,
 ) {
+    let say = |answer| replies.send(Reply { space, answer }).is_ok();
+    let nobody = People::new();
     let mut people: Option<People> = None;
-    while let Ok(ask) = asked.recv() {
+    while let Ok(first) = asked.recv() {
+        // What was asked while the last was being answered, answered
+        // together: a conversation, or a thread, read once however often it
+        // was asked, as a burst of messages asks it again for each. What is
+        // sent changes what is read: read anew after it.
+        let mut batch = vec![first];
+        batch.extend(asked.try_iter());
         if people.is_none() {
             people = slack.people().ok();
         }
-        let known = people.clone().unwrap_or_default();
-        let answer = match ask {
-            Ask::Conversations => {
-                let found = slack.mine().map(|mine| {
-                    let mut mine = named(mine, &known);
-                    mine.sort_by_key(|c| std::cmp::Reverse(c.updated));
-                    mine
-                });
-                match &found {
-                    Ok(mine) => {
-                        let _ = count.send(mine.clone());
+        let known = people.as_ref().unwrap_or(&nobody);
+        let mut read: HashMap<(String, Option<String>), Read> = HashMap::new();
+        for ask in batch {
+            let answer = match ask {
+                Ask::Conversations => {
+                    let found = slack.mine().map(|mine| {
+                        let mut mine = named(mine, known);
+                        mine.sort_by_key(|c| std::cmp::Reverse(c.updated));
+                        mine
+                    });
+                    match &found {
+                        Ok(mine) => {
+                            let _ = count.send(mine.clone());
+                        }
+                        // Nothing to count: said counted, all the same.
+                        Err(_) => {
+                            say(Answer::Counted);
+                        }
                     }
-                    // Nothing to count: said counted, all the same.
-                    Err(_) => {
-                        let _ = replies.send(Reply {
-                            space,
-                            answer: Answer::Counted,
-                        });
-                    }
+                    Answer::Conversations(found.map_err(said))
                 }
-                Answer::Conversations(found.map_err(said))
+                Ask::History(id) => {
+                    let got = read
+                        .entry((id.clone(), None))
+                        .or_insert_with(|| slack.messages(&id, HISTORY, known).map_err(said))
+                        .clone();
+                    Answer::History(id, got)
+                }
+                Ask::Thread(id, ts) => {
+                    let got = read
+                        .entry((id.clone(), Some(ts.clone())))
+                        .or_insert_with(|| slack.thread(&id, &ts, known).map_err(said))
+                        .clone();
+                    Answer::Thread(id, ts, got)
+                }
+                Ask::Post {
+                    channel,
+                    thread,
+                    text,
+                } => {
+                    read.clear();
+                    let sent = slack.post(&channel, &text, thread.as_deref()).map_err(said);
+                    Answer::Posted(channel, thread, sent)
+                }
+            };
+            if !say(answer) {
+                return;
             }
-            Ask::History(id) => {
-                let read = slack.messages(&id, HISTORY, &known).map_err(said);
-                Answer::History(id, read)
-            }
-            Ask::Thread(id, ts) => {
-                let read = slack.thread(&id, &ts, &known).map_err(said);
-                Answer::Thread(id, ts, read)
-            }
-            Ask::Post {
-                channel,
-                thread,
-                text,
-            } => {
-                let sent = slack.post(&channel, &text, thread.as_deref()).map_err(said);
-                Answer::Posted(channel, thread, sent)
-            }
-        };
-        if replies.send(Reply { space, answer }).is_err() {
-            return;
         }
     }
 }
@@ -135,30 +158,21 @@ fn hears(space: usize, slack: Slack, token: &str, replies: Sender<Reply>) {
 pub const HISTORY: usize = 100;
 
 fn counts(space: usize, slack: Slack, counting: Receiver<Vec<Channel>>, replies: Sender<Reply>) {
+    let say = |answer| replies.send(Reply { space, answer }).is_ok();
     while let Ok(mut channels) = counting.recv() {
         // Only the latest asked is counted: those before it are older.
         while let Ok(later) = counting.try_recv() {
             channels = later;
-            let _ = replies.send(Reply {
-                space,
-                answer: Answer::Counted,
-            });
+            say(Answer::Counted);
         }
         for channel in channels {
-            if let Ok(n) = slack.unread(&channel) {
-                let answer = Answer::Unread(channel.id.clone(), n);
-                if replies.send(Reply { space, answer }).is_err() {
-                    return;
-                }
+            if let Ok(n) = slack.unread(&channel)
+                && !say(Answer::Unread(channel.id.clone(), n))
+            {
+                return;
             }
         }
-        if replies
-            .send(Reply {
-                space,
-                answer: Answer::Counted,
-            })
-            .is_err()
-        {
+        if !say(Answer::Counted) {
             return;
         }
     }
