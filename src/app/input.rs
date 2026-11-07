@@ -237,6 +237,9 @@ impl App {
         if self.chat.jump.is_some() && !self.dialog.is_open() {
             return self.jump_key(key);
         }
+        if self.chat.search.is_some() && !self.dialog.is_open() {
+            return self.search_key(key);
+        }
         // C-x C-c quits, as Emacs does, and C-x u undoes; C-x and anything
         // else, nothing. C-c C-c does what was chosen in the Inbox looked
         // through; C-c elsewhere, nothing: compose's C-c C-c, pressed once

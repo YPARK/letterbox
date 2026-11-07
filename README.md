@@ -698,6 +698,10 @@ is one, and move with them by `letterbox keep vault` or `keep keyring`. They
 act as you: anyone with the user token reads and writes as you, and anyone
 with both hears what comes as it comes. Keep them as a password.
 
+`/`, in a conversation or the column, searches the workspace, as Slack's
+own search does, newest first: what it finds is listed in the list's
+place, each as who and where, and ⏎ goes to it, picked in its
+conversation, its thread read if it is a reply. Elsewhere `/` is mail's.
 `C-k`, from anywhere but a message being written, goes to a conversation
 by any part of its name, folded away or not: those it begins first, then
 those with anything unread. In letterbox, ⏎ on a conversation reads it in

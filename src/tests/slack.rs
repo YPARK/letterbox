@@ -538,3 +538,42 @@ fn a_page_given_for_a_file_says_what_the_app_needs() {
     );
     assert!(said.contains("files:read"), "{said}");
 }
+
+#[test]
+fn slack_is_searched_and_each_hit_says_where_it_is() {
+    let (base, asked) = server(vec![ok(json!({"ok": true, "messages": {"matches": [
+        {"channel": {"id": "C1", "name": "lab"}, "ts": "5.0", "user": "U1",
+         "text": "the grant &amp; more", "permalink": "https://acme.slack.com/archives/C1/p5"},
+        {"channel": {"id": "D1", "name": "U1", "is_im": true}, "ts": "6.0", "username": "bot",
+         "text": "a reply", "permalink": "https://acme.slack.com/archives/D1/p6?thread_ts=4.0&cid=D1"},
+    ]}}))]);
+    let hits = Slack::at(&base, session())
+        .search("grant", &people())
+        .unwrap();
+    let got: Vec<_> = hits
+        .iter()
+        .map(|h| {
+            (
+                h.channel.as_str(),
+                h.place.as_str(),
+                h.message.who.as_str(),
+                h.message.text.as_str(),
+                h.thread.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("C1", "#lab", "Ana", "the grant & more", None),
+            ("D1", "@Ana", "bot", "a reply", Some("4.0")),
+        ]
+    );
+    let asked = asked.lock().unwrap();
+    assert!(
+        asked[0].starts_with("POST /search.messages "),
+        "{}",
+        asked[0]
+    );
+    assert!(asked[0].contains("query=grant"), "{}", asked[0]);
+}

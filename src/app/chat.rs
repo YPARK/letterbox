@@ -95,6 +95,10 @@ pub struct Open {
     pub picked: Option<usize>,
     pub thread: Option<OpenThread>,
     asked: Instant,
+    /// What a search found, listed in its place: where each message is.
+    pub hits: Option<Vec<crate::slack::reading::Hit>>,
+    /// The message to pick once the conversation is read: one gone to.
+    pick_ts: Option<String>,
 }
 
 pub struct OpenThread {
@@ -128,6 +132,8 @@ pub struct Chat {
     /// A conversation being gone to by name, C-k: what is typed, and which
     /// of those found is picked.
     pub jump: Option<Jump>,
+    /// Slack being searched, `/`: what is typed.
+    pub search: Option<String>,
     pub open: Option<Open>,
     pub writing: Option<Writing>,
     replies: Receiver<slack_worker::Reply>,
@@ -145,6 +151,7 @@ impl Default for Chat {
             row: 0,
             shown: false,
             jump: None,
+            search: None,
             open: None,
             writing: None,
             replies,
@@ -422,6 +429,7 @@ impl App {
                 _ => self.chat_step(10),
             },
             Act::ScreenUp => self.chat_step(-10),
+            Act::Search => self.open_search(),
             _ => self.status = "Slack: ⏎ reads one, K hides the column".to_string(),
         }
         true
@@ -447,6 +455,12 @@ impl App {
         };
         let id = talk.channel.id.clone();
         let name = format!("{}{}", talk.channel.kind.mark(), talk.channel.name);
+        self.open_id(space, id, name);
+    }
+
+    /// Read the conversation `id` of `space`, called `name`, in the list's
+    /// place: one of yours, or one a search found.
+    fn open_id(&mut self, space: usize, id: String, name: String) {
         if self.chat.open.as_ref().is_some_and(|o| o.id == id) {
             return;
         }
@@ -460,8 +474,95 @@ impl App {
             picked: None,
             thread: None,
             asked: Instant::now(),
+            hits: None,
+            pick_ts: None,
         });
         self.chat.ask(space, SlackAsk::History(id));
+    }
+
+    /// `/` in Slack: the box its search is typed in.
+    pub(super) fn open_search(&mut self) {
+        if self.chat.spaces.is_empty() {
+            self.status = "no Slack workspace yet: letterbox slack add".to_string();
+            return;
+        }
+        self.chat.search = Some(String::new());
+    }
+
+    /// A key while a search is typed: ⏎ asks Slack, and lists what it finds
+    /// in the list's place.
+    pub(super) fn search_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(words) = &mut self.chat.search else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.chat.search = None,
+            KeyCode::Char('g') if ctrl => self.chat.search = None,
+            KeyCode::Enter if words.trim().is_empty() => {}
+            KeyCode::Enter => {
+                let words = words.trim().to_string();
+                self.chat.search = None;
+                let space = self.chat.open.as_ref().map_or(0, |o| o.space);
+                self.chat.open = Some(Open {
+                    space,
+                    id: String::new(),
+                    name: format!("Found: {words}"),
+                    messages: Vec::new(),
+                    loading: true,
+                    error: None,
+                    picked: None,
+                    thread: None,
+                    asked: Instant::now(),
+                    hits: Some(Vec::new()),
+                    pick_ts: None,
+                });
+                self.focus = Focus::List;
+                self.chat.ask(space, SlackAsk::Search(words));
+            }
+            _ => {
+                edit_line(words, key);
+            }
+        }
+    }
+
+    /// The message a search found, picked, gone to: its conversation read,
+    /// the message picked once it is, and its thread, if it is a reply.
+    fn go_to_hit(&mut self) {
+        let Some(open) = &self.chat.open else {
+            return;
+        };
+        let Some(hit) = open
+            .picked
+            .and_then(|i| open.hits.as_ref()?.get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let space = open.space;
+        self.chat.open = None;
+        match self.chat.spaces[space]
+            .talks
+            .iter()
+            .position(|t| t.channel.id == hit.channel)
+        {
+            Some(i) => self.read_talk(space, i),
+            None => self.open_id(space, hit.channel.clone(), hit.place.clone()),
+        }
+        if let Some(open) = &mut self.chat.open {
+            open.pick_ts = Some(hit.message.ts.clone());
+            if let Some(ts) = hit.thread.clone() {
+                open.thread = Some(OpenThread {
+                    ts: ts.clone(),
+                    messages: Vec::new(),
+                    loading: true,
+                    error: None,
+                    scroll: 0,
+                });
+                self.chat.ask(space, SlackAsk::Thread(hit.channel, ts));
+            }
+        }
+        self.focus = Focus::List;
     }
 
     /// Mail listed again: the conversation read let go.
@@ -496,8 +597,17 @@ impl App {
             Act::PageUp | Act::ScreenUp => self.talk_pick(-10),
             Act::Top if !reader => self.talk_pick(isize::MIN / 2),
             Act::End if !reader => self.talk_pick(isize::MAX / 2),
+            Act::Search => self.open_search(),
+            Act::Open | Act::Right
+                if !reader && self.chat.open.as_ref().is_some_and(|o| o.hits.is_some()) =>
+            {
+                self.go_to_hit()
+            }
             Act::Open | Act::Right if !reader => self.open_thread(),
             Act::NewMail => self.read_talk_again(),
+            Act::Reply if self.chat.open.as_ref().is_some_and(|o| o.hits.is_some()) => {
+                self.status = "what was found: ⏎ goes to a message, to answer it there".to_string()
+            }
             Act::Reply => self.write_talk(reader),
             Act::Save | Act::SaveAll if !reader => self.save_talk_files(),
             Act::ReplyAll | Act::Forward => {
@@ -669,7 +779,8 @@ impl App {
     /// The conversation read, read again; and its thread too, if
     /// `thread_too` says so of the message it began with. Its workspace.
     fn read_open_again(&mut self, thread_too: impl Fn(&str) -> bool) -> Option<usize> {
-        let open = self.chat.open.as_mut()?;
+        // What a search found is not a conversation to read again.
+        let open = self.chat.open.as_mut().filter(|o| o.hits.is_none())?;
         open.asked = Instant::now();
         let (space, id) = (open.space, open.id.clone());
         let thread = open
@@ -735,6 +846,32 @@ impl App {
                 }
             }
             Heard::Counted => {}
+            Heard::Searched(words, found) => {
+                let Some(open) = self
+                    .chat
+                    .open
+                    .as_mut()
+                    .filter(|o| o.hits.is_some() && o.name == format!("Found: {words}"))
+                else {
+                    return;
+                };
+                open.loading = false;
+                match found {
+                    Ok(hits) => {
+                        open.messages = hits
+                            .iter()
+                            .map(|h| crate::slack::reading::Message {
+                                who: format!("{} · {}", h.message.who, h.place),
+                                ..h.message.clone()
+                            })
+                            .collect();
+                        open.picked = (!hits.is_empty()).then_some(0);
+                        open.hits = Some(hits);
+                        open.error = None;
+                    }
+                    Err(why) => open.error = Some(why),
+                }
+            }
             Heard::Downloaded(name, got) => {
                 let dir = self.save_dir.clone().unwrap_or_else(files::downloads);
                 self.status = match got.and_then(|bytes| {
@@ -808,8 +945,14 @@ impl App {
                             .and_then(|p| open.messages.get(p))
                             .map(|m| m.ts.clone());
                         open.messages = messages;
+                        let gone_to = open
+                            .pick_ts
+                            .take()
+                            .and_then(|ts| open.messages.iter().position(|m| m.ts == ts));
                         open.picked = if open.messages.is_empty() {
                             None
+                        } else if gone_to.is_some() {
+                            gone_to
                         } else if newest {
                             Some(open.messages.len() - 1)
                         } else {
@@ -853,6 +996,7 @@ impl App {
         let mut any = false;
         let live = |chat: &Chat, space: usize| chat.spaces.get(space).is_some_and(|s| s.live);
         if let Some(open) = &self.chat.open
+            && open.hits.is_none()
             && !live(&self.chat, open.space)
             && open.asked.elapsed() >= READ_AGAIN
         {

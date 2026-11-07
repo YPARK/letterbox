@@ -25,6 +25,8 @@ pub enum Ask {
         url: String,
         name: String,
     },
+    /// Slack searched for these words.
+    Search(String),
 }
 
 pub enum Answer {
@@ -35,6 +37,8 @@ pub enum Answer {
     Counted,
     History(String, Result<Vec<Message>, String>),
     Thread(String, String, Result<Vec<Message>, String>),
+    /// What a search found, by its words.
+    Searched(String, Result<Vec<super::reading::Hit>, String>),
     /// A file fetched, by its name: its bytes, or why not.
     Downloaded(String, Result<Vec<u8>, String>),
     /// What was sent, to where, or why it was not.
@@ -133,6 +137,10 @@ fn reads(
                         .or_insert_with(|| slack.thread(&id, &ts, known).map_err(said))
                         .clone();
                     Answer::Thread(id, ts, got)
+                }
+                Ask::Search(words) => {
+                    let found = slack.search(&words, known).map_err(said);
+                    Answer::Searched(words, found)
                 }
                 Ask::Download { url, name } => {
                     Answer::Downloaded(name, slack.download(&url).map_err(said))

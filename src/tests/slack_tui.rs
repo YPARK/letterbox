@@ -81,6 +81,16 @@ fn workspace_posting(posted: Value) -> (String, Arc<Mutex<Vec<String>>>) {
             ("chat.postMessage", posted),
             ("files-pri", json!("the file's bytes")),
             (
+                "search.messages",
+                json!({"ok": true, "messages": {"matches": [
+                    {"channel": {"id": "C00", "name": "ch00"}, "ts": "1700000100.0", "user": "U1",
+                     "text": "hello <@U2>", "permalink": "https://acme.slack.com/archives/C00/p1"},
+                    {"channel": {"id": "C00", "name": "ch00"}, "ts": "1700000200.0", "user": "U2",
+                     "text": "a reply from Bo",
+                     "permalink": "https://acme.slack.com/archives/C00/p2?thread_ts=1700000100.0"},
+                ]}}),
+            ),
+            (
                 "users.list",
                 json!({"ok": true, "members": [
                     {"id": "U1", "name": "ana", "profile": {"display_name": "Ana"}},
@@ -780,4 +790,87 @@ fn s_saves_the_files_of_the_message_picked_where_mail_is_saved() {
     press(app, KeyCode::Char('k'));
     press(app, KeyCode::Char('s'));
     assert!(app.status.contains("no files"), "{}", app.status);
+}
+
+fn search(app: &mut App, words: &str) {
+    press(app, KeyCode::Char('/'));
+    typed(app, words);
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn slash_in_slack_searches_it_and_lists_what_it_finds() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('/'));
+    assert!(app::screen(app, 120, 40).contains("Search Slack"));
+    typed(app, "hello");
+    press(app, KeyCode::Enter);
+    let screen = app::screen(app, 120, 40);
+    assert!(screen.contains("Found: hello"), "{screen}");
+    assert!(
+        screen.contains("Ana · #ch00") && screen.contains("a reply from Bo"),
+        "{screen}"
+    );
+    let searched = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.contains("/search.messages"))
+        .count();
+    assert_eq!(searched, 1);
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.contains("query=hello"))
+    );
+}
+
+#[test]
+fn a_hit_opens_its_conversation_at_it_and_a_replys_its_thread() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    search(app, "hello");
+    // The first found, the message that began the thread.
+    press(app, KeyCode::Char('g'));
+    press(app, KeyCode::Enter);
+    let open = app.chat.open.as_ref().unwrap();
+    assert_eq!(open.id, "C00");
+    let picked = open.picked.map(|i| open.messages[i].ts.clone());
+    assert_eq!(picked.as_deref(), Some("1700000100.0"));
+    // The reply: its thread is read too.
+    search(app, "hello");
+    press(app, KeyCode::Char('G'));
+    press(app, KeyCode::Enter);
+    let open = app.chat.open.as_ref().unwrap();
+    assert_eq!(
+        open.thread.as_ref().map(|t| t.ts.as_str()),
+        Some("1700000100.0")
+    );
+}
+
+#[test]
+fn esc_lets_a_search_go_and_slash_elsewhere_is_mails() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    press(app, KeyCode::Char('/'));
+    typed(app, "x");
+    press(app, KeyCode::Esc);
+    assert!(app.chat.search.is_none());
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.contains("/search.messages"))
+    );
+    app.focus = Focus::Side;
+    press(app, KeyCode::Char('/'));
+    assert!(app.searching, "mail's search, from the mail's sidebar");
+    assert!(app.chat.search.is_none());
 }

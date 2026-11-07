@@ -21,6 +21,59 @@ pub struct Message {
     pub files: Vec<File>,
 }
 
+/// A message found by a search: its conversation, by ID and as shown, the
+/// message, and the thread it is a reply in, if it is one.
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub channel: String,
+    pub place: String,
+    pub message: Message,
+    pub thread: Option<String>,
+}
+
+impl Slack {
+    /// What Slack's own search finds of `words`, the newest first: each
+    /// message with its conversation, by name, and its thread, which only
+    /// its link says.
+    pub fn search(&self, words: &str, people: &People) -> anyhow::Result<Vec<Hit>> {
+        let v = self.call(
+            "search.messages",
+            &[
+                ("query", words),
+                ("count", "50"),
+                ("sort", "timestamp"),
+                ("sort_dir", "desc"),
+            ],
+        )?;
+        let matches = v["messages"]["matches"].as_array().into_iter().flatten();
+        Ok(matches
+            .filter_map(|m| {
+                let channel = &m["channel"];
+                let name = channel["name"].as_str().unwrap_or("");
+                let place = if channel["is_im"].as_bool().unwrap_or(false) {
+                    format!("@{}", people.get(name).map_or(name, String::as_str))
+                } else {
+                    format!("#{name}")
+                };
+                let thread = m["permalink"]
+                    .as_str()
+                    .and_then(|p| url::Url::parse(p).ok())
+                    .and_then(|u| {
+                        u.query_pairs()
+                            .find(|(k, _)| k == "thread_ts")
+                            .map(|(_, v)| v.into_owned())
+                    });
+                Some(Hit {
+                    channel: channel["id"].as_str()?.to_string(),
+                    place,
+                    message: Message::read(m, people)?,
+                    thread,
+                })
+            })
+            .collect())
+    }
+}
+
 /// A file a message came with: its name, its size, and where it is fetched.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct File {

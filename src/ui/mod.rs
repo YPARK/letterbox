@@ -468,6 +468,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.chat.jump.is_some() {
         chat::jump(f, app);
     }
+    if app.chat.search.is_some() {
+        chat::search_box(f, app);
+    }
 }
 
 /// What a click on a hint naming `keys` presses: a key, or two in turn.

@@ -414,3 +414,42 @@ pub(super) fn jump(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(lines), inner);
     app.targets.push((area, Target::Popup));
 }
+
+/// The box Slack's search is typed in.
+pub(super) fn search_box(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
+    let Some(words) = &app.chat.search else {
+        return;
+    };
+    let screen = f.area();
+    let width = 52.min(screen.width);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        y: screen.y + screen.height.saturating_sub(5) / 3,
+        width,
+        height: 5.min(screen.height),
+    };
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(t.accent))
+        .title(Line::styled(
+            " Search Slack ",
+            Style::new().fg(t.accent).bold(),
+        ))
+        .title_bottom(Line::styled(" ⏎ searches · esc ", Style::new().fg(t.faint)))
+        .style(Style::new().bg(t.page));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled(format!(" {words}"), Style::new().fg(t.text)),
+                Span::styled("▏", Style::new().fg(t.accent)),
+            ]),
+        ]),
+        inner,
+    );
+    app.targets.push((area, Target::Popup));
+}
