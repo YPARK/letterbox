@@ -340,7 +340,13 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "draft_message",
             "report_triage",
             "open_letterbox",
-            "mark_message"
+            "mark_message",
+            // Slack's, but sending: this program cannot ask the user yes.
+            "slack_conversations",
+            "slack_read",
+            "slack_search",
+            "slack_find_person",
+            "slack_save_file"
         ]
     );
 

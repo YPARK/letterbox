@@ -67,6 +67,7 @@ mod selecting;
 mod sending;
 mod slack;
 mod slack_live;
+mod slack_mcp;
 mod slack_tui;
 mod teaching;
 mod undoing;

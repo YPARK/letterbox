@@ -316,6 +316,7 @@ impl Server {
             }
             "draft_reply" | "draft_message" => self.draft(name, args),
             "send_draft" => self.send_draft(args),
+            name if name.starts_with("slack_") => self.slack_tool(name, args),
             "report_triage" => {
                 let report = self.report(args)?;
                 let proposed = report.proposals.len();

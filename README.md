@@ -764,6 +764,12 @@ have your shell's `PATH`.
 | `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
 | `draft_message` | a new letter, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to and how big its files are | writes a draft |
 | `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; never to more than 10 people; the draft then goes to Trash, teaching nothing | sends, once you say yes |
+| `slack_conversations` | your Slack channels and people, the busiest first, with their IDs; unread counts if asked | reads |
+| `slack_read` | a Slack conversation's last messages, or a thread, by name or ID, each with who, when, text, replies and files; marks nothing read | reads |
+| `slack_search` | Slack's own search, newest first, each message with where it is and its thread | reads |
+| `slack_find_person` | people whose name holds the words, with your direct messages' conversation with each | reads |
+| `slack_save_file` | a Slack message's files, saved in a folder given or Downloads, under names not yet taken there | writes files |
+| `slack_send` | a Slack message, or a reply in a thread: letterbox shows you where it goes and what it says, and sends it only if you say yes | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

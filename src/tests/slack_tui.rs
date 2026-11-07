@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 /// A server answering each request by the first of `answers` whose every
 /// word is in its first line or its body; the requests it took.
-fn slack(
+pub(super) fn slack(
     answers: impl FnOnce(&str) -> Vec<(&'static str, Value)>,
 ) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -62,7 +62,7 @@ fn slack(
 /// A workspace of one direct message, with Ana, and fourteen channels, each
 /// busy longer ago than the one before; of those only the last, `ch13`, has
 /// anything unread, four messages.
-fn workspace() -> (String, Arc<Mutex<Vec<String>>>) {
+pub(super) fn workspace() -> (String, Arc<Mutex<Vec<String>>>) {
     workspace_posting(json!({"ok": true, "ts": "1700000600.0"}))
 }
 

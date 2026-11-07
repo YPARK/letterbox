@@ -214,7 +214,7 @@ pub(super) fn keep_file(
 }
 
 /// `$LETTERBOX_DOWNLOADS`, else `~/Downloads`.
-pub(super) fn downloads() -> PathBuf {
+pub(crate) fn downloads() -> PathBuf {
     std::env::var_os("LETTERBOX_DOWNLOADS")
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
