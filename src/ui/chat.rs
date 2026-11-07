@@ -203,7 +203,7 @@ fn writing_under(f: &mut Frame, app: &App, area: Rect, in_thread: bool) -> Rect 
     let mut lines: Vec<Line> = Vec::new();
     for (row, line) in w.buffer.lines().iter().enumerate() {
         let mut line = line.clone();
-        if row == w.buffer.row() && !w.asking && !w.sending {
+        if row == w.buffer.row() && !w.sending {
             let at = line
                 .char_indices()
                 .nth(w.buffer.col())
@@ -229,20 +229,9 @@ fn writing_under(f: &mut Frame, app: &App, area: Rect, in_thread: bool) -> Rect 
     };
     let (title, colour) = if w.sending {
         (format!(" Sending to {}{place}… ", w.name), t.dim)
-    } else if w.asking {
-        (
-            format!(
-                " Send this to {}{place} as you? y sends it · n goes back to it ",
-                w.name
-            ),
-            t.flag,
-        )
     } else {
         (
-            format!(
-                " To {}{place} · C-c C-c asks to send it · esc lets it go ",
-                w.name
-            ),
+            format!(" To {}{place} · C-⏎ sends it · esc lets it go ", w.name),
             t.accent,
         )
     };

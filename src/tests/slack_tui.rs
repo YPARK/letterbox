@@ -402,20 +402,17 @@ fn open_ch00(app: &mut App) {
 }
 
 #[test]
-fn a_message_is_written_shown_and_sent_only_on_yes() {
+fn a_message_goes_as_soon_as_it_is_sent_and_is_let_go() {
     let (base, asked) = workspace();
     let app = &mut app_on(&base);
     open_ch00(app);
     press(app, KeyCode::Char('r'));
-    // A y written is written, not taken for a yes.
+    assert!(app::screen(app, 120, 40).contains("To #ch00"));
+    // What is written is written: a y is a y, not a yes.
     typed(app, "yes, hi all");
+    assert!(posts(&asked).is_empty(), "nothing sent while it is written");
     ctrl(app, 'c');
     ctrl(app, 'c');
-    let screen = app::screen(app, 120, 40);
-    assert!(screen.contains("Send this to #ch00"), "{screen}");
-    assert!(screen.contains("yes, hi all"), "{screen}");
-    assert!(posts(&asked).is_empty(), "nothing sent before y");
-    press(app, KeyCode::Char('y'));
     let sent = posts(&asked);
     assert_eq!(sent.len(), 1);
     assert!(
@@ -430,18 +427,12 @@ fn a_message_is_written_shown_and_sent_only_on_yes() {
 }
 
 #[test]
-fn no_goes_back_to_writing_and_esc_lets_it_go() {
+fn esc_lets_what_is_written_go_unsent() {
     let (base, asked) = workspace();
     let app = &mut app_on(&base);
     open_ch00(app);
     press(app, KeyCode::Char('r'));
     typed(app, "draft");
-    ctrl(app, 'c');
-    ctrl(app, 'c');
-    press(app, KeyCode::Char('n'));
-    assert!(app.chat.writing.as_ref().is_some_and(|w| !w.asking));
-    typed(app, " more");
-    assert!(app::screen(app, 120, 40).contains("draft more"));
     press(app, KeyCode::Esc);
     assert!(app.chat.writing.is_none());
     assert!(posts(&asked).is_empty());
@@ -455,11 +446,10 @@ fn a_reply_goes_into_the_thread_read() {
     press(app, KeyCode::Char('k'));
     press(app, KeyCode::Enter);
     press(app, KeyCode::Char('r'));
+    assert!(app::screen(app, 120, 40).contains("in its thread"));
     typed(app, "thanks");
     ctrl(app, 'c');
     ctrl(app, 'c');
-    assert!(app::screen(app, 120, 40).contains("in its thread"));
-    press(app, KeyCode::Char('y'));
     let sent = posts(&asked);
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("thread_ts=1700000100.0"), "{}", sent[0]);
@@ -474,7 +464,6 @@ fn what_could_not_be_sent_is_kept_and_why_said() {
     typed(app, "lost?");
     ctrl(app, 'c');
     ctrl(app, 'c');
-    press(app, KeyCode::Char('y'));
     assert_eq!(posts(&asked).len(), 1);
     let writing = app.chat.writing.as_ref().expect("still written");
     assert_eq!(writing.buffer.text().trim_end(), "lost?");
@@ -482,15 +471,16 @@ fn what_could_not_be_sent_is_kept_and_why_said() {
 }
 
 #[test]
-fn nothing_written_is_not_asked_about() {
+fn nothing_written_is_not_sent() {
     let (base, asked) = workspace();
     let app = &mut app_on(&base);
     open_ch00(app);
     press(app, KeyCode::Char('r'));
     ctrl(app, 'c');
     ctrl(app, 'c');
-    assert!(app.chat.writing.as_ref().is_some_and(|w| !w.asking));
-    press(app, KeyCode::Char('y'));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    app.settle_chat(PATIENCE);
+    assert!(app.chat.writing.is_some(), "still being written");
     assert!(posts(&asked).is_empty());
 }
 
@@ -551,4 +541,30 @@ fn mail_searched_for_is_shown_in_the_conversations_place() {
         app.chat.open.is_none(),
         "the conversation let go for what was found"
     );
+}
+
+#[test]
+fn ctrl_or_alt_enter_sends_and_enter_is_a_new_line() {
+    for held in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        let (base, asked) = workspace();
+        let app = &mut app_on(&base);
+        open_ch00(app);
+        press(app, KeyCode::Char('r'));
+        typed(app, "one");
+        press(app, KeyCode::Enter);
+        typed(app, "two");
+        let writing = app.chat.writing.as_ref().unwrap();
+        assert_eq!(
+            writing.buffer.text().trim_end(),
+            "one\ntwo",
+            "a plain enter is a new line"
+        );
+        assert!(posts(&asked).is_empty());
+        app.key(KeyEvent::new(KeyCode::Enter, held));
+        app.settle_chat(PATIENCE);
+        let sent = posts(&asked);
+        assert_eq!(sent.len(), 1, "{held:?}");
+        assert!(sent[0].contains("text=one%0Atwo"), "{}", sent[0]);
+        assert!(app.chat.writing.is_none());
+    }
 }
