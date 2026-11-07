@@ -497,7 +497,13 @@ impl App {
         }
     }
 
+    /// The message picked in the list; none while a Slack conversation is
+    /// read in its place, so that nothing done to mail acts on mail out of
+    /// sight.
     pub fn current(&self) -> Option<&Listed> {
+        if self.chat.open.is_some() {
+            return None;
+        }
         self.shown.get(self.list.selected()?)
     }
 
@@ -540,13 +546,14 @@ impl App {
         if self.map.mode == Mode::List && self.listing.as_ref().is_none_or(|l| l.view != view) {
             self.map.region = None;
         }
-        self.close_talk();
         self.open_view(view);
     }
 
     /// List `view`: a folder, a role's folders, the map's, or what was
     /// found.
     pub(super) fn open_view(&mut self, view: View) {
+        // Mail listed, in the place of any conversation read.
+        self.close_talk();
         if self.listing.as_ref().is_some_and(|l| l.view == view) {
             return;
         }

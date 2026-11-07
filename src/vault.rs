@@ -170,7 +170,16 @@ fn open_with(passphrase: &str, keyed: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A vault opened by its key file, opened, if it is not yet: nothing is
+/// asked for that. One with a passphrase stays as it is.
+fn open_by_key_if_shut() {
+    if !is_open() {
+        let _ = unlock_by_key();
+    }
+}
+
 pub fn get(host: &str, user: &str) -> anyhow::Result<String> {
+    open_by_key_if_shut();
     let guard = open();
     let Some(v) = guard.as_ref() else {
         bail!("the vault is locked: letterbox asks for its passphrase as it starts");
@@ -182,6 +191,7 @@ pub fn get(host: &str, user: &str) -> anyhow::Result<String> {
 }
 
 pub fn put(host: &str, user: &str, password: &str) -> anyhow::Result<()> {
+    open_by_key_if_shut();
     let mut guard = open();
     let Some(v) = guard.as_mut() else {
         bail!("the vault is locked");
@@ -193,6 +203,7 @@ pub fn put(host: &str, user: &str, password: &str) -> anyhow::Result<()> {
 /// Take the password for `user` at `host` out of the vault; whether it
 /// could be, the vault being open.
 pub fn remove(host: &str, user: &str) -> anyhow::Result<bool> {
+    open_by_key_if_shut();
     let mut guard = open();
     let Some(v) = guard.as_mut() else {
         return Ok(false);

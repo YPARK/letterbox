@@ -493,3 +493,59 @@ fn nothing_written_is_not_asked_about() {
     press(app, KeyCode::Char('y'));
     assert!(posts(&asked).is_empty());
 }
+
+/// The demo's mail, and the workspace beside it.
+fn mail_and_slack(base: &str) -> App {
+    let mut app = App::new(
+        vec![(
+            "Demo".to_string(),
+            Box::new(crate::demo::Demo::new()) as Box<dyn Store>,
+        )],
+        PathBuf::from("/nowhere/accounts.toml"),
+    );
+    app.ledger = scratch_ledger();
+    app.settle(PATIENCE);
+    let session = Session {
+        domain: "acme".into(),
+        token: "xoxp-test".into(),
+        app: None,
+    };
+    app.chat_add("acme".into(), Slack::at(base, session), None);
+    app.settle_chat(PATIENCE);
+    app
+}
+
+#[test]
+fn no_key_from_any_pane_acts_on_the_mail_behind_a_conversation() {
+    let (base, _) = workspace();
+    let app = &mut mail_and_slack(&base);
+    assert!(!app.shown.is_empty(), "mail is listed behind it");
+    app.list.select(Some(0));
+    let seen = app.shown[0].summary.flags.seen;
+    pick_talk(app, "ch00");
+    press(app, KeyCode::Enter);
+    for focus in [Focus::Side, Focus::List, Focus::Reader] {
+        app.focus = focus;
+        for key in ['d', 'e', 'u', '!', 'f'] {
+            press(app, KeyCode::Char(key));
+            app.settle(PATIENCE);
+        }
+    }
+    assert!(app.batch.jobs.is_empty(), "nothing moved");
+    assert_eq!(app.shown[0].summary.flags.seen, seen, "nothing marked");
+    assert!(app.compose.is_none(), "nothing answered");
+}
+
+#[test]
+fn mail_searched_for_is_shown_in_the_conversations_place() {
+    let (base, _) = workspace();
+    let app = &mut mail_and_slack(&base);
+    pick_talk(app, "ch00");
+    press(app, KeyCode::Enter);
+    app.focus = Focus::Side;
+    press(app, KeyCode::Char('/'));
+    typed(app, "a");
+    press(app, KeyCode::Enter);
+    app.settle(PATIENCE);
+    assert!(app.chat.open.is_none(), "the conversation let go for what was found");
+}

@@ -768,3 +768,19 @@ fn accounts_are_checked_with_the_vault_opened_by_its_key() {
     assert!(!said.contains("locked"), "{said}");
     crate::vault::lock();
 }
+
+#[test]
+fn a_vault_opened_by_its_key_opens_itself_when_first_asked() {
+    let _held = VAULT_AT.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    // SAFETY: tests that read it hold VAULT_AT.
+    unsafe { std::env::set_var("LETTERBOX_VAULT", dir.path().join("vault.age")) };
+    crate::vault::lock();
+    crate::vault::make_key().unwrap();
+    crate::vault::lock();
+    // Nothing opened it, as nothing does before a Slack token is kept.
+    crate::vault::put("slack.com", "acme", "xoxp-1").unwrap();
+    crate::vault::lock();
+    assert_eq!(crate::vault::get("slack.com", "acme").unwrap(), "xoxp-1");
+    crate::vault::lock();
+}
