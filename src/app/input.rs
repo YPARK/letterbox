@@ -329,6 +329,9 @@ impl App {
         if self.review_act(act) {
             return;
         }
+        if self.talk_act(act) {
+            return;
+        }
         if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
             return;
         }
@@ -415,6 +418,9 @@ impl App {
             },
             Act::Open => match self.focus {
                 Focus::Side if self.rows.get(self.row) == Some(&Row::Add) => self.open_form(),
+                Focus::Side if matches!(self.rows.get(self.row), Some(&Row::TalkMore(_))) => {
+                    self.fold()
+                }
                 Focus::Side => {
                     self.due = None;
                     self.open_row(true);

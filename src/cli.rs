@@ -43,6 +43,34 @@ pub(super) struct Which {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum SlackAction {
+    /// Add a workspace, by the User OAuth Token of your app there
+    Add,
+    /// The conversations of a workspace
+    Channels {
+        #[arg(long, short)]
+        workspace: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a conversation, by its name or ID, without marking it read
+    Read {
+        /// As `letterbox slack channels` lists it: `lab`, `#lab`, `@Ana`, or its ID
+        conversation: String,
+        /// A whole thread, by the message that began it
+        #[arg(long)]
+        thread: Option<String>,
+        /// How many of the last messages
+        #[arg(long, short = 'n', default_value_t = 20)]
+        count: usize,
+        #[arg(long, short)]
+        workspace: Option<String>,
+    },
+    /// Forget a workspace and its token here
+    Remove { workspace: String },
+}
+
+#[derive(Subcommand)]
 pub(super) enum Command {
     /// The accounts set up, and where; add and remove them
     Accounts {
@@ -138,6 +166,12 @@ pub(super) enum Command {
     Trash {
         #[command(subcommand)]
         action: TrashAction,
+    },
+    /// Slack, by the token of an app of your own: the workspaces added, and
+    /// what they hold. It only reads, for now
+    Slack {
+        #[command(subcommand)]
+        action: Option<SlackAction>,
     },
     /// Serve the mail to an AI agent over MCP, on stdin and stdout: its
     /// program, as Cursor or Claude Code, runs `letterbox mcp`

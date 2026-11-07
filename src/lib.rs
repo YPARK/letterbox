@@ -36,6 +36,7 @@ mod pick;
 mod report;
 mod secret;
 mod setup;
+mod slack;
 mod smtp;
 mod store;
 mod theme;
@@ -109,6 +110,15 @@ fn command(args: &Args) -> anyhow::Result<()> {
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
+                // Slack's workspaces added, each read beside the mail.
+                for workspace in slack::workspaces(&args.config).unwrap_or_default() {
+                    match slack::Session::kept(&workspace) {
+                        Ok(session) => {
+                            app.chat_add(workspace.domain.clone(), slack::Slack::new(session))
+                        }
+                        Err(e) => app.status = format!("Slack, {}: {e:#}", workspace.domain),
+                    }
+                }
                 // What looks like junk asked about, unless turned off: told of first.
                 let path = args.config.with_file_name("filter");
                 let now = jiff::Timestamp::now().as_second();
@@ -295,6 +305,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             *dry_run,
             *yes,
         ),
+        Some(Command::Slack { action }) => slack::commands::run(&args.config, action.as_ref()),
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
         Some(Command::Filter {
             action: FilterAction::Auto { state },

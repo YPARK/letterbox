@@ -4,6 +4,7 @@
 //! in two, one of them at a time.
 
 mod blocks;
+mod chat;
 mod dialogs;
 pub(crate) mod files;
 mod foot;
@@ -234,6 +235,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if list_w > 0 {
         if app.map.mode == crate::map::Mode::Map {
             map_pane(f, app, list);
+        } else if app.chat.open.is_some() {
+            chat::conversation(f, app, list);
         } else {
             menu_under = messages(f, app, list).map(|y| (list, y));
         }
@@ -255,6 +258,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if reading {
         if app.reviewing() {
             menu_under = review_pane(f, app, read).map(|y| (read, y));
+        } else if app.chat.open.is_some() {
+            chat::thread(f, app, read, edge);
         } else {
             reader(f, app, read, edge);
         }

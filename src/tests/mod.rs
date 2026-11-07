@@ -65,6 +65,8 @@ mod saving_drafts;
 mod searching;
 mod selecting;
 mod sending;
+mod slack;
+mod slack_tui;
 mod teaching;
 mod undoing;
 mod writing;

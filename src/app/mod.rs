@@ -5,6 +5,7 @@
 mod agent;
 mod bringing;
 mod bulk;
+pub mod chat;
 mod checking;
 mod choosing;
 mod dialog;
@@ -236,6 +237,11 @@ pub enum Row {
     Map,
     Cluster(u32),
     Loners,
+    /// A Slack workspace's heading, a conversation of it by its place, and
+    /// the row that shows every one of them, or a few again.
+    SlackHead(usize),
+    Talk(usize, usize),
+    TalkMore(usize),
 }
 
 pub enum Body {
@@ -571,6 +577,8 @@ pub struct App {
     typesetting: Option<crate::pages::Place>,
     /// How many lists of papers paperstack has been asked of.
     papers_asked: u64,
+    /// Slack's workspaces, and the conversation read, if one is.
+    pub chat: chat::Chat,
 }
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -852,6 +860,7 @@ impl App {
             #[cfg(feature = "pages")]
             typesetting: None,
             papers_asked: 0,
+            chat: chat::Chat::default(),
         };
         for (name, store) in stores {
             let a = app.join(name, store);
@@ -949,6 +958,7 @@ impl App {
             self.take_reply(reply);
             any = true;
         }
+        any |= self.chat_pump();
         self.map_due();
         any
     }
@@ -1133,6 +1143,7 @@ impl App {
             any = true;
         }
         self.read_agenda();
+        any |= self.chat_tick();
         self.take_reports() || any
     }
 

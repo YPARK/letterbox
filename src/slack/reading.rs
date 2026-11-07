@@ -1,0 +1,225 @@
+//! Reading a conversation: who said what, in plain text. Asking for messages
+//! this way does not mark them read in Slack.
+
+use super::{Channel, Kind, Slack};
+use anyhow::bail;
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+
+/// The name each user ID goes by.
+pub type People = HashMap<String, String>;
+
+/// One message: its time as Slack writes it, which is also its ID; who wrote
+/// it; its text; and how many replies it has.
+#[derive(Debug, Clone, Serialize)]
+pub struct Message {
+    pub ts: String,
+    pub who: String,
+    pub text: String,
+    pub replies: u64,
+}
+
+impl Message {
+    fn read(v: &Value, people: &People) -> Option<Message> {
+        let who = v["user"]
+            .as_str()
+            .map(|id| people.get(id).map_or(id, String::as_str))
+            .or(v["bot_profile"]["name"].as_str())
+            .or(v["username"].as_str())
+            .unwrap_or("");
+        Some(Message {
+            ts: v["ts"].as_str()?.to_string(),
+            who: who.to_string(),
+            text: plain(v["text"].as_str().unwrap_or(""), people),
+            replies: v["reply_count"].as_u64().unwrap_or(0),
+        })
+    }
+}
+
+impl Slack {
+    /// Everyone in the workspace, by the name they show.
+    pub fn people(&self) -> anyhow::Result<People> {
+        let (mut all, mut cursor) = (People::new(), String::new());
+        loop {
+            let v = self.call("users.list", &[("limit", "200"), ("cursor", &cursor)])?;
+            for member in v["members"].as_array().into_iter().flatten() {
+                let Some(id) = member["id"].as_str() else {
+                    continue;
+                };
+                let shown = |name: &str| member["profile"][name].as_str().filter(|s| !s.is_empty());
+                let name = shown("display_name")
+                    .or(shown("real_name"))
+                    .or(member["name"].as_str())
+                    .unwrap_or(id);
+                all.insert(id.to_string(), name.to_string());
+            }
+            cursor = next(&v);
+            if cursor.is_empty() {
+                return Ok(all);
+            }
+        }
+    }
+
+    /// The last `count` messages of a conversation, the oldest first.
+    pub fn messages(
+        &self,
+        channel: &str,
+        count: usize,
+        people: &People,
+    ) -> anyhow::Result<Vec<Message>> {
+        let limit = count.to_string();
+        let v = self.call(
+            "conversations.history",
+            &[("channel", channel), ("limit", &limit)],
+        )?;
+        let mut messages: Vec<_> = v["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| Message::read(m, people))
+            .collect();
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// All of the thread begun by the message `ts`, in its order.
+    pub fn thread(&self, channel: &str, ts: &str, people: &People) -> anyhow::Result<Vec<Message>> {
+        let (mut all, mut cursor) = (Vec::new(), String::new());
+        loop {
+            let v = self.call(
+                "conversations.replies",
+                &[
+                    ("channel", channel),
+                    ("ts", ts),
+                    ("limit", "200"),
+                    ("cursor", &cursor),
+                ],
+            )?;
+            let page = v["messages"].as_array().into_iter().flatten();
+            all.extend(page.filter_map(|m| Message::read(m, people)));
+            cursor = next(&v);
+            if cursor.is_empty() {
+                return Ok(all);
+            }
+        }
+    }
+}
+
+fn next(v: &Value) -> String {
+    v["response_metadata"]["next_cursor"]
+        .as_str()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// `channels`, with each direct message under the other person's name.
+pub fn named(mut channels: Vec<Channel>, people: &People) -> Vec<Channel> {
+    for channel in &mut channels {
+        if channel.kind == Kind::Direct
+            && let Some(name) = people.get(&channel.name)
+        {
+            channel.name = name.clone();
+        }
+    }
+    channels
+}
+
+/// The conversation asked for: by its ID, or by its name or a part of it, in
+/// any case, `#lab` or `@Ana` to say which kind. A whole name goes before a
+/// part of one; where several fit, they are said, not guessed between.
+pub fn find<'a>(channels: &'a [Channel], asked: &str) -> anyhow::Result<&'a Channel> {
+    if let Some(channel) = channels.iter().find(|c| c.id == asked) {
+        return Ok(channel);
+    }
+    let bare = asked.trim_start_matches(['#', '@']).to_lowercase();
+    if bare.is_empty() {
+        bail!("no conversation {asked}: see letterbox slack channels");
+    }
+    let fitting: Vec<_> = channels
+        .iter()
+        .filter(|c| match asked.chars().next() {
+            Some('@') => c.kind == Kind::Direct,
+            Some('#') => c.kind != Kind::Direct,
+            _ => true,
+        })
+        .collect();
+    let whole: Vec<_> = fitting
+        .iter()
+        .filter(|c| c.name.to_lowercase() == bare)
+        .copied()
+        .collect();
+    let found = if whole.is_empty() {
+        fitting
+            .iter()
+            .filter(|c| c.name.to_lowercase().contains(&bare))
+            .copied()
+            .collect()
+    } else {
+        whole
+    };
+    match found[..] {
+        [] => bail!("no conversation {asked}: see letterbox slack channels"),
+        [channel] => Ok(channel),
+        _ => {
+            let names: Vec<_> = found
+                .iter()
+                .take(10)
+                .map(|c| format!("{} ({})", c.name, c.id))
+                .collect();
+            bail!("{asked} could be any of: {}", names.join(", "))
+        }
+    }
+}
+
+/// `text`, as Slack writes it, as it reads: names for IDs, links as words and
+/// addresses, no escapes. What strangers wrote can hold no terminal controls.
+pub fn plain(text: &str, people: &People) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('<') {
+        let (before, from) = rest.split_at(start);
+        out.push_str(&unescape(before));
+        let Some(end) = from.find('>') else {
+            rest = from;
+            break;
+        };
+        out.push_str(&markup(&from[1..end], people));
+        rest = &from[end + 1..];
+    }
+    out.push_str(&unescape(rest));
+    out.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
+
+/// What one `<...>` of Slack's says.
+fn markup(inner: &str, people: &People) -> String {
+    let (target, label) = match inner.split_once('|') {
+        Some((target, label)) => (target, Some(unescape(label))),
+        None => (inner, None),
+    };
+    if let Some(id) = target.strip_prefix('@') {
+        return format!("@{}", people.get(id).map_or(id, String::as_str));
+    }
+    if let Some(id) = target.strip_prefix('#') {
+        return format!("#{}", label.unwrap_or_else(|| id.to_string()));
+    }
+    if let Some(what) = target.strip_prefix('!') {
+        return label.unwrap_or_else(|| format!("@{what}"));
+    }
+    let address = unescape(target);
+    if let Some(mail) = address.strip_prefix("mailto:") {
+        return label.unwrap_or_else(|| mail.to_string());
+    }
+    match label {
+        Some(label) if label != address => format!("{label} ({address})"),
+        _ => address,
+    }
+}
+
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
