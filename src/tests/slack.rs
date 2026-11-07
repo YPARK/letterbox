@@ -442,3 +442,94 @@ fn a_message_not_let_go_says_what_the_app_needs() {
     );
     assert!(said.contains("chat:write"), "{said}");
 }
+
+#[test]
+fn a_new_workspace_is_kept_in_the_vault_where_there_is_one() {
+    use crate::secret::Keeper::{Keyring, Vault};
+    assert_eq!(slack::keeper_for_new(true, &[Keyring, Vault]), Vault);
+    assert_eq!(slack::keeper_for_new(false, &[Keyring, Vault]), Keyring);
+    assert_eq!(slack::keeper_for_new(false, &[Vault]), Vault);
+}
+
+/// A password store in memory, each kept by where, host and user.
+type Kept = std::cell::RefCell<std::collections::HashMap<(Keeper, String, String), String>>;
+
+fn keeping(kept: &Kept) -> slack::Keeping<'_> {
+    slack::Keeping {
+        find: Box::new(move |k, h, u| {
+            kept.borrow()
+                .get(&(k, h.to_string(), u.to_string()))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("none"))
+        }),
+        store: Box::new(move |k, h, u, p| {
+            kept.borrow_mut()
+                .insert((k, h.to_string(), u.to_string()), p.to_string());
+            Ok(())
+        }),
+        remove: Box::new(move |k, h, u| {
+            kept.borrow_mut().remove(&(k, h.to_string(), u.to_string()));
+            Ok(())
+        }),
+    }
+}
+
+#[test]
+fn a_workspace_kept_in_the_keychain_moves_to_the_vault_and_leaves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let accounts = dir.path().join("accounts.toml");
+    let acme = Workspace {
+        domain: "acme".into(),
+        keep: Keeper::Keyring,
+    };
+    slack::remember(&accounts, &acme).unwrap();
+    let kept = Kept::default();
+    let at = |k| (k, "slack.com".to_string(), "acme".to_string());
+    kept.borrow_mut().insert(
+        at(Keeper::Keyring),
+        r#"{"domain":"acme","token":"xoxp-1","app":"xapp-1"}"#.into(),
+    );
+    let (now, moved) = slack::into_vault(&accounts, &acme, true, &keeping(&kept)).unwrap();
+    assert!(moved);
+    assert_eq!(now.keep, Keeper::Vault);
+    assert_eq!(slack::workspaces(&accounts).unwrap(), std::slice::from_ref(&now));
+    let kept = kept.into_inner();
+    assert!(
+        kept[&at(Keeper::Vault)].contains("xapp-1"),
+        "both tokens moved"
+    );
+    assert!(
+        !kept.contains_key(&at(Keeper::Keyring)),
+        "gone from the keychain"
+    );
+}
+
+#[test]
+fn nothing_moves_without_a_vault_or_out_of_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let accounts = dir.path().join("accounts.toml");
+    let kept = Kept::default();
+    for (keep, vault) in [(Keeper::Keyring, false), (Keeper::Vault, true)] {
+        let w = Workspace {
+            domain: "acme".into(),
+            keep,
+        };
+        let (now, moved) = slack::into_vault(&accounts, &w, vault, &keeping(&kept)).unwrap();
+        assert!(!moved);
+        assert_eq!(now, w);
+    }
+}
+
+#[test]
+fn what_cannot_be_read_in_the_keychain_is_not_taken_out_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let accounts = dir.path().join("accounts.toml");
+    let acme = Workspace {
+        domain: "acme".into(),
+        keep: Keeper::Keyring,
+    };
+    slack::remember(&accounts, &acme).unwrap();
+    let kept = Kept::default();
+    assert!(slack::into_vault(&accounts, &acme, true, &keeping(&kept)).is_err());
+    assert_eq!(slack::workspaces(&accounts).unwrap(), [acme]);
+}

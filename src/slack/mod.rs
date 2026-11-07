@@ -85,6 +85,73 @@ pub fn user_token(typed: &str) -> anyhow::Result<String> {
     Ok(token.to_string())
 }
 
+/// Where a new workspace's tokens are kept: in the vault, where there is
+/// one, as it is never asked about; else the first of `keepers`.
+pub fn keeper_for_new(vault: bool, keepers: &[Keeper]) -> Keeper {
+    if vault {
+        Keeper::Vault
+    } else {
+        keepers.first().copied().unwrap_or(Keeper::Vault)
+    }
+}
+
+/// Where passwords are kept, by functions, for a test to stand in for them.
+#[allow(clippy::type_complexity)]
+pub struct Keeping<'a> {
+    pub find: Box<dyn Fn(Keeper, &str, &str) -> anyhow::Result<String> + 'a>,
+    pub store: Box<dyn Fn(Keeper, &str, &str, &str) -> anyhow::Result<()> + 'a>,
+    pub remove: Box<dyn Fn(Keeper, &str, &str) -> anyhow::Result<()> + 'a>,
+}
+
+/// The workspace's tokens taken out of the system's store into the vault,
+/// where there is a vault and they are in that store: read there one last
+/// time, kept in the vault and read back, the workspace written down as kept
+/// there, and only then taken out. The workspace as it is kept now, and
+/// whether it moved.
+pub fn into_vault(
+    accounts: &Path,
+    workspace: &Workspace,
+    vault: bool,
+    keeping: &Keeping,
+) -> anyhow::Result<(Workspace, bool)> {
+    if workspace.keep != Keeper::Keyring || !vault {
+        return Ok((workspace.clone(), false));
+    }
+    let domain = &workspace.domain;
+    let kept = (keeping.find)(Keeper::Keyring, KEPT_AT, domain)
+        .context("cannot read Slack's tokens in the system's store")?;
+    (keeping.store)(Keeper::Vault, KEPT_AT, domain, &kept)?;
+    if (keeping.find)(Keeper::Vault, KEPT_AT, domain)? != kept {
+        bail!("the vault did not keep Slack's tokens as they were given");
+    }
+    let now = Workspace {
+        domain: domain.clone(),
+        keep: Keeper::Vault,
+    };
+    remember(accounts, &now)?;
+    let _ = (keeping.remove)(Keeper::Keyring, KEPT_AT, domain);
+    Ok((now, true))
+}
+
+/// `workspace`, moved into the vault if it is to be, by the real stores:
+/// the vault opened by its key file if it is not open. A vault that asks for
+/// a passphrase, and is not open, is left as it is.
+pub fn settle(accounts: &Path, workspace: &Workspace) -> anyhow::Result<(Workspace, bool)> {
+    let vault = crate::vault::exists();
+    if vault && !crate::vault::is_open() {
+        match crate::vault::unlock_by_key() {
+            Some(opened) => opened?,
+            None => return Ok((workspace.clone(), false)),
+        }
+    }
+    let keeping = Keeping {
+        find: Box::new(secret::find),
+        store: Box::new(secret::store),
+        remove: Box::new(secret::remove),
+    };
+    into_vault(accounts, workspace, vault, &keeping)
+}
+
 /// A workspace added, by its name in `<name>.slack.com`, and where its token
 /// is kept.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

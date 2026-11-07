@@ -46,9 +46,7 @@ fn add(config: &Path) -> anyhow::Result<()> {
     if who.domain.is_empty() {
         bail!("Slack did not say which workspace this token is for");
     }
-    let keep = *secret::keepers()
-        .first()
-        .context("nowhere to keep the token")?;
+    let keep = super::keeper_for_new(crate::vault::exists(), &secret::keepers());
     let session = Session {
         domain: who.domain.clone(),
         token,
@@ -77,6 +75,7 @@ fn list(config: &Path) -> anyhow::Result<()> {
         println!("No Slack workspace yet: letterbox slack add");
     }
     for workspace in all {
+        let workspace = settled(config, workspace);
         match Session::kept(&workspace).and_then(|s| Slack::new(s).whoami()) {
             Ok(who) => println!("{}: {} as {}", workspace.domain, who.team, who.user),
             Err(e) => println!("{}: {e:#}", workspace.domain),
@@ -85,7 +84,30 @@ fn list(config: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `workspace`, its tokens moved out of the keychain into the vault, if they
+/// are to be, and said so.
+fn settled(config: &Path, workspace: Workspace) -> Workspace {
+    match super::settle(config, &workspace) {
+        Ok((now, true)) => {
+            eprintln!(
+                "{}: Slack's tokens moved out of the macOS keychain into letterbox's vault",
+                now.domain
+            );
+            now
+        }
+        Ok((now, false)) => now,
+        Err(e) => {
+            eprintln!("{}: left in the keychain: {e:#}", workspace.domain);
+            workspace
+        }
+    }
+}
+
 fn choose(config: &Path, named: Option<&str>) -> anyhow::Result<Workspace> {
+    choose_kept(config, named).map(|w| settled(config, w))
+}
+
+fn choose_kept(config: &Path, named: Option<&str>) -> anyhow::Result<Workspace> {
     let mut all = workspaces(config)?;
     match named {
         Some(name) => all

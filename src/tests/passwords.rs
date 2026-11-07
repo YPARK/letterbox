@@ -888,3 +888,12 @@ fn a_private_file_replaced_is_never_found_gone_nor_half_there() {
     let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
     assert_eq!(left.len(), 1, "{left:?}");
 }
+
+#[test]
+fn the_vault_comes_first_where_there_is_one_never_asking_as_the_system_does() {
+    use crate::secret::{Keeper, order};
+    assert_eq!(order(true, true), [Keeper::Vault, Keeper::Keyring]);
+    assert_eq!(order(false, true), [Keeper::Keyring, Keeper::Vault]);
+    assert_eq!(order(true, false), [Keeper::Vault]);
+    assert_eq!(order(false, false), [Keeper::Vault]);
+}
