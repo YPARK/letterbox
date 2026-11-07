@@ -7,6 +7,8 @@ pub enum Target {
     Search,
     Side,
     Row(usize),
+    /// A row of Slack's column, by its place.
+    ChatRow(usize),
     List,
     Message(usize),
     Reader,

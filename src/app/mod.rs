@@ -111,6 +111,8 @@ pub enum Focus {
     Side,
     List,
     Reader,
+    /// Slack's column, at the right, while `K` shows it.
+    Chat,
 }
 
 /// Where the message read is put, as `\` turns it: beside the list, below
@@ -237,11 +239,6 @@ pub enum Row {
     Map,
     Cluster(u32),
     Loners,
-    /// A Slack workspace's heading, a conversation of it by its place, and
-    /// the row that shows every one of them, or a few again.
-    SlackHead(usize),
-    Talk(usize, usize),
-    TalkMore(usize),
 }
 
 pub enum Body {

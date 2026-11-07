@@ -10,6 +10,41 @@ use crate::slack::Slack;
 use crate::slack::reading::Message as Said;
 use crate::slack::worker::{self as slack_worker, Answer as Heard, Ask as SlackAsk};
 
+/// The two parts of a workspace in Slack's column.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Part {
+    Channels,
+    /// Direct messages, and messages to a few people together.
+    People,
+}
+
+impl Part {
+    fn of(kind: crate::slack::Kind) -> Part {
+        match kind {
+            crate::slack::Kind::Direct | crate::slack::Kind::Group => Part::People,
+            _ => Part::Channels,
+        }
+    }
+}
+
+/// A row of Slack's column: a workspace's heading; the heading of its
+/// channels or its people; a conversation of it, by its place; and the row
+/// that shows every one, or a few again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChatRow {
+    Head(usize),
+    Section(usize, Part),
+    Talk(usize, usize),
+    More(usize),
+}
+
+impl ChatRow {
+    /// Whether the row may be picked: not a heading.
+    fn picks(&self) -> bool {
+        matches!(self, ChatRow::Talk(..) | ChatRow::More(_))
+    }
+}
+
 /// How many conversations of a workspace are shown, folded.
 pub const SHOWN: usize = 12;
 /// How often the conversation read is read again.
@@ -77,6 +112,10 @@ pub struct Writing {
 
 pub struct Chat {
     pub spaces: Vec<Space>,
+    /// Slack's column: its rows, the one picked, and whether it is shown.
+    pub rows: Vec<ChatRow>,
+    pub row: usize,
+    pub shown: bool,
     pub open: Option<Open>,
     pub writing: Option<Writing>,
     replies: Receiver<slack_worker::Reply>,
@@ -90,6 +129,9 @@ impl Default for Chat {
         let (replies_to, replies) = mpsc::channel();
         Chat {
             spaces: Vec::new(),
+            rows: Vec::new(),
+            row: 0,
+            shown: false,
             open: None,
             writing: None,
             replies,
@@ -151,21 +193,145 @@ impl App {
             asked: Instant::now(),
         });
         self.chat.ask(space, SlackAsk::Conversations);
-        self.rebuild();
+        self.chat_rebuild();
     }
 
-    /// The sidebar's rows of Slack, each workspace's.
-    pub(super) fn chat_rows(&self) -> Vec<Row> {
+    /// The rows of Slack's column: each workspace's heading, its channels
+    /// and its people, each under their own heading, and the row that shows
+    /// every one of them, or a few again.
+    fn chat_rows(&self) -> Vec<ChatRow> {
         let mut rows = Vec::new();
         for (s, space) in self.chat.spaces.iter().enumerate() {
-            rows.push(Row::SlackHead(s));
+            rows.push(ChatRow::Head(s));
             let shown = self.chat.shown(s);
-            rows.extend(shown.iter().map(|&i| Row::Talk(s, i)));
+            for part in [Part::Channels, Part::People] {
+                let these: Vec<usize> = shown
+                    .iter()
+                    .copied()
+                    .filter(|&i| Part::of(space.talks[i].channel.kind) == part)
+                    .collect();
+                if !these.is_empty() {
+                    rows.push(ChatRow::Section(s, part));
+                    rows.extend(these.into_iter().map(|i| ChatRow::Talk(s, i)));
+                }
+            }
             if space.unfolded || shown.len() < space.talks.len() {
-                rows.push(Row::TalkMore(s));
+                rows.push(ChatRow::More(s));
             }
         }
         rows
+    }
+
+    /// Slack's column again, the row picked kept; else its first conversation.
+    pub(super) fn chat_rebuild(&mut self) {
+        let picked = self.chat.rows.get(self.chat.row).copied();
+        self.chat.rows = self.chat_rows();
+        self.chat.row = picked
+            .and_then(|p| self.chat.rows.iter().position(|r| *r == p))
+            .or_else(|| self.chat.rows.iter().position(ChatRow::picks))
+            .unwrap_or(0);
+    }
+
+    /// Whether Slack's column is shown: asked for, and something to show.
+    pub fn chat_shown(&self) -> bool {
+        self.chat.shown && !self.chat.spaces.is_empty()
+    }
+
+    /// Whether the message's pane has something to go to: a message read,
+    /// or a conversation, whose thread is read there.
+    pub(super) fn has_reader(&self) -> bool {
+        self.reading.is_some() || self.chat.open.is_some()
+    }
+
+    /// `K`: Slack's column shown, and gone to; or hidden again.
+    pub(super) fn toggle_chat(&mut self) {
+        if self.chat.spaces.is_empty() {
+            self.status = "no Slack workspace yet: letterbox slack add".to_string();
+            return;
+        }
+        self.chat.shown = !self.chat.shown;
+        if self.chat.shown {
+            self.focus = Focus::Chat;
+            self.status = "Slack: ⏎ reads one, K hides it".to_string();
+        } else if self.focus == Focus::Chat {
+            self.focus = Focus::Side;
+        }
+    }
+
+    /// Move through Slack's column, past its headings.
+    pub(super) fn chat_step(&mut self, by: isize) {
+        let rows = &self.chat.rows;
+        let mut at = self.chat.row;
+        let mut moved = 0;
+        while moved < by.unsigned_abs() {
+            let Some(next) = at
+                .checked_add_signed(by.signum())
+                .filter(|&n| n < rows.len())
+            else {
+                break;
+            };
+            at = next;
+            if rows[at].picks() {
+                self.chat.row = at;
+                moved += 1;
+            }
+        }
+    }
+
+    /// The row picked in Slack's column opened: a conversation read in the
+    /// list's place, from the map too; a heading or more, every one shown.
+    fn chat_open_row(&mut self) {
+        match self.chat.rows.get(self.chat.row).copied() {
+            Some(ChatRow::Talk(s, i)) => {
+                if self.map.mode == Mode::Map {
+                    self.looked_now();
+                    self.map.mode = Mode::List;
+                    self.map.region = None;
+                }
+                self.open_talk(s, i);
+                self.focus = Focus::List;
+            }
+            Some(ChatRow::Head(s) | ChatRow::More(s)) => self.chat_fold(s),
+            _ => {}
+        }
+    }
+
+    /// A click on a row of Slack's column.
+    pub(super) fn chat_click(&mut self, at: usize) {
+        self.focus = Focus::Chat;
+        if at < self.chat.rows.len() {
+            self.chat.row = at;
+            self.chat_open_row();
+        }
+    }
+
+    /// What a key does in Slack's column: whether it was taken. Those that
+    /// act on mail do nothing here.
+    pub(super) fn chat_column_act(&mut self, act: Act) -> bool {
+        match act {
+            Act::Help
+            | Act::Calendar
+            | Act::NextPane
+            | Act::PreviousPane
+            | Act::Left
+            | Act::Slack
+            | Act::Undo
+            | Act::Back => return false,
+            Act::Down => self.chat_step(1),
+            Act::Up => self.chat_step(-1),
+            Act::PageDown => self.chat_step(10),
+            Act::PageUp => self.chat_step(-10),
+            Act::Top => self.chat_step(isize::MIN / 2),
+            Act::End => self.chat_step(isize::MAX / 2),
+            Act::Open | Act::Right => self.chat_open_row(),
+            Act::ScreenDown => match self.chat.rows.get(self.chat.row).copied() {
+                Some(ChatRow::Head(s) | ChatRow::More(s)) => self.chat_fold(s),
+                _ => self.chat_step(10),
+            },
+            Act::ScreenUp => self.chat_step(-10),
+            _ => self.status = "Slack: ⏎ reads one, K hides the column".to_string(),
+        }
+        true
     }
 
     /// Every conversation of `space` shown, or a few again.
@@ -178,7 +344,7 @@ impl App {
                 format!("the busiest conversations of {} shown", s.name)
             };
         }
-        self.rebuild();
+        self.chat_rebuild();
     }
 
     /// Read the conversation `i` of `space`, in the list's place.
@@ -214,7 +380,7 @@ impl App {
     /// whether it was taken. Those that would act on mail are taken too,
     /// and do nothing.
     pub(super) fn talk_act(&mut self, act: Act) -> bool {
-        if self.focus == Focus::Side || self.chat.open.is_none() {
+        if matches!(self.focus, Focus::Side | Focus::Chat) || self.chat.open.is_none() {
             return false;
         }
         let reader = self.focus == Focus::Reader;
@@ -430,19 +596,19 @@ impl App {
                     .collect();
                 space.loading = false;
                 space.error = None;
-                self.rebuild();
+                self.chat_rebuild();
             }
             Heard::Conversations(Err(why)) => {
                 space.loading = false;
                 space.error = Some(why);
-                self.rebuild();
+                self.chat_rebuild();
             }
             Heard::Unread(id, n) => {
                 if let Some(talk) = space.talks.iter_mut().find(|t| t.channel.id == id) {
                     let shown_before = talk.unread.is_some_and(|u| u > 0);
                     talk.unread = Some(n);
                     if shown_before != (n > 0) {
-                        self.rebuild();
+                        self.chat_rebuild();
                     }
                 }
             }
@@ -493,7 +659,7 @@ impl App {
                     let was = talk.unread.unwrap_or(0);
                     talk.unread = Some(was + 1);
                     if was == 0 {
-                        self.rebuild();
+                        self.chat_rebuild();
                     }
                 }
             }

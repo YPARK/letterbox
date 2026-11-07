@@ -372,8 +372,6 @@ impl App {
                 }
             }
         }
-        let chat = self.chat_rows();
-        self.rows.extend(chat);
         if let Some(s) = &self.map.snapshot
             && !s.groups.is_empty()
         {
@@ -419,7 +417,6 @@ impl App {
                 (a, Some(i))
             }
             Some(&Row::Folder(a, _) | &Row::Account(a)) => (a, None),
-            Some(&Row::SlackHead(s) | &Row::TalkMore(s)) => return self.chat_fold(s),
             _ => return,
         };
         self.fold_at(a, i);
@@ -520,11 +517,6 @@ impl App {
     /// List what is picked in the sidebar, as it was if it was listed
     /// before, and ask for its newest messages.
     pub(super) fn open_folder(&mut self) {
-        match self.rows.get(self.row).copied() {
-            Some(Row::Talk(s, i)) => return self.open_talk(s, i),
-            Some(Row::SlackHead(_) | Row::TalkMore(_)) => return,
-            _ => {}
-        }
         let view = match self.rows.get(self.row) {
             Some(&Row::Folder(a, i)) => {
                 let Some(folder) = self.accounts[a].folders.get(i) else {
@@ -646,7 +638,7 @@ impl App {
                 Some(Row::Map) => return self.map.focused = Focused::All,
                 Some(Row::Cluster(id)) => return self.map.focused = Focused::Cluster(id),
                 Some(Row::Loners) => return self.map.focused = Focused::Loners,
-                Some(Row::Folder(..) | Row::All(_) | Row::Talk(..)) if go => {
+                Some(Row::Folder(..) | Row::All(_)) if go => {
                     self.looked_now();
                     self.map.mode = Mode::List;
                     self.map.region = None;
@@ -1094,8 +1086,6 @@ impl App {
                             | Row::Map
                             | Row::Cluster(_)
                             | Row::Loners
-                            | Row::Talk(..)
-                            | Row::TalkMore(_)
                     ) {
                         self.row = at;
                         break;
@@ -1105,6 +1095,7 @@ impl App {
             }
             Focus::List => self.pick(by),
             Focus::Reader => self.scroll_by(by),
+            Focus::Chat => self.chat_step(by),
         }
     }
 
@@ -1161,6 +1152,7 @@ impl App {
                 }
                 self.more();
             }
+            Focus::Chat => self.chat_step(if end { isize::MAX / 2 } else { isize::MIN / 2 }),
             _ => {}
         }
     }

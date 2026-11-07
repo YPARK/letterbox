@@ -630,9 +630,11 @@ never waits on a server.
 
 ## Slack
 
-Slack's conversations are in the sidebar too, under a SLACK heading for
-each workspace: yours, the busiest first, a dozen shown and the rest
-folded but for those with anything unread. Each workspace is read by an
+Slack's conversations are in a column of their own at the right, which
+`K` shows and hides: a SLACK heading for each workspace, its CHANNELS and
+its PEOPLE, yours, the busiest first, a dozen shown and the rest folded
+but for those with anything unread. Tab goes round to it; in a narrow
+window it has the screen while it has the focus. Each workspace is read by an
 app of your own there, made once, as no app made by letterbox could be:
 Slack limits what one app read for many may do.
 

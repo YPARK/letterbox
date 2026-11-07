@@ -2,10 +2,56 @@
 //! place, its newest last as Slack has it, and a thread in the message's.
 
 use super::*;
-use crate::app::chat::Open;
+use crate::app::chat::{ChatRow, Open, Part};
 use crate::slack::reading::Message as Said;
 
-/// A workspace's heading in the sidebar.
+/// Slack's column, at the right: each workspace's heading, its channels and
+/// its people, and the row that shows every one.
+pub(super) fn column(f: &mut Frame, app: &mut App, area: Rect) {
+    let t = app.theme;
+    let block = Block::new()
+        .borders(Borders::LEFT)
+        .border_style(Style::new().fg(t.rule))
+        .style(Style::new().bg(t.side));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let width = inner.width as usize;
+    let items: Vec<ListItem> = app
+        .chat
+        .rows
+        .iter()
+        .map(|row| match *row {
+            ChatRow::Head(s) => head(app, s, width),
+            ChatRow::Section(_, part) => {
+                let name = match part {
+                    Part::Channels => " CHANNELS",
+                    Part::People => " PEOPLE",
+                };
+                ListItem::new(Line::styled(name, Style::new().fg(t.faint).bold()))
+            }
+            ChatRow::Talk(s, i) => talk(app, s, i, width),
+            ChatRow::More(s) => more(app, s),
+        })
+        .collect();
+    let picked = if app.focus == Focus::Chat {
+        Style::new().bg(t.focus)
+    } else {
+        Style::new().bg(t.row)
+    };
+    let mut state = ListState::default().with_selected(Some(app.chat.row));
+    f.render_stateful_widget(List::new(items).highlight_style(picked), inner, &mut state);
+    let heights: Vec<u16> = app
+        .chat
+        .rows
+        .iter()
+        .map(|r| if matches!(r, ChatRow::Head(_)) { 2 } else { 1 })
+        .collect();
+    for (i, row) in super::list::rows(inner, state.offset(), &heights) {
+        app.targets.push((row, Target::ChatRow(i)));
+    }
+}
+
+/// A workspace's heading in Slack's column.
 pub(super) fn head(app: &App, space: usize, width: usize) -> ListItem<'static> {
     let t = app.theme;
     let s = &app.chat.spaces[space];

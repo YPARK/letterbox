@@ -333,6 +333,9 @@ impl App {
         if self.review_act(act) {
             return;
         }
+        if self.focus == Focus::Chat && self.chat_column_act(act) {
+            return;
+        }
         if self.talk_act(act) {
             return;
         }
@@ -351,6 +354,7 @@ impl App {
             Act::Help => self.dialog = Dialog::Help(0),
             Act::Calendar => self.dialog = Dialog::Calendar(0),
             Act::People => self.open_people(),
+            Act::Slack => self.toggle_chat(),
             Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
             Act::Search => {
@@ -388,23 +392,31 @@ impl App {
                     Focus::List
                 };
             }
+            // Round the panes, and Slack's column at the right where it is
+            // shown; the message's pane where a message, or a thread, is read.
             Act::NextPane => {
+                let (reader, chat) = (self.has_reader(), self.chat_shown());
                 self.focus = match self.focus {
                     Focus::Side => Focus::List,
-                    Focus::List if self.reading.is_some() => Focus::Reader,
-                    Focus::List | Focus::Reader => Focus::Side,
+                    Focus::List if reader => Focus::Reader,
+                    Focus::List | Focus::Reader if chat => Focus::Chat,
+                    Focus::List | Focus::Reader | Focus::Chat => Focus::Side,
                 }
             }
             Act::PreviousPane => {
+                let (reader, chat) = (self.has_reader(), self.chat_shown());
                 self.focus = match self.focus {
-                    Focus::Side if self.reading.is_some() => Focus::Reader,
-                    Focus::Side | Focus::Reader => Focus::List,
+                    Focus::Side if chat => Focus::Chat,
+                    Focus::Side | Focus::Chat if reader => Focus::Reader,
+                    Focus::Side | Focus::Chat | Focus::Reader => Focus::List,
                     Focus::List => Focus::Side,
                 }
             }
             Act::Left => {
                 self.focus = match self.focus {
                     Focus::Reader => Focus::List,
+                    Focus::Chat if self.has_reader() => Focus::Reader,
+                    Focus::Chat => Focus::List,
                     _ => Focus::Side,
                 }
             }
@@ -422,9 +434,6 @@ impl App {
             },
             Act::Open => match self.focus {
                 Focus::Side if self.rows.get(self.row) == Some(&Row::Add) => self.open_form(),
-                Focus::Side if matches!(self.rows.get(self.row), Some(&Row::TalkMore(_))) => {
-                    self.fold()
-                }
                 Focus::Side => {
                     self.due = None;
                     self.open_row(true);
@@ -669,6 +678,7 @@ impl App {
                 self.step(by);
                 self.focus = before;
             }
+            Some(Target::ChatRow(_)) => self.chat_step(by),
             Some(Target::List | Target::Message(_)) => self.pick(by),
             Some(Target::Reader) => self.scroll_by(3 * by),
             // The wheel on the Inbox looked through goes along it.
@@ -693,6 +703,7 @@ impl App {
             }
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
+            Some(Target::ChatRow(i)) => self.chat_click(i),
             Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {
                 self.row = i;
                 self.open_form();

@@ -299,9 +299,6 @@ pub(super) fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                     matches!(listed, Some(View::Loners)),
                 )
             }
-            Row::SlackHead(s) => super::chat::head(app, s, width),
-            Row::Talk(s, i) => super::chat::talk(app, s, i, width),
-            Row::TalkMore(s) => super::chat::more(app, s),
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(app.row));
@@ -322,10 +319,7 @@ pub(super) fn sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|r| {
-            if matches!(
-                r,
-                Row::Everyone | Row::Account(_) | Row::Add | Row::MapHead | Row::SlackHead(_)
-            ) {
+            if matches!(r, Row::Everyone | Row::Account(_) | Row::Add | Row::MapHead) {
                 2
             } else {
                 1

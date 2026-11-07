@@ -134,6 +134,7 @@ fn app_on(base: &str) -> App {
     };
     app.chat_add("acme".into(), Slack::at(base, session), None);
     app.settle_chat(PATIENCE);
+    app.chat.shown = true;
     app
 }
 
@@ -144,42 +145,50 @@ fn press(app: &mut App, code: KeyCode) {
 
 /// The conversations in the sidebar, by name, and a row for those folded.
 fn talks(app: &App) -> Vec<String> {
-    app.rows
+    use crate::app::chat::{ChatRow, Part};
+    app.chat
+        .rows
         .iter()
-        .filter_map(|r| match *r {
-            app::Row::SlackHead(_) => Some("SLACK".to_string()),
-            app::Row::Talk(s, i) => Some(app.chat.spaces[s].talks[i].channel.name.clone()),
-            app::Row::TalkMore(_) => Some("more".to_string()),
-            _ => None,
+        .map(|r| match *r {
+            ChatRow::Head(_) => "SLACK".to_string(),
+            ChatRow::Section(_, Part::Channels) => "CHANNELS".to_string(),
+            ChatRow::Section(_, Part::People) => "PEOPLE".to_string(),
+            ChatRow::Talk(s, i) => app.chat.spaces[s].talks[i].channel.name.clone(),
+            ChatRow::More(_) => "more".to_string(),
         })
         .collect()
 }
 
 fn pick_talk(app: &mut App, name: &str) {
-    app.focus = Focus::Side;
-    app.row = app
+    app.focus = Focus::Chat;
+    app.chat.row = app
+        .chat
         .rows
         .iter()
         .position(|r| {
-            matches!(*r, app::Row::Talk(s, i) if app.chat.spaces[s].talks[i].channel.name == name)
+            matches!(*r, crate::app::chat::ChatRow::Talk(s, i)
+                if app.chat.spaces[s].talks[i].channel.name == name)
         })
         .unwrap();
 }
 
 #[test]
-fn the_sidebar_has_the_busiest_conversations_and_any_unread() {
+fn the_column_has_the_busiest_channels_and_people_and_any_unread() {
     let (base, _) = workspace();
     let app = &mut app_on(&base);
-    let mut want = vec!["SLACK".to_string(), "Ana".to_string()];
+    let mut want = vec!["SLACK".to_string(), "CHANNELS".to_string()];
     want.extend((0..11).map(|i| format!("ch{i:02}")));
-    want.extend(["ch13".to_string(), "more".to_string()]);
+    want.extend(["ch13", "PEOPLE", "Ana", "more"].map(String::from));
     assert_eq!(talks(app), want);
     let screen = app::screen(app, 120, 40);
     assert!(screen.contains("SLACK"), "{screen}");
-    // Its row in the sidebar, not the panes beside it.
+    // Its row in the column, at the right, past every pane.
     let ch13 = screen.lines().find(|l| l.contains("ch13")).unwrap();
-    let side = ch13.split('│').next().unwrap();
-    assert!(side.trim_end().ends_with('4'), "{ch13}");
+    let column = ch13.rsplit('│').next().unwrap();
+    assert!(
+        column.contains("ch13") && column.trim_end().ends_with('4'),
+        "{ch13}"
+    );
     assert!(screen.contains("2 more"), "{screen}");
 }
 
@@ -187,17 +196,96 @@ fn the_sidebar_has_the_busiest_conversations_and_any_unread() {
 fn every_conversation_is_shown_once_asked_and_folded_again() {
     let (base, _) = workspace();
     let app = &mut app_on(&base);
-    app.focus = Focus::Side;
-    app.row = app
+    app.focus = Focus::Chat;
+    app.chat.row = app
+        .chat
         .rows
         .iter()
-        .position(|r| matches!(r, app::Row::TalkMore(_)))
+        .position(|r| matches!(r, crate::app::chat::ChatRow::More(_)))
         .unwrap();
     press(app, KeyCode::Enter);
-    assert_eq!(talks(app).len(), 1 + 15 + 1);
+    assert_eq!(talks(app).len(), 3 + 15 + 1);
     assert!(app::screen(app, 120, 40).contains("fewer"));
     press(app, KeyCode::Enter);
-    assert_eq!(talks(app).len(), 1 + 13 + 1);
+    assert_eq!(talks(app).len(), 3 + 13 + 1);
+}
+
+#[test]
+fn k_shows_the_slack_column_beside_the_mail_and_hides_it() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    app.chat.shown = false;
+    app.focus = Focus::Side;
+    assert!(
+        !app::screen(app, 120, 40).contains("SLACK"),
+        "hidden at first"
+    );
+    press(app, KeyCode::Char('K'));
+    assert_eq!(app.focus, Focus::Chat);
+    let screen = app::screen(app, 120, 40);
+    assert!(
+        screen.contains("SLACK · ACME") && screen.contains("CHANNELS") && screen.contains("PEOPLE")
+    );
+    // In its own column, not in the mail's sidebar.
+    let ch00 = screen.lines().find(|l| l.contains("ch00")).unwrap();
+    assert!(ch00.rsplit('│').next().unwrap().contains("ch00"), "{ch00}");
+    press(app, KeyCode::Char('K'));
+    assert_eq!(app.focus, Focus::Side);
+    assert!(!app::screen(app, 120, 40).contains("CHANNELS"));
+}
+
+#[test]
+fn tab_goes_round_the_panes_and_the_slack_column() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    app.focus = Focus::Side;
+    let mut went = Vec::new();
+    for _ in 0..3 {
+        press(app, KeyCode::Tab);
+        went.push(app.focus);
+    }
+    assert_eq!(went, [Focus::List, Focus::Chat, Focus::Side]);
+}
+
+#[test]
+fn a_narrow_window_gives_the_column_the_screen_while_it_has_the_focus() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    app.focus = Focus::Chat;
+    assert!(app::screen(app, 60, 30).contains("CHANNELS"));
+    app.focus = Focus::List;
+    assert!(!app::screen(app, 60, 30).contains("CHANNELS"));
+}
+
+#[test]
+fn a_click_on_a_conversation_reads_it() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    app::screen(app, 120, 40);
+    let at = app
+        .chat
+        .rows
+        .iter()
+        .position(|r| {
+            matches!(*r, crate::app::chat::ChatRow::Talk(s, i)
+                if app.chat.spaces[s].talks[i].channel.name == "ch00")
+        })
+        .unwrap();
+    let rect = app
+        .targets
+        .iter()
+        .find(|(_, t)| *t == app::Target::ChatRow(at))
+        .map(|(r, _)| *r)
+        .expect("a target for the row");
+    app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 2,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.settle_chat(PATIENCE);
+    assert!(app.chat.open.as_ref().is_some_and(|o| o.id == "C00"));
+    assert_eq!(app.focus, Focus::List);
 }
 
 #[test]
@@ -502,6 +590,7 @@ fn mail_and_slack(base: &str) -> App {
     };
     app.chat_add("acme".into(), Slack::at(base, session), None);
     app.settle_chat(PATIENCE);
+    app.chat.shown = true;
     app
 }
 
@@ -514,7 +603,7 @@ fn no_key_from_any_pane_acts_on_the_mail_behind_a_conversation() {
     let seen = app.shown[0].summary.flags.seen;
     pick_talk(app, "ch00");
     press(app, KeyCode::Enter);
-    for focus in [Focus::Side, Focus::List, Focus::Reader] {
+    for focus in [Focus::Side, Focus::List, Focus::Reader, Focus::Chat] {
         app.focus = focus;
         for key in ['d', 'e', 'u', '!', 'f'] {
             press(app, KeyCode::Char(key));
