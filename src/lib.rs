@@ -36,6 +36,7 @@ mod pick;
 mod report;
 mod secret;
 mod setup;
+mod slack;
 mod smtp;
 mod store;
 mod theme;
@@ -109,6 +110,16 @@ fn command(args: &Args) -> anyhow::Result<()> {
             } else {
                 app.look_file = Some(args.config.with_file_name("look"));
                 app.recall_look();
+                // Slack's workspaces added, each read beside the mail.
+                for workspace in slack::workspaces(&args.config).unwrap_or_default() {
+                    match slack::Session::kept(&workspace) {
+                        Ok(session) => {
+                            let live = session.app.clone();
+                            app.chat_add(workspace.domain.clone(), slack::Slack::new(session), live)
+                        }
+                        Err(e) => app.status = format!("Slack, {}: {e:#}", workspace.domain),
+                    }
+                }
                 // What looks like junk asked about, unless turned off: told of first.
                 let path = args.config.with_file_name("filter");
                 let now = jiff::Timestamp::now().as_second();
@@ -178,16 +189,14 @@ fn command(args: &Args) -> anyhow::Result<()> {
                 return Ok(());
             }
             println!("{}", args.config.display());
-            for a in accounts {
-                print!("  {}: {} at {}:{}", a.name, a.user(), a.host, a.port());
-                if *check {
-                    let name = a.name.clone();
-                    match imap::Imap::new(a).folders() {
-                        Ok(f) => print!(" — signed in, {} folders", f.len()),
-                        Err(e) => print!(" — {name} cannot connect: {}", worker::text(e)),
-                    }
+            if *check {
+                for line in check_accounts(&args.config)? {
+                    println!("{line}");
                 }
-                println!();
+                return Ok(());
+            }
+            for a in accounts {
+                println!("  {}: {} at {}:{}", a.name, a.user(), a.host, a.port());
             }
             Ok(())
         }
@@ -295,6 +304,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             *dry_run,
             *yes,
         ),
+        Some(Command::Slack { action }) => slack::commands::run(&args.config, action.as_ref()),
         Some(Command::Mcp) => mcp::Server::new(&args.config, args.demo)?.run(),
         Some(Command::Filter {
             action: FilterAction::Auto { state },

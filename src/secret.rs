@@ -10,7 +10,9 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 /// Where a password is kept.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Keeper {
     /// The system's own store: the keychain, or the Secret Service.
@@ -38,15 +40,21 @@ impl Keeper {
     }
 }
 
-/// Where a password may be kept here: the system's store first, where
-/// there is one.
+/// Where a password may be kept here, the first the one taken unless
+/// another is chosen: letterbox's vault, where there is one, as the system
+/// never asks about it, as macOS's keychain does each time letterbox is
+/// built or installed anew; else the system's store, where there is one.
 pub fn keepers() -> Vec<Keeper> {
-    let mut all = Vec::new();
-    if keyring::Entry::store_status().is_ok() {
-        all.push(Keeper::Keyring);
+    order(vault::exists(), keyring::Entry::store_status().is_ok())
+}
+
+/// The order `keepers` gives, with a vault or not, a system's store or not.
+pub fn order(vault: bool, system: bool) -> Vec<Keeper> {
+    match (vault, system) {
+        (true, true) => vec![Keeper::Vault, Keeper::Keyring],
+        (false, true) => vec![Keeper::Keyring, Keeper::Vault],
+        (_, false) => vec![Keeper::Vault],
     }
-    all.push(Keeper::Vault);
-    all
 }
 
 fn entry(host: &str, user: &str) -> anyhow::Result<keyring::Entry> {

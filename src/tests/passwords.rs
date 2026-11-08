@@ -888,3 +888,46 @@ fn a_private_file_replaced_is_never_found_gone_nor_half_there() {
     let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
     assert_eq!(left.len(), 1, "{left:?}");
 }
+
+#[test]
+fn the_vault_comes_first_where_there_is_one_never_asking_as_the_system_does() {
+    use crate::secret::{Keeper, order};
+    assert_eq!(order(true, true), [Keeper::Vault, Keeper::Keyring]);
+    assert_eq!(order(false, true), [Keeper::Keyring, Keeper::Vault]);
+    assert_eq!(order(true, false), [Keeper::Vault]);
+    assert_eq!(order(false, false), [Keeper::Vault]);
+}
+
+#[test]
+fn slack_workspaces_move_with_every_other_password_and_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.toml");
+    let map = dir.path().join("map");
+    let at = |k| (k, "slack.com", "acme-keep");
+    crate::slack::remember(
+        &path,
+        &crate::slack::Workspace {
+            domain: "acme-keep".into(),
+            keep: Keeper::Keyring,
+        },
+    )
+    .unwrap();
+    let (k, h, u) = at(Keeper::Keyring);
+    fake_keep(k, h, u, "xoxp-kept").unwrap();
+    for (to, from) in [
+        (Keeper::Vault, Keeper::Keyring),
+        (Keeper::Keyring, Keeper::Vault),
+    ] {
+        let said =
+            crate::setup::move_secrets(&path, &map, to, fake_find, fake_keep, fake_forget).unwrap();
+        assert!(
+            said.iter().any(|l| l.starts_with("Slack, acme-keep: kept")),
+            "{said:?}"
+        );
+        assert_eq!(crate::slack::workspaces(&path).unwrap()[0].keep, to);
+        let (k, h, u) = at(to);
+        assert_eq!(fake_find(k, h, u).unwrap(), "xoxp-kept");
+        let (k, h, u) = at(from);
+        assert!(fake_find(k, h, u).is_err(), "gone from where it was");
+    }
+}

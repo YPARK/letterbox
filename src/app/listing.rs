@@ -494,7 +494,13 @@ impl App {
         }
     }
 
+    /// The message picked in the list; none while a Slack conversation is
+    /// read in its place, so that nothing done to mail acts on mail out of
+    /// sight.
     pub fn current(&self) -> Option<&Listed> {
+        if self.chat.open.is_some() {
+            return None;
+        }
         self.shown.get(self.list.selected()?)
     }
 
@@ -538,6 +544,8 @@ impl App {
     /// List `view`: a folder, a role's folders, the map's, or what was
     /// found.
     pub(super) fn open_view(&mut self, view: View) {
+        // Mail listed, in the place of any conversation read.
+        self.close_talk();
         if self.listing.as_ref().is_some_and(|l| l.view == view) {
             return;
         }
@@ -1087,6 +1095,7 @@ impl App {
             }
             Focus::List => self.pick(by),
             Focus::Reader => self.scroll_by(by),
+            Focus::Chat => self.chat_step(by),
         }
     }
 
@@ -1143,6 +1152,7 @@ impl App {
                 }
                 self.more();
             }
+            Focus::Chat => self.chat_step(if end { isize::MAX / 2 } else { isize::MIN / 2 }),
             _ => {}
         }
     }

@@ -81,7 +81,7 @@ fn the_foot_and_the_help_come_from_the_table() {
         assert!(foot.contains(&hint), "{hint} in {foot}");
     }
     press(&mut app, &["?"]);
-    let help = app::screen(&mut app, 100, 170);
+    let help = app::screen(&mut app, 100, 200);
     for (name, _) in crate::keymap::help() {
         assert!(help.contains(name), "{name} in {help}");
     }

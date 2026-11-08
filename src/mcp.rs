@@ -20,6 +20,7 @@
 mod calls;
 mod drafts;
 mod map;
+mod slack;
 mod tools;
 
 pub(crate) use drafts::ATTACHED_AT_MOST;
@@ -94,6 +95,8 @@ pub struct Server {
     /// Whether letterbox started the agent, as `LETTERBOX_AGENT` says: no
     /// one is there to say yes, so nothing is moved, only reported.
     pub background: bool,
+    /// Slack's workspaces, each by its name, read as they are first asked of.
+    slack: Option<Vec<(String, crate::slack::Slack)>>,
 }
 
 /// The lines it reads and where it writes.
@@ -132,6 +135,7 @@ impl Server {
             learnt: Vec::new(),
             reports: Vec::new(),
             background: std::env::var_os("LETTERBOX_AGENT").is_some_and(|v| !v.is_empty()),
+            slack: None,
         })
     }
 
@@ -705,6 +709,13 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
         "draft_reply" | "draft_message" if background => {
             Some("letterbox started this agent: draft a letter only as the user asks for it")
         }
+        "slack_send" if background => {
+            Some("letterbox started this agent, and no one is there to say yes, so nothing is sent")
+        }
+        "slack_send" if !asks => Some(
+            "the agent's program cannot ask the user to say yes, so nothing is sent: they send \
+             it themselves, r on the conversation in letterbox",
+        ),
         "send_draft" if background => {
             Some("letterbox started this agent, and no one is there to say yes, so nothing is sent")
         }

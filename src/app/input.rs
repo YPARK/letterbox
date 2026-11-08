@@ -229,6 +229,17 @@ impl App {
             }
             return self.compose_key(key);
         }
+        // A Slack message being written takes every key, as mail's does; and
+        // a conversation being gone to by name, the keys typed.
+        if self.chat.writing.is_some() && !self.dialog.is_open() {
+            return self.chat_write_key(key);
+        }
+        if self.chat.jump.is_some() && !self.dialog.is_open() {
+            return self.jump_key(key);
+        }
+        if self.chat.search.is_some() && !self.dialog.is_open() {
+            return self.search_key(key);
+        }
         // C-x C-c quits, as Emacs does, and C-x u undoes; C-x and anything
         // else, nothing. C-c C-c does what was chosen in the Inbox looked
         // through; C-c elsewhere, nothing: compose's C-c C-c, pressed once
@@ -329,6 +340,12 @@ impl App {
         if self.review_act(act) {
             return;
         }
+        if self.focus == Focus::Chat && self.chat_column_act(act) {
+            return;
+        }
+        if self.talk_act(act) {
+            return;
+        }
         if self.map.mode == Mode::Map && self.focus == Focus::List && self.map_act(act) {
             return;
         }
@@ -344,6 +361,8 @@ impl App {
             Act::Help => self.dialog = Dialog::Help(0),
             Act::Calendar => self.dialog = Dialog::Calendar(0),
             Act::People => self.open_people(),
+            Act::Slack => self.toggle_chat(),
+            Act::Jump => self.open_jump(),
             Act::Undo => self.undo_last(),
             Act::Review => self.open_review(),
             Act::Search => {
@@ -381,23 +400,31 @@ impl App {
                     Focus::List
                 };
             }
+            // Round the panes, and Slack's column at the right where it is
+            // shown; the message's pane where a message, or a thread, is read.
             Act::NextPane => {
+                let (reader, chat) = (self.has_reader(), self.chat_shown());
                 self.focus = match self.focus {
                     Focus::Side => Focus::List,
-                    Focus::List if self.reading.is_some() => Focus::Reader,
-                    Focus::List | Focus::Reader => Focus::Side,
+                    Focus::List if reader => Focus::Reader,
+                    Focus::List | Focus::Reader if chat => Focus::Chat,
+                    Focus::List | Focus::Reader | Focus::Chat => Focus::Side,
                 }
             }
             Act::PreviousPane => {
+                let (reader, chat) = (self.has_reader(), self.chat_shown());
                 self.focus = match self.focus {
-                    Focus::Side if self.reading.is_some() => Focus::Reader,
-                    Focus::Side | Focus::Reader => Focus::List,
+                    Focus::Side if chat => Focus::Chat,
+                    Focus::Side | Focus::Chat if reader => Focus::Reader,
+                    Focus::Side | Focus::Chat | Focus::Reader => Focus::List,
                     Focus::List => Focus::Side,
                 }
             }
             Act::Left => {
                 self.focus = match self.focus {
                     Focus::Reader => Focus::List,
+                    Focus::Chat if self.has_reader() => Focus::Reader,
+                    Focus::Chat => Focus::List,
                     _ => Focus::Side,
                 }
             }
@@ -659,6 +686,7 @@ impl App {
                 self.step(by);
                 self.focus = before;
             }
+            Some(Target::ChatRow(_)) => self.chat_step(by),
             Some(Target::List | Target::Message(_)) => self.pick(by),
             Some(Target::Reader) => self.scroll_by(3 * by),
             // The wheel on the Inbox looked through goes along it.
@@ -683,6 +711,7 @@ impl App {
             }
             Some(Target::Search) => self.searching = true,
             Some(Target::Side) => self.focus = Focus::Side,
+            Some(Target::ChatRow(i)) => self.chat_click(i),
             Some(Target::Row(i)) if self.rows.get(i) == Some(&Row::Add) => {
                 self.row = i;
                 self.open_form();

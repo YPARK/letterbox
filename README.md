@@ -628,6 +628,96 @@ and buttons; drag the line before the message read, or press `<` and
 `>`, to make it wider or narrower. Each account is asked from a thread of its own, so the screen
 never waits on a server.
 
+## Slack
+
+Slack's conversations are in a column of their own at the right, which
+`K` shows and hides: a SLACK heading for each workspace, its CHANNELS and
+its PEOPLE, yours, the busiest first, a dozen shown and the rest folded
+but for those with anything unread. Tab goes round to it; in a narrow
+window it has the screen while it has the focus. Each workspace is read by an
+app of your own there, made once, as no app made by letterbox could be:
+Slack limits what one app read for many may do.
+
+At [api.slack.com/apps](https://api.slack.com/apps), **Create New App**,
+**From a manifest**, pick the workspace, and give it this:
+
+```yaml
+display_information:
+  name: letterbox
+oauth_config:
+  scopes:
+    user:
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+      - users:read
+      - search:read
+      - chat:write
+      - files:read
+settings:
+  event_subscriptions:
+    user_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+```
+
+Install it to the workspace (one that asks its admins for apps asks them
+here), and give letterbox its **User OAuth Token**, `xoxp-…`, from
+**OAuth & Permissions**:
+
+```sh
+letterbox slack add          # asks for the token, not shown as it is pasted
+letterbox slack              # each workspace, and who you are in it
+letterbox slack channels     # its conversations
+letterbox slack read '#lab' -n 20       # by name, any part of it, or its ID
+letterbox slack read '@Ana' --thread 1730000000.000100
+letterbox slack remove acme
+```
+
+To hear things as they happen, generate an app-level token under **Basic
+Information**, **App-Level Tokens**, with the scope `connections:write`,
+`xapp-…`, and give it to letterbox: the heading then says `live`.
+
+```sh
+letterbox slack live         # asks for the app-level token
+letterbox slack watch        # which conversation and when, never what is said
+```
+
+The tokens are kept as passwords are, together, in the vault where there
+is one, and move with them by `letterbox keep vault` or `keep keyring`. They
+act as you: anyone with the user token reads and writes as you, and anyone
+with both hears what comes as it comes. Keep them as a password.
+
+`/`, in a conversation or the column, searches the workspace, as Slack's
+own search does, newest first: what it finds is listed in the list's
+place, each as who and where, and ⏎ goes to it, picked in its
+conversation, its thread read if it is a reply. Elsewhere `/` is mail's.
+`C-k`, from anywhere but a message being written, goes to a conversation
+by any part of its name, folded away or not: those it begins first, then
+those with anything unread. In letterbox, ⏎ on a conversation reads it in
+the list's place, newest last, its last hundred, and `k` past the oldest
+reads those before it, and ⏎ on a message its thread, in the message's. `r` writes to the
+conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
+does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
+⏎ is a new line, and esc lets it go. `U` reads it again. A message's files
+are shown under it, 📎 and their size, and `s` saves those of the message
+picked where mail's are saved, under a name not yet taken there; the token
+goes to Slack's own hosts alone. Reading marks
+nothing read in Slack, and the keys that act on mail do nothing while a
+conversation is read: the mail behind it is out of sight. What others
+wrote is shown with names for IDs, links as words, emoji as emoji, and
+nothing a terminal would take as a command.
+
 ## For AI agents: MCP
 
 `lbx mcp` serves your mail to an AI agent over the Model Context Protocol
@@ -674,6 +764,12 @@ have your shell's `PATH`.
 | `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
 | `draft_message` | a new letter, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to and how big its files are | writes a draft |
 | `send_draft` | send a draft by its uid: letterbox shows you who it goes to, its text and its files, and sends it only if you say yes; never to more than 10 people; the draft then goes to Trash, teaching nothing | sends, once you say yes |
+| `slack_conversations` | your Slack channels and people, the busiest first, with their IDs; unread counts if asked | reads |
+| `slack_read` | a Slack conversation's last messages, or a thread, by name or ID, each with who, when, text, replies and files; marks nothing read | reads |
+| `slack_search` | Slack's own search, newest first, each message with where it is and its thread | reads |
+| `slack_find_person` | people whose name holds the words, with your direct messages' conversation with each | reads |
+| `slack_save_file` | a Slack message's files, saved in a folder given or Downloads, under names not yet taken there | writes files |
+| `slack_send` | a Slack message, or a reply in a thread: letterbox shows you where it goes and what it says, and sends it only if you say yes | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

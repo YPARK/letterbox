@@ -4,6 +4,7 @@
 //! in two, one of them at a time.
 
 mod blocks;
+mod chat;
 mod dialogs;
 pub(crate) mod files;
 mod foot;
@@ -53,6 +54,8 @@ const LIST: u16 = 46;
 /// side by side; and with the sidebar beside the list.
 const WIDE: u16 = 120;
 pub const MEDIUM: u16 = 70;
+/// How wide Slack's column is, beside the panes.
+const CHAT: u16 = 28;
 /// How narrow the middle pane, or the message read, may be dragged.
 const NARROWEST: u16 = 24;
 /// How short the list, or the message read below it, may be dragged.
@@ -75,7 +78,7 @@ pub fn panes(width: u16, focus: Focus) -> [u16; 3] {
     } else {
         match focus {
             Focus::Side => [width, 0, 0],
-            Focus::List => [0, width, 0],
+            Focus::List | Focus::Chat => [0, width, 0],
             Focus::Reader => [0, 0, width],
         }
     }
@@ -171,6 +174,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(foot_lines.len() as u16),
     ])
     .areas(f.area());
+    // Slack's column at the right, where it is shown: beside the panes where
+    // there is room, else the screen, while it has the focus.
+    let chat_w = if !app.chat_shown() {
+        0
+    } else if main.width >= MEDIUM + CHAT {
+        CHAT
+    } else if app.focus == Focus::Chat {
+        main.width
+    } else {
+        0
+    };
+    let [main, column] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(chat_w)]).areas(main);
+    if chat_w > 0 {
+        chat::column(f, app, column);
+    }
     app.panes = main;
     let place = app.placed();
     let on_map = app.map.mode == crate::map::Mode::Map;
@@ -234,6 +253,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if list_w > 0 {
         if app.map.mode == crate::map::Mode::Map {
             map_pane(f, app, list);
+        } else if app.chat.open.is_some() {
+            chat::conversation(f, app, list);
         } else {
             menu_under = messages(f, app, list).map(|y| (list, y));
         }
@@ -255,6 +276,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if reading {
         if app.reviewing() {
             menu_under = review_pane(f, app, read).map(|y| (read, y));
+        } else if app.chat.open.is_some() {
+            chat::thread(f, app, read, edge);
         } else {
             reader(f, app, read, edge);
         }
@@ -441,6 +464,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.targets.extend(targets);
         let spots = border_keys(f.buffer_mut(), area);
         app.targets.extend(spots);
+    }
+    if app.chat.jump.is_some() {
+        chat::jump(f, app);
+    }
+    if app.chat.search.is_some() {
+        chat::search_box(f, app);
     }
 }
 
