@@ -659,6 +659,7 @@ oauth_config:
       - search:read
       - chat:write
       - files:read
+      - files:write
 settings:
   event_subscriptions:
     user_events:
@@ -709,7 +710,9 @@ the list's place, newest last, its last hundred, and `k` past the oldest
 reads those before it, and ⏎ on a message its thread, in the message's. `r` writes to the
 conversation, or, in the thread, in it; `C-⏎` sends it at once, as Slack
 does (`M-⏎` or `C-c C-c` where the terminal does not tell `C-⏎` from ⏎),
-⏎ is a new line, and esc lets it go. `U` reads it again. A message's files
+⏎ is a new line, and esc lets it go. `C-c C-a` attaches files to it, as
+to mail, or drop them onto the terminal: each is shown 📎 under what is
+written, and they go with it, or alone. `U` reads it again. A message's files
 are shown under it, 📎 and their size, and `s` saves those of the message
 picked where mail's are saved, under a name not yet taken there; the token
 goes to Slack's own hosts alone. Reading marks
@@ -769,7 +772,7 @@ have your shell's `PATH`.
 | `slack_search` | Slack's own search, newest first, each message with where it is and its thread | reads |
 | `slack_find_person` | people whose name holds the words, with your direct messages' conversation with each | reads |
 | `slack_save_file` | a Slack message's files, saved in a folder given or Downloads, under names not yet taken there | writes files |
-| `slack_send` | a Slack message, or a reply in a thread: letterbox shows you where it goes and what it says, and sends it only if you say yes | sends, once you say yes |
+| `slack_send` | a Slack message, or a reply in a thread, with any files you named: letterbox shows you where it goes, what it says and each file, and sends it only if you say yes | sends, once you say yes |
 | `upcoming_events` | what is coming up in [your calendar](#your-calendar), to find when you are free | reads |
 | `report_triage` | a summary, what it would trash or file, and questions to ask next, for letterbox to show | moves nothing |
 | `open_letterbox` | open letterbox in a terminal of its own, where what was reported pops up | opens a window |

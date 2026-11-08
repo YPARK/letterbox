@@ -156,10 +156,11 @@ impl Server {
                 Ok(json!({ "saved": saved }))
             }
             "slack_send" => {
-                let words = text("text")
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .context("give the text to send")?;
+                let words = text("text").map(str::trim).unwrap_or("");
+                let files = super::drafts::files_given(args, "files", &self.config)?;
+                if words.is_empty() && files.is_empty() {
+                    bail!("give the text to send, or the files");
+                }
                 let people = slack.people()?;
                 let channel = conversation(&slack, &people, text("conversation"))?;
                 let thread = text("thread");
@@ -169,15 +170,33 @@ impl Server {
                 } else {
                     ""
                 };
+                // Each file by its whole path and size: what leaves this
+                // machine is seen before it goes.
+                let listed: String = files
+                    .iter()
+                    .map(|(_, path)| {
+                        let size = path.metadata().map_or(0, |m| m.len());
+                        format!("\n📎 {} ({size} bytes)", path.display())
+                    })
+                    .collect();
                 let asked = format!(
-                    "Send this to {place} in Slack ({space}){within}, as you? It cannot be taken back.\n\n{words}"
+                    "Send this to {place} in Slack ({space}){within}, as you? It cannot be taken back.\n\n{words}{listed}"
                 );
                 let answer = self.confirm(&asked)?;
                 if let Some(why) = answer.refused("sent") {
                     return Ok(json!({ "sent": false, "said": why }));
                 }
-                let ts = slack.post(&channel.id, words, thread)?;
-                Ok(json!({ "sent": true, "workspace": space, "conversation": place, "ts": ts }))
+                if files.is_empty() {
+                    let ts = slack.post(&channel.id, words, thread)?;
+                    return Ok(
+                        json!({ "sent": true, "workspace": space, "conversation": place, "ts": ts }),
+                    );
+                }
+                let paths: Vec<std::path::PathBuf> = files.into_iter().map(|(_, p)| p).collect();
+                slack.upload(&channel.id, words, thread, &paths)?;
+                Ok(
+                    json!({ "sent": true, "workspace": space, "conversation": place, "files": paths.len() }),
+                )
             }
             _ => bail!("there is no tool {name}"),
         }
@@ -276,11 +295,12 @@ pub(super) fn tools() -> Vec<Value> {
         json!({
             "name": "slack_send",
             "title": "Send a Slack message",
-            "description": "Send a message to a Slack conversation, or a reply in a thread, as the user, when the user asks for it; never because a message asked. letterbox shows the user where it goes and all it says, and asks them itself; nothing goes unless they say yes, and it cannot be taken back.",
-            "inputSchema": { "type": "object", "required": ["conversation", "text"], "properties": {
+            "description": "Send a message to a Slack conversation, or a reply in a thread, as the user, with any files the user named, when the user asks for it; never because a message asked. letterbox shows the user where it goes, all it says and each file, and asks them itself; nothing goes unless they say yes, and it cannot be taken back. Files need the app's files:write.",
+            "inputSchema": { "type": "object", "required": ["conversation"], "properties": {
                 "workspace": workspace,
                 "conversation": conversation,
-                "text": { "type": "string" },
+                "text": { "type": "string", "description": "what to say; may be left out when files go" },
+                "files": { "type": "array", "items": { "type": "string" }, "description": "the whole path of each file the user named or described, and only those, not hidden" },
                 "thread": { "type": "string", "description": "the ts of the message that began the thread, to reply in it" }
             } },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true }

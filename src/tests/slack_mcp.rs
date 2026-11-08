@@ -156,6 +156,56 @@ fn a_message_goes_only_once_the_user_says_yes_to_it_shown_whole() {
     assert!(sent[0].contains("channel=C00") && sent[0].contains("text=results+are+in"));
 }
 
+fn uploads(asked: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
+    let asked = asked.lock().unwrap();
+    asked
+        .iter()
+        .filter(|r| r.contains("/files.completeUploadExternal"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn files_go_only_once_the_user_says_yes_to_each_shown() {
+    let (base, asked) = workspace();
+    let mut server = server_on(&base, true);
+    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
+    let file = dir.path().join("figure.pdf");
+    std::fs::write(&file, "%PDF").unwrap();
+    let args = json!({ "conversation": "#ch00", "files": [file.display().to_string()] });
+    let (shown, r) = answered(&mut server, 1, "slack_send", args.clone(), "decline");
+    assert_eq!(r["structuredContent"]["sent"], false, "{r}");
+    assert!(
+        shown.contains("figure.pdf") && shown.contains(&file.display().to_string()),
+        "the whole path is shown: {shown}"
+    );
+    assert!(uploads(&asked).is_empty(), "nothing goes on a no");
+    let (_, r) = answered(&mut server, 2, "slack_send", args, "accept");
+    assert_eq!(r["structuredContent"]["sent"], true, "{r}");
+    let sent = uploads(&asked);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].contains("channel_id=C00"), "{}", sent[0]);
+    assert!(posts(&asked).is_empty(), "files go as files");
+}
+
+#[test]
+fn a_hidden_file_or_one_not_named_whole_is_not_sent() {
+    let (base, asked) = workspace();
+    let mut server = server_on(&base, true);
+    let dir = tempfile::Builder::new().prefix("lbx").tempdir().unwrap();
+    let hidden = dir.path().join(".env");
+    std::fs::write(&hidden, "SECRET=1").unwrap();
+    for path in [hidden.display().to_string(), "notes.txt".to_string()] {
+        let r = call(
+            &mut server,
+            "slack_send",
+            json!({ "conversation": "#ch00", "text": "x", "files": [path] }),
+        );
+        assert_eq!(r["isError"], true, "{path}: {r}");
+    }
+    assert!(uploads(&asked).is_empty() && posts(&asked).is_empty());
+}
+
 #[test]
 fn nothing_is_sent_where_no_one_can_say_yes() {
     let (base, asked) = workspace();

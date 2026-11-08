@@ -121,7 +121,9 @@ pub struct Writing {
     pub name: String,
     pub thread: Option<String>,
     pub buffer: crate::edit::Buffer,
-    prefix: Option<char>,
+    pub(super) prefix: Option<char>,
+    /// The files attached, to go with it.
+    pub files: Vec<PathBuf>,
     pub sending: bool,
     pub error: Option<String>,
 }
@@ -185,7 +187,7 @@ impl Chat {
             .collect()
     }
 
-    fn ask(&mut self, space: usize, ask: SlackAsk) {
+    pub(super) fn ask(&mut self, space: usize, ask: SlackAsk) {
         // Conversations are answered twice: as they are, and once counted.
         let whole = matches!(ask, SlackAsk::Conversations);
         self.pending += if whole { 2 } else { 1 };
@@ -682,73 +684,6 @@ impl App {
         self.focus = Focus::Reader;
     }
 
-    /// Write to the conversation read; or, from the thread read, in it.
-    fn write_talk(&mut self, in_thread: bool) {
-        let Some(open) = &self.chat.open else {
-            return;
-        };
-        let thread = in_thread
-            .then(|| open.thread.as_ref().map(|t| t.ts.clone()))
-            .flatten();
-        self.chat.writing = Some(Writing {
-            space: open.space,
-            channel: open.id.clone(),
-            name: open.name.clone(),
-            thread,
-            buffer: crate::edit::Buffer::from_text(""),
-            prefix: None,
-            sending: false,
-            error: None,
-        });
-        self.status = "C-⏎ sends it (M-⏎ or C-c C-c too) · esc lets it go".to_string();
-    }
-
-    /// A key while a message is written: to it, or sending it.
-    pub(super) fn chat_write_key(&mut self, key: KeyEvent) {
-        let Some(writing) = &mut self.chat.writing else {
-            return;
-        };
-        if writing.sending {
-            self.status = "sending…".to_string();
-            return;
-        }
-        // Ctrl+Enter, as chat apps send with, where the terminal tells it from
-        // Enter; Alt+Enter, which every terminal does; and C-c C-c, as mail's.
-        let send_key = key.code == KeyCode::Enter
-            && key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && writing.prefix.is_none();
-        let done = if send_key {
-            Done::Send
-        } else {
-            crate::edit::handle(&mut writing.buffer, &mut writing.prefix, key)
-        };
-        match done {
-            Done::Send if writing.buffer.text().trim().is_empty() => {
-                self.status = "nothing written to send".to_string();
-            }
-            Done::Send => {
-                writing.sending = true;
-                writing.error = None;
-                let ask = SlackAsk::Post {
-                    channel: writing.channel.clone(),
-                    thread: writing.thread.clone(),
-                    // The line the buffer ends with is not sent.
-                    text: writing.buffer.text().trim_end().to_string(),
-                };
-                let space = writing.space;
-                self.status = format!("sending to {}…", writing.name);
-                self.chat.ask(space, ask);
-            }
-            Done::Cancel => {
-                self.chat.writing = None;
-                self.status = "let go, not sent".to_string();
-            }
-            _ => {}
-        }
-    }
-
     /// The files of the message picked, fetched and saved where mail's are,
     /// each under a name not yet taken there.
     fn save_talk_files(&mut self) {
@@ -774,18 +709,6 @@ impl App {
         self.status = format!("fetching {} file(s) from Slack…", asks.len());
         for ask in asks {
             self.chat.ask(space, ask);
-        }
-    }
-
-    /// What is pasted, into the message being written.
-    pub(super) fn chat_paste(&mut self, text: &str) -> bool {
-        match &mut self.chat.writing {
-            Some(w) if !w.sending => {
-                w.buffer.paste(text);
-                true
-            }
-            Some(_) => true,
-            None => false,
         }
     }
 
