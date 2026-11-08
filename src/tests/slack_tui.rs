@@ -924,7 +924,10 @@ fn ctrl_k_and_k_work_from_a_conversation_read() {
     assert!(app.chat.jump.is_some(), "C-k from the conversation read");
     press(app, KeyCode::Esc);
     press(app, KeyCode::Char('K'));
-    assert!(!app.chat.shown, "K hides the column from the conversation read");
+    assert!(
+        !app.chat.shown,
+        "K hides the column from the conversation read"
+    );
     app.focus = Focus::Reader;
     press(app, KeyCode::Char('K'));
     assert!(app.chat.shown, "and shows it from the message's pane");
