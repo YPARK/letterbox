@@ -591,6 +591,8 @@ impl App {
             | Act::NextPane
             | Act::PreviousPane
             | Act::Left
+            | Act::Slack
+            | Act::Jump
             | Act::Undo => return false,
             Act::Back if reader => self.focus = Focus::List,
             Act::Back => {}

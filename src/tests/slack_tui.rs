@@ -913,3 +913,19 @@ fn up_past_the_oldest_shown_reads_older_and_they_stay() {
         "the older kept as the newest are read again"
     );
 }
+
+#[test]
+fn ctrl_k_and_k_work_from_a_conversation_read() {
+    let (base, _) = workspace();
+    let app = &mut app_on(&base);
+    open_ch00(app);
+    assert_eq!(app.focus, Focus::List);
+    jump(app);
+    assert!(app.chat.jump.is_some(), "C-k from the conversation read");
+    press(app, KeyCode::Esc);
+    press(app, KeyCode::Char('K'));
+    assert!(!app.chat.shown, "K hides the column from the conversation read");
+    app.focus = Focus::Reader;
+    press(app, KeyCode::Char('K'));
+    assert!(app.chat.shown, "and shows it from the message's pane");
+}
