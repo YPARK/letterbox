@@ -6,6 +6,7 @@ mod agent;
 mod bringing;
 mod bulk;
 pub mod chat;
+mod chat_writing;
 mod checking;
 mod choosing;
 mod dialog;

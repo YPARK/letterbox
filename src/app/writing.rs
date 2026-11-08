@@ -452,6 +452,7 @@ impl App {
     /// under its other headers; those it has already, once.
     pub(super) fn attach(&mut self, paths: &[PathBuf]) {
         let Some(compose) = &mut self.compose else {
+            self.chat_attach(paths);
             return;
         };
         let lines = compose.buffer.lines();

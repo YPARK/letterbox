@@ -208,6 +208,36 @@ pub struct Who {
     pub domain: String,
 }
 
+/// `text` as Slack reads it as typed: its <, > and & are Slack's own, so
+/// they go escaped.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// What Slack refused, said as the scope the app needs to `act`, where the
+/// refusal is for a scope it lacks.
+fn needs(e: anyhow::Error, act: &str, scope: &str) -> anyhow::Error {
+    if format!("{e:#}").contains("missing_scope") {
+        anyhow::anyhow!(
+            "your app may not {act} yet: add {scope} to its User Token Scopes \
+             (OAuth & Permissions), reinstall it, then letterbox slack add"
+        )
+    } else {
+        e
+    }
+}
+
+/// Whether `url` is Slack's own, over HTTPS.
+fn slacks(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.host_str()
+                .is_some_and(|h| h == "slack.com" || h.ends_with(".slack.com"))
+    })
+}
+
 /// `acme` of `https://acme.slack.com/`.
 fn domain_of(url: &str) -> String {
     url::Url::parse(url)
@@ -363,38 +393,86 @@ impl Slack {
     /// Send `text` to a conversation as you, in the thread begun by
     /// `thread` if there is one; its ID, as Slack gives it.
     pub fn post(&self, channel: &str, text: &str, thread: Option<&str>) -> anyhow::Result<String> {
-        // Slack reads <, > and & as its own: escaped, they are read as typed.
-        let text = text
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
+        let text = escaped(text);
         let mut form = vec![("channel", channel), ("text", text.as_str())];
         if let Some(ts) = thread {
             form.push(("thread_ts", ts));
         }
-        let v = self.call("chat.postMessage", &form).map_err(|e| {
-            if format!("{e:#}").contains("missing_scope") {
-                anyhow::anyhow!(
-                    "your app may not send yet: add chat:write to its User Token Scopes \
-                     (OAuth & Permissions), reinstall it, then letterbox slack add"
-                )
-            } else {
-                e
-            }
-        })?;
+        let v = self
+            .call("chat.postMessage", &form)
+            .map_err(|e| needs(e, "send", "chat:write"))?;
         Ok(v["ts"].as_str().unwrap_or("").to_string())
+    }
+
+    /// Send the files at `paths` to a conversation as you, with `text` as
+    /// what is said with them, in the thread begun by `thread` if there is
+    /// one: as Slack has files sent, each put where it says, then all shared.
+    pub fn upload(
+        &self,
+        channel: &str,
+        text: &str,
+        thread: Option<&str>,
+        paths: &[std::path::PathBuf],
+    ) -> anyhow::Result<()> {
+        // Each read first: a file not there sends nothing.
+        let mut files = Vec::new();
+        for path in paths {
+            let bytes =
+                std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+            if bytes.len() as u64 > FILE_MOST {
+                bail!("{} is too big to send from letterbox", path.display());
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".to_string());
+            files.push((name, bytes));
+        }
+        let mut shared = Vec::new();
+        for (name, bytes) in files {
+            let length = bytes.len().to_string();
+            let v = self
+                .call(
+                    "files.getUploadURLExternal",
+                    &[("filename", &name), ("length", &length)],
+                )
+                .map_err(|e| needs(e, "send files", "files:write"))?;
+            let (Some(url), Some(id)) = (v["upload_url"].as_str(), v["file_id"].as_str()) else {
+                bail!("Slack gave nowhere to send {name}");
+            };
+            // The address is enough: the token goes nowhere with the bytes.
+            if self.base == API && !slacks(url) {
+                bail!("Slack gave somewhere not Slack's to send {name}: {url}");
+            }
+            let answer = self
+                .agent
+                .post(url)
+                .send(&bytes[..])
+                .with_context(|| format!("cannot send {name} to Slack"))?;
+            if !answer.status().is_success() {
+                bail!("Slack gave {} for {name}", answer.status());
+            }
+            shared.push(serde_json::json!({ "id": id, "title": name }));
+        }
+        let shared = Value::Array(shared).to_string();
+        let comment = escaped(text.trim_end());
+        let mut form = vec![("files", shared.as_str()), ("channel_id", channel)];
+        if !comment.trim().is_empty() {
+            form.push(("initial_comment", comment.as_str()));
+        }
+        if let Some(ts) = thread {
+            form.push(("thread_ts", ts));
+        }
+        self.call("files.completeUploadExternal", &form)
+            .map_err(|e| needs(e, "send files", "files:write"))?;
+        Ok(())
     }
 
     /// A file a message came with, fetched with the token, from Slack alone:
     /// a real session sends its token to no other host, whatever a message
     /// names. A page in its place is Slack asking for a permission.
     pub fn download(&self, url: &str) -> anyhow::Result<Vec<u8>> {
-        let slacks = url::Url::parse(url).is_ok_and(|u| {
-            u.scheme() == "https"
-                && u.host_str()
-                    .is_some_and(|h| h == "slack.com" || h.ends_with(".slack.com"))
-        });
-        if self.base == API && !slacks {
+        if self.base == API && !slacks(url) {
             bail!("that file is not Slack's to fetch: {url}");
         }
         let mut answer = self

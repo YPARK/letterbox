@@ -3,6 +3,7 @@
 //! the message's. From a server in place of Slack's.
 
 use super::*;
+use crate::app::Dialog;
 use crate::slack::{Session, Slack};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -80,6 +81,12 @@ fn workspace_posting(posted: Value) -> (String, Arc<Mutex<Vec<String>>>) {
         vec![
             ("chat.postMessage", posted),
             ("files-pri", json!("the file's bytes")),
+            (
+                "files.getUploadURLExternal",
+                json!({"ok": true, "upload_url": format!("{base}/upload/F9"), "file_id": "F9"}),
+            ),
+            ("upload/F9", json!("OK")),
+            ("files.completeUploadExternal", json!({"ok": true})),
             (
                 "search.messages",
                 json!({"ok": true, "messages": {"matches": [
@@ -579,6 +586,88 @@ fn what_could_not_be_sent_is_kept_and_why_said() {
     let writing = app.chat.writing.as_ref().expect("still written");
     assert_eq!(writing.buffer.text().trim_end(), "lost?");
     assert!(app::screen(app, 120, 40).contains("chat:write"));
+}
+
+/// A file to attach, in a folder of its own.
+fn a_file(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    std::fs::write(&path, "1,2").unwrap();
+    (dir, path)
+}
+
+/// Whether the box shows `file` attached, its clip two cells wide.
+fn attached(app: &mut App, file: &str) -> bool {
+    let screen = app::screen(app, 120, 40);
+    screen.lines().any(|l| l.contains("📎") && l.contains(file))
+}
+
+fn requests(asked: &Arc<Mutex<Vec<String>>>, method: &str) -> Vec<String> {
+    let asked = asked.lock().unwrap();
+    asked
+        .iter()
+        .filter(|r| r.contains(method))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn files_dropped_on_a_message_go_with_it() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    let (_dir, path) = a_file("data 2.csv");
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    typed(app, "the numbers");
+    // Dropped onto the terminal, a file is pasted as its quoted path.
+    app.paste(&format!("'{}'", path.display()));
+    assert_eq!(
+        app.chat.writing.as_ref().unwrap().buffer.text().trim_end(),
+        "the numbers",
+        "a path dropped is attached, not written"
+    );
+    assert!(attached(app, "data 2.csv (3 B)"));
+    // The same file twice is attached once.
+    app.paste(&format!("'{}'", path.display()));
+    assert!(app.status.contains("attached already"), "{}", app.status);
+    ctrl(app, 'c');
+    ctrl(app, 'c');
+    assert!(posts(&asked).is_empty(), "files go as files, not as a post");
+    let asked_where = requests(&asked, "files.getUploadURLExternal");
+    assert_eq!(asked_where.len(), 1);
+    assert!(asked_where[0].contains("filename=data+2.csv"));
+    assert_eq!(requests(&asked, "/upload/F9").len(), 1);
+    let done = requests(&asked, "files.completeUploadExternal");
+    assert_eq!(done.len(), 1);
+    assert!(
+        done[0].contains("channel_id=C00") && done[0].contains("initial_comment=the+numbers"),
+        "{}",
+        done[0]
+    );
+    assert!(app.chat.writing.is_none());
+    assert!(app.status.contains("sent to #ch00"), "{}", app.status);
+}
+
+#[test]
+fn a_file_goes_with_nothing_written_and_c_c_c_a_picks_files() {
+    let (base, asked) = workspace();
+    let app = &mut app_on(&base);
+    let (dir, _) = a_file("plot.png");
+    app.attach_dir = Some(dir.path().to_path_buf());
+    open_ch00(app);
+    press(app, KeyCode::Char('r'));
+    ctrl(app, 'c');
+    press(app, KeyCode::Char('a'));
+    assert!(matches!(app.dialog, Dialog::Attach(_)), "the picker opens");
+    typed(app, "plot");
+    press(app, KeyCode::Enter);
+    assert!(!app.dialog.is_open());
+    assert!(attached(app, "plot.png"));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    app.settle_chat(PATIENCE);
+    let done = requests(&asked, "files.completeUploadExternal");
+    assert_eq!(done.len(), 1, "a file alone is something to send");
+    assert!(!done[0].contains("initial_comment"), "{}", done[0]);
 }
 
 #[test]

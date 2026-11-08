@@ -270,6 +270,17 @@ fn writing_under(f: &mut Frame, app: &App, area: Rect, in_thread: bool) -> Rect 
             lines.push(Line::styled(part, Style::new().fg(t.text)));
         }
     }
+    for path in &w.files {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+        let line = format!("📎 {name} ({})", size(bytes as usize));
+        for part in wrap(&line, width) {
+            lines.push(Line::styled(part, Style::new().fg(t.dim)));
+        }
+    }
     if let Some(why) = &w.error {
         for part in wrap(&format!("not sent: {why}"), width) {
             lines.push(Line::styled(part, Style::new().fg(t.error)));

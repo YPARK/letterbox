@@ -13,12 +13,13 @@ pub enum Ask {
     History(String),
     /// A thread, by its conversation and the message it began with.
     Thread(String, String),
-    /// Send, as you, what was written and said yes to: to a conversation,
-    /// in a thread if one is given.
+    /// Send, as you, what was written, and the files attached: to a
+    /// conversation, in a thread if one is given.
     Post {
         channel: String,
         thread: Option<String>,
         text: String,
+        files: Vec<std::path::PathBuf>,
     },
     /// A file fetched, to be saved under its name.
     Download {
@@ -157,9 +158,17 @@ fn reads(
                     channel,
                     thread,
                     text,
+                    files,
                 } => {
                     read.clear();
-                    let sent = slack.post(&channel, &text, thread.as_deref()).map_err(said);
+                    let sent = if files.is_empty() {
+                        slack.post(&channel, &text, thread.as_deref())
+                    } else {
+                        slack
+                            .upload(&channel, &text, thread.as_deref(), &files)
+                            .map(|()| String::new())
+                    }
+                    .map_err(said);
                     Answer::Posted(channel, thread, sent)
                 }
             };

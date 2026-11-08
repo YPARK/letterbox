@@ -325,18 +325,34 @@ pub(crate) fn off_limits(real: &Path, config: &Path) -> bool {
 /// to a file not `off_limits`, whatever a link makes it look like; none of it,
 /// nothing is drafted.
 fn attached(args: &Value, config: &Path) -> anyhow::Result<Vec<crate::compose::File>> {
-    let Some(given) = args.get("attachments") else {
+    let mut files = Vec::new();
+    for (path, named) in files_given(args, "attachments", config)? {
+        let cannot = || format!("{path}: cannot read it");
+        files.push(crate::compose::read_file(&named).with_context(cannot)?);
+    }
+    Ok(files)
+}
+
+/// The files an agent names under `key`, each as it named it and where it
+/// is: only whole paths, to files not `off_limits`, whatever a link makes
+/// them look like, and not too much in all; none of them if any is not.
+pub(super) fn files_given(
+    args: &Value,
+    key: &str,
+    config: &Path,
+) -> anyhow::Result<Vec<(String, std::path::PathBuf)>> {
+    let Some(given) = args.get(key) else {
         return Ok(Vec::new());
     };
-    let paths: Vec<String> =
-        serde_json::from_value(given.clone()).context("attachments is a list of paths")?;
+    let paths: Vec<String> = serde_json::from_value(given.clone())
+        .with_context(|| format!("{key} is a list of paths"))?;
     let mut total = 0;
     let mut files = Vec::with_capacity(paths.len());
-    for path in &paths {
+    for path in paths {
         if !path.starts_with('/') && !path.starts_with("~/") {
             bail!("{path}: give its whole path");
         }
-        let named = crate::compose::path_of(path);
+        let named = crate::compose::path_of(&path);
         let cannot = || format!("{path}: cannot read it");
         let real = named.canonicalize().with_context(cannot)?;
         if off_limits(&real, config) {
@@ -357,7 +373,7 @@ fn attached(args: &Value, config: &Path) -> anyhow::Result<Vec<crate::compose::F
             );
         }
         // By the name it was given, not that of what a link leads to.
-        files.push(crate::compose::read_file(&named).with_context(cannot)?);
+        files.push((path, named));
     }
     Ok(files)
 }

@@ -11,8 +11,14 @@ use std::sync::{Arc, Mutex};
 /// A server giving `answers` in turn, each whole, status line and all; the
 /// requests it took, each its head and its body.
 fn server(answers: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>) {
+    server_by(|_| answers)
+}
+
+/// A server giving the answers `answers` makes of its own address.
+fn server_by(answers: impl FnOnce(&str) -> Vec<String>) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let answers = answers(&base);
     let asked = Arc::new(Mutex::new(Vec::new()));
     let taken = asked.clone();
     std::thread::spawn(move || {
@@ -441,6 +447,106 @@ fn a_message_not_let_go_says_what_the_app_needs() {
             .unwrap_err()
     );
     assert!(said.contains("chat:write"), "{said}");
+}
+
+/// Slack's three steps of a file sent: where to put it, it put there, and
+/// it shared; answered by a server at `base`, for each of `ids`.
+fn uploads(base: &str, ids: &[&str]) -> Vec<String> {
+    let mut answers = Vec::new();
+    for id in ids {
+        answers.push(ok(json!({
+            "ok": true, "upload_url": format!("{base}/upload/{id}"), "file_id": id
+        })));
+        answers.push(
+            "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK".to_string(),
+        );
+    }
+    answers.push(ok(json!({"ok": true, "files": []})));
+    answers
+}
+
+#[test]
+fn files_go_with_a_message_into_its_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("notes.txt"), dir.path().join("b c.csv"));
+    std::fs::write(&a, "hello").unwrap();
+    std::fs::write(&b, "1,2").unwrap();
+    let (base, asked) = server_by(|base| uploads(base, &["F1", "F2"]));
+    Slack::at(&base, session())
+        .upload("C1", "see a < b", Some("1.0"), &[a, b])
+        .unwrap();
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 5, "{asked:?}");
+    assert!(
+        asked[0].starts_with("POST /files.getUploadURLExternal "),
+        "{}",
+        asked[0]
+    );
+    assert!(
+        asked[0].contains("filename=notes.txt") && asked[0].contains("length=5"),
+        "{}",
+        asked[0]
+    );
+    // The bytes go where Slack said, with no token: the address is enough.
+    assert!(asked[1].starts_with("POST /upload/F1 "), "{}", asked[1]);
+    assert!(asked[1].ends_with("\r\n\r\nhello"), "{}", asked[1]);
+    assert!(!asked[1].contains("xoxp-secret"), "{}", asked[1]);
+    assert!(asked[2].contains("filename=b+c.csv") && asked[2].contains("length=3"));
+    assert!(asked[3].ends_with("\r\n\r\n1,2"), "{}", asked[3]);
+    let done = &asked[4];
+    assert!(
+        done.starts_with("POST /files.completeUploadExternal "),
+        "{done}"
+    );
+    let form: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(done.split("\r\n\r\n").nth(1).unwrap().as_bytes())
+            .into_owned()
+            .collect();
+    assert_eq!(form["channel_id"], "C1");
+    assert_eq!(form["thread_ts"], "1.0");
+    assert_eq!(form["initial_comment"], "see a &lt; b");
+    let files: serde_json::Value = serde_json::from_str(&form["files"]).unwrap();
+    assert_eq!(
+        files,
+        json!([{"id": "F1", "title": "notes.txt"}, {"id": "F2", "title": "b c.csv"}])
+    );
+}
+
+#[test]
+fn files_with_nothing_written_go_with_no_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    std::fs::write(&a, "x").unwrap();
+    let (base, asked) = server_by(|base| uploads(base, &["F1"]));
+    Slack::at(&base, session())
+        .upload("C1", "  ", None, &[a])
+        .unwrap();
+    let asked = asked.lock().unwrap();
+    assert!(!asked[2].contains("initial_comment"), "{}", asked[2]);
+    assert!(!asked[2].contains("thread_ts"), "{}", asked[2]);
+}
+
+#[test]
+fn files_not_let_go_say_what_the_app_needs() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    std::fs::write(&a, "x").unwrap();
+    let (base, _) = server(vec![ok(json!({"ok": false, "error": "missing_scope"}))]);
+    let said = format!(
+        "{:#}",
+        Slack::at(&base, session())
+            .upload("C1", "hi", None, &[a])
+            .unwrap_err()
+    );
+    assert!(said.contains("files:write"), "{said}");
+    // A file that is not there is said, and nothing is asked of Slack.
+    let said = format!(
+        "{:#}",
+        Slack::at("http://127.0.0.1:9", session())
+            .upload("C1", "hi", None, &[dir.path().join("gone.txt")])
+            .unwrap_err()
+    );
+    assert!(said.contains("gone.txt"), "{said}");
 }
 
 #[test]

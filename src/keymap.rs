@@ -615,7 +615,7 @@ pub const KEYS: &[Binding] = &[
         name: "C-c C-a",
         hint: "C-c C-a",
         foot: &[(Writing, "attach")],
-        help: "in the message being written, attach files, picked a folder at a time: typing narrows, ⏎ goes into a folder, ← up, ~ home, ␣ marks; or drop them onto the terminal. Each is an Attach line, read as it is sent",
+        help: "in the message being written, attach files, picked a folder at a time: typing narrows, ⏎ goes into a folder, ← up, ~ home, ␣ marks; or drop them onto the terminal. In mail each is an Attach line, read as it is sent; in Slack each is shown 📎 under it",
     },
     // Picking files to attach: the picker's keys.
     Binding {
