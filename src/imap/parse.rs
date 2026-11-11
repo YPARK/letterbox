@@ -144,15 +144,37 @@ pub(super) fn copied_uid(response: &[u8]) -> Option<u32> {
     (start == end).then_some(start)
 }
 
-/// `UID MOVE` or `UID COPY`, and the UID the copy was given when the
-/// server says it. `uid_mv` checks the response and then drops it.
-pub(super) fn transferred(
+/// Whether the server takes MOVE: as `known`, else asked once, and what it
+/// said kept in `learned`; a server that cannot say is taken not to.
+pub(super) fn movable(s: &mut Session, known: Option<bool>, learned: &mut Option<bool>) -> bool {
+    if let Some(m) = known.or(*learned) {
+        return m;
+    }
+    match s.capabilities() {
+        Ok(caps) => {
+            let m = caps.has_str("MOVE");
+            *learned = Some(m);
+            m
+        }
+        Err(_) => false,
+    }
+}
+
+/// Move the messages `set` of the selected folder to `to`: in one step with
+/// MOVE, else copied and then deleted, which a server that stops halfway can
+/// leave in both. The new UID of the first, where the server says it.
+pub(super) fn transfer(
     s: &mut Session,
-    command: &str,
-    uid: u32,
+    set: &str,
     to: &str,
+    movable: bool,
 ) -> imap::Result<Option<u32>> {
-    let (buf, _) = s.run(format!("UID {command} {uid} {}", astring(to)))?;
+    let command = if movable { "MOVE" } else { "COPY" };
+    let (buf, _) = s.run(format!("UID {command} {set} {}", astring(to)))?;
+    if !movable {
+        s.uid_store(set, "+FLAGS.SILENT (\\Deleted)")?;
+        s.uid_expunge(set)?;
+    }
     Ok(copied_uid(&buf))
 }
 

@@ -16,7 +16,7 @@ impl Server {
                     self.store(account.as_deref())?;
                 }
                 let version = env!("CARGO_PKG_VERSION");
-                if args.get("names_only").and_then(Value::as_bool) == Some(true) {
+                if flag(args, "names_only") {
                     let names: Vec<Value> = names.iter().map(|n| json!({ "name": n })).collect();
                     return Ok(json!({ "letterbox": version, "accounts": names }));
                 }
@@ -26,7 +26,10 @@ impl Server {
                         .store(Some(&n))
                         .and_then(|s| folders_counted(s.as_mut()));
                     all.push(match listed {
-                        Ok(folders) => json!({ "name": n, "folders": folders }),
+                        Ok(folders) => {
+                            let alike = mail::look_alike(&folders);
+                            json!({ "name": n, "folders": folders, "look_alike": alike })
+                        }
                         Err(e) => {
                             json!({ "name": n, "error": said(&e) })
                         }
@@ -158,89 +161,47 @@ impl Server {
             "triage" => Ok(self.recent_all(args, true)),
             "trash_messages" | "file_messages" => {
                 let uids = uids(args)?;
-                let moving = self.moving(account.as_deref(), &folder, &uids)?;
-                let thrown = name == "trash_messages";
-                let n = moving.len();
-                let action = if thrown {
-                    crate::report::Action::Trash
-                } else {
-                    crate::report::Action::File
-                };
                 let folders = self.store(account.as_deref())?.folders()?;
-                let of_drafts = mail::role_is(&folders, &folder, mail::Role::Drafts);
-                let to = self.destination(
-                    account.as_deref(),
-                    &folders,
-                    &folder,
-                    action,
-                    text("to").as_deref(),
-                )?;
-                let what = if thrown {
-                    let them = if n == 1 { "it" } else { "them" };
-                    format!("Move {n} from {folder} to {to}? letterbox can put {them} back.")
-                } else {
-                    format!("File {n} from {folder} under {to}?")
+                let to = text("to");
+                let wanted = moves::Wanted {
+                    folder: &folder,
+                    uids: &uids,
+                    thrown: name == "trash_messages",
+                    to: to.as_deref(),
+                    create: flag(args, "create"),
                 };
-                let answer = self.confirm(&listing(&what, &moving, of_drafts))?;
+                let plan = self.plan(account.as_deref(), &folders, wanted)?;
+                let answer = self.confirm(&plan.question())?;
                 if let Some(why) = answer.refused("moved") {
                     return Ok(json!({ "moved": 0, "said": why }));
                 }
-                let mut moved = Vec::new();
-                let mut failed = Vec::new();
-                let mut trashed = Vec::new();
-                let at = jiff::Timestamp::now().as_second();
-                let store = self.store(account.as_deref())?;
-                let address = store.address().to_string();
-                for s in &moving {
-                    let done = if thrown {
-                        store
-                            .relocate(&folder, s.uid, &to, &s.message_id)
-                            .map(|uid| {
-                                trashed.push(crate::trash::Entry {
-                                    account: address.clone(),
-                                    message_id: s.message_id.clone(),
-                                    folder: to.clone(),
-                                    uid,
-                                    origin: folder.clone(),
-                                    at,
-                                })
-                            })
-                    } else {
-                        store
-                            .file_from(&folder, s.uid, &to, &s.message_id, &folder)
-                            .map(|_| ())
-                    };
-                    match done {
-                        Ok(()) => moved.push(s.uid),
-                        Err(e) => failed.push(json!({
-                            "uid": s.uid,
-                            "error": said(&e),
-                        })),
-                    }
+                self.carry(&plan)
+            }
+            "move_messages" => self.move_all(args),
+            "merge_folders" => self.merge(account.as_deref(), text("from"), text("into")),
+            "create_folder" => {
+                let folders = self.store(account.as_deref())?.folders()?;
+                let path = new_folder(&folders, text("path").as_deref())?;
+                let called = self.called(account.as_deref());
+                let at = called
+                    .as_deref()
+                    .map(|c| format!(" in {c}"))
+                    .unwrap_or_default();
+                // Asked by its name as the user reads it, not as the server keeps it.
+                let shown = mail::utf7_imap(&path);
+                let answer = self.confirm(&format!("Make the folder {shown}{at}?"))?;
+                if let Some(why) = answer.refused("made") {
+                    return Ok(json!({ "account": called, "made": null, "said": why }));
                 }
-                // Moved, whether or not it is recorded to be put back: said apart.
-                let unrecorded = self.record_trashed(trashed);
-                let gone: Vec<&Summary> =
-                    moving.iter().filter(|s| moved.contains(&s.uid)).collect();
-                // Nothing done with a draft is learnt, though All Mail holds it
-                // too, marked so or not.
-                let learnt = if of_drafts {
-                    json!(0)
-                } else {
-                    self.advise(account.as_deref(), &folder, &gone, thrown)
-                };
-                Ok(json!({
-                    "moved": moved.len(),
-                    "not_recorded_to_put_back": unrecorded,
-                    "to": to,
-                    "uids": moved,
-                    "failed": failed,
-                    "learnt": learnt,
-                }))
+                self.store(account.as_deref())?.create(&path)?;
+                Ok(json!({ "account": called, "made": path }))
             }
             "search_messages" => {
                 let query = text("query").context("give the words to search for")?;
                 let limit = number("limit").unwrap_or(20).clamp(1, LISTED_LIMIT);
+                if folder == EVERY_FOLDER {
+                    return self.search_everywhere(account.as_deref(), &query, limit);
+                }
                 let found = self
                     .store(account.as_deref())?
                     .search(&folder, &query, limit)?;

@@ -750,18 +750,21 @@ have your shell's `PATH`.
 
 | Tool | | |
 |---|---|---|
-| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread; one account, or only their names, if asked; and the version of letterbox | reads |
+| `list_accounts` | the accounts and their folders, with how many messages each holds, and how many unread; folders side by side of nearly one name (Bill and Bills); one account, or only their names, if asked; and the version of letterbox | reads |
 | `list_messages` | a folder's newest messages: sender, subject, date, flags, first words | reads |
-| `search_messages` | a folder's messages with the words given, as the server searches | reads |
+| `search_messages` | a folder's messages with the words given, as the server searches; or, with folder `*`, every folder's, each with its folder, a message kept in two once | reads |
 | `find_address` | who you have written to or heard from, by name or part of an address, for an agent to fill in who a letter is to rather than guess | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
 | `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
 | `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |
 | `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
 | `recent_messages` | what came to each Inbox in the last hours, every account or one | reads |
-| `triage` | the same, each with how likely you are to throw it away and where it would be filed | reads |
+| `triage` | the same, each with how likely you are to throw it away and where it would be filed; both say how much older mail is still in each Inbox | reads |
 | `trash_messages` | a few messages to Trash, where `d` and `lbx trash restore` put them back; what you say yes to is learnt, but a draft teaches nothing, so this is how an agent drops a draft it wrote again | moves, once you say yes |
-| `file_messages` | a few messages under a folder or label there is | moves, once you say yes |
+| `file_messages` | a few messages under a folder or label there is, or under a new folder you asked for, made with the same yes | moves, once you say yes |
+| `move_messages` | messages of several folders or accounts, each to Trash or filed, with one question: to gather a thread under one folder, or do what was proposed of every account at once | moves, once you say yes |
+| `create_folder` | a folder you named, never one there is already, whatever its case | makes, once you say yes |
+| `merge_folders` | every message of one folder you file in moved into another, in one command, and the empty one removed; no message deleted, nothing learnt | moves, once you say yes |
 | `uncertain_messages` | what the junk filter is least sure of, or got wrong, one a sender | reads |
 | `ask_about_messages` | letterbox asks you of each, junk or keep; learnt, nothing moved | asks you |
 | `draft_reply` | a reply, threaded, quoting what it answers, with any files you named or described, kept in Drafts; not sent. Says its uid, who it goes to, how big its files are, and who a reply to all would also copy | writes a draft |
@@ -790,8 +793,9 @@ is not served, as its passphrase cannot be asked for there; one in the
 keyring, or Outlook's, is. `lbx --demo mcp` serves the demo's mail, to try
 an agent on.
 
-**Nothing moves unless you say yes, to letterbox.** `trash_messages` and
-`file_messages` have letterbox itself ask you, through the agent's program
+**Nothing moves unless you say yes, to letterbox.** `trash_messages`,
+`file_messages`, `move_messages`, `create_folder` and `merge_folders` have
+letterbox itself ask you, through the agent's program
 (MCP's elicitation: Claude Code shows it as a dialog), listing each message
 by who sent it and what about, flagged or answered said. The agent cannot
 answer for you; a program that cannot ask is refused, and nothing moves.

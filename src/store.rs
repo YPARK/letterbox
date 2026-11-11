@@ -91,6 +91,12 @@ pub trait Store: Send {
     /// UID could not be told, so nothing should be recorded of it.
     fn relocate(&mut self, from: &str, uid: u32, to: &str, message_id: &str)
     -> anyhow::Result<u32>;
+    /// Move every message of `from` to `to`, as one command where the
+    /// server takes one, a message without a Message-ID too: how many were
+    /// moved. Their new UIDs are not told.
+    fn move_every(&mut self, _from: &str, _to: &str) -> anyhow::Result<usize> {
+        Err(unsupported("move a folder's mail"))
+    }
     /// The folder this account keeps as Trash, when one was chosen.
     fn trash(&self) -> Option<&str> {
         None

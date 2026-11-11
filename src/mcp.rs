@@ -20,6 +20,7 @@
 mod calls;
 mod drafts;
 mod map;
+mod moves;
 mod slack;
 mod tools;
 
@@ -403,7 +404,7 @@ impl Server {
         since: i64,
         unread: bool,
         limit: usize,
-    ) -> anyhow::Result<Vec<Summary>> {
+    ) -> anyhow::Result<(Vec<Summary>, bool)> {
         let store = self.store(Some(account))?;
         let mut found = Vec::new();
         let mut offset = 0;
@@ -413,7 +414,7 @@ impl Server {
         for _ in 0..RECENT_PAGES {
             let page = store.page("INBOX", offset, 50)?;
             if page.summaries.is_empty() {
-                break;
+                return Ok((found, true));
             }
             offset += page.summaries.len();
             let mut any = false;
@@ -427,14 +428,15 @@ impl Server {
                 }
                 found.push(s);
                 if found.len() >= limit {
-                    return Ok(found);
+                    return Ok((found, false));
                 }
             }
             if !any || offset >= page.total as usize {
-                break;
+                // Looked through to mail older than `since`, or to the end.
+                return Ok((found, true));
             }
         }
-        Ok(found)
+        Ok((found, false))
     }
 
     /// The new mail of each account asked of, as `recent` finds it, each
@@ -457,7 +459,7 @@ impl Server {
         let mut accounts = Vec::new();
         for n in self.names(asked) {
             accounts.push(match self.recent(&n, since, unread, limit) {
-                Ok(found) => {
+                Ok((found, whole)) => {
                     let messages: Vec<Value> = found
                         .iter()
                         .map(|s| {
@@ -468,7 +470,22 @@ impl Server {
                             }
                         })
                         .collect();
-                    json!({ "name": n, "folder": "INBOX", "messages": messages })
+                    let mut account = json!({ "name": n, "folder": "INBOX", "messages": messages });
+                    // What else the Inbox holds, older than this: never to be
+                    // taken for an Inbox with nothing more in it.
+                    if let Ok((total, unseen)) =
+                        self.store(Some(&n)).and_then(|s| s.counts("INBOX"))
+                    {
+                        // Told only of an Inbox looked through to older mail, all
+                        // of it, read or not.
+                        account["inbox_total"] = json!(total);
+                        account["inbox_unread"] = json!(unseen);
+                        account["older_in_inbox"] = json!(
+                            (whole && !unread)
+                                .then(|| (total as usize).saturating_sub(found.len()))
+                        );
+                    }
+                    account
                 }
                 Err(e) => json!({ "name": n, "error": said(&e) }),
             });
@@ -688,6 +705,87 @@ impl Server {
     }
 }
 
+/// The folder search_messages is given to search every folder of an account.
+const EVERY_FOLDER: &str = "*";
+
+impl Server {
+    /// The newest `limit` messages of every folder of the account with all
+    /// of `query` in them, each with its folder: a message in two, as Gmail
+    /// keeps one under its label and in All Mail, once, where it is filed.
+    fn search_everywhere(
+        &mut self,
+        account: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Value> {
+        let called = self.called(account);
+        let store = self.store(account)?;
+        let mut folders: Vec<Folder> = store
+            .folders()?
+            .into_iter()
+            .filter(|f| f.selectable)
+            .collect();
+        // Where the user files first, so a message kept in two is found
+        // there: then the Inbox; then folders the server keeps of itself (as
+        // Gmail's Important and Starred, as it marks them); then Sent, Drafts,
+        // Junk and Trash; then Archive; All Mail last.
+        folders.sort_by_key(|f| match f.role {
+            _ if f.all => 5,
+            mail::Role::Other if !f.kept => 0,
+            mail::Role::Inbox => 1,
+            mail::Role::Other => 2,
+            mail::Role::Archive => 4,
+            _ => 3,
+        });
+        let mut found: Vec<(String, Summary)> = Vec::new();
+        let mut not_searched = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for f in &folders {
+            match store.search(&f.path, query, limit) {
+                Ok(hits) => found.extend(
+                    hits.into_iter()
+                        .filter(|s| s.message_id.is_empty() || seen.insert(s.message_id.clone()))
+                        .map(|s| (f.path.clone(), s)),
+                ),
+                Err(e) => not_searched.push(json!({ "folder": f.path, "error": said(&e) })),
+            }
+        }
+        found.sort_by_key(|(_, s)| std::cmp::Reverse(s.date));
+        found.truncate(limit);
+        let messages: Vec<Value> = found
+            .iter()
+            .map(|(path, s)| {
+                let mut m = summary(s);
+                m["folder"] = json!(path);
+                m
+            })
+            .collect();
+        Ok(json!({
+            "account": called,
+            "folder": EVERY_FOLDER,
+            "query": query,
+            "searched": folders.len() - not_searched.len(),
+            "not_searched": not_searched,
+            "found": messages.len(),
+            "messages": messages,
+        }))
+    }
+}
+
+/// The path, as the server keeps names (modified UTF-7), for a folder named
+/// `wanted`, trimmed, to be made: one there is none of among `folders`,
+/// whatever its case, read as the user would read its name.
+fn new_folder(folders: &[Folder], wanted: Option<&str>) -> anyhow::Result<String> {
+    let name = wanted
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .context("give the new folder's path")?;
+    if let Some(f) = mail::folder_named(folders, name) {
+        bail!("there is a folder {} already: file under it", f.path);
+    }
+    Ok(crate::index::labels::folder_name(name))
+}
+
 /// The folders of `store`, with how many messages each holds and how many
 /// are unread.
 fn folders_counted(store: &mut dyn Store) -> anyhow::Result<Vec<Folder>> {
@@ -731,11 +829,11 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
             "the agent's program cannot ask the user: L in letterbox asks about what it is \
              least sure of",
         ),
-        "trash_messages" | "file_messages" if background => Some(
+        _ if MOVES.contains(&name) && background => Some(
             "letterbox started this agent, and no one is there to say yes, so nothing is \
              moved: report_triage hands letterbox what you would move, for the user to choose",
         ),
-        "trash_messages" | "file_messages" if !asks => Some(CANNOT_ASK),
+        _ if MOVES.contains(&name) && !asks => Some(CANNOT_ASK),
         "open_letterbox" if background => Some("letterbox started this agent: it is open"),
         "mark_message" if background => {
             Some("letterbox started this agent: mark mail only as the user asks")
@@ -743,6 +841,16 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// The tools that move or make mail's folders: each only once the user,
+/// asked by letterbox, says yes.
+const MOVES: &[&str] = &[
+    "trash_messages",
+    "file_messages",
+    "create_folder",
+    "move_messages",
+    "merge_folders",
+];
 
 /// Why nothing is moved by an agent whose program cannot ask the user.
 const CANNOT_ASK: &str = "the agent's program cannot ask the user to say yes, so nothing is \
@@ -785,6 +893,11 @@ impl Said {
             )),
         }
     }
+}
+
+/// Whether `args` say `key` is true; not, if they leave it out.
+fn flag(args: &Value, key: &str) -> bool {
+    args.get(key).and_then(Value::as_bool) == Some(true)
 }
 
 /// The uids asked to be moved: at least one, at most `MOVED_LIMIT`, each

@@ -117,6 +117,10 @@ pub struct Folder {
     /// Whether it holds every message of the account, as Gmail's All Mail.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub all: bool,
+    /// Whether the server keeps it of itself, as Gmail's Starred and
+    /// Important: mail in it is marked so, not filed there.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub kept: bool,
     pub total: Option<u32>,
     pub unseen: Option<u32>,
 }
@@ -129,6 +133,21 @@ impl Folder {
         self.path
             .strip_prefix(path)
             .is_some_and(|rest| rest.starts_with(delimiter.unwrap_or("/")))
+    }
+
+    /// The path of the folder it is in, as its server writes it; empty at
+    /// the top.
+    pub fn parent(&self) -> &str {
+        let delimiter = self.delimiter.as_deref().filter(|d| !d.is_empty());
+        self.path
+            .rsplit_once(delimiter.unwrap_or("/"))
+            .map_or("", |(p, _)| p)
+    }
+
+    /// Whether mail is filed in it as the user files: one that holds mail,
+    /// kept for no role, and not every message of the account.
+    pub fn is_filed(&self) -> bool {
+        self.selectable && self.role == Role::Other && !self.all && !self.kept
     }
 
     pub fn new(
@@ -158,6 +177,7 @@ impl Folder {
             role,
             selectable,
             all: false,
+            kept: false,
             total: None,
             unseen: None,
         }
@@ -878,4 +898,54 @@ pub(crate) fn header_end(raw: &[u8]) -> usize {
         i += 1;
     }
     raw.len()
+}
+
+/// The folder of `folders` at the path `name`, as the user reads it, whatever
+/// its case: the server keeps names otherwise (modified UTF-7).
+pub fn folder_named<'a>(folders: &'a [Folder], name: &str) -> Option<&'a Folder> {
+    let wanted = crate::index::fold(name);
+    folders
+        .iter()
+        .find(|f| crate::index::fold(&utf7_imap(&f.path)) == wanted)
+}
+
+/// The pairs of `folders` mail is filed in side by side, under one parent,
+/// of nearly one name: the same but for case, spaces and marks, or one the
+/// other but for an ending (Bill and Bills, Grant and Grants), as two
+/// folders made for one thing would be. Never of two parents, nor of a word
+/// more (Home and Homework).
+pub fn look_alike(folders: &[Folder]) -> Vec<[String; 2]> {
+    let plain = |f: &Folder| -> String {
+        f.name
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    // Each with its name made plain, and how many letters that has: letters,
+    // not bytes, as an accented name is longer in bytes.
+    let named: Vec<(&Folder, String, usize)> = folders
+        .iter()
+        .filter(|f| f.is_filed())
+        .map(|f| {
+            let p = plain(f);
+            let n = p.chars().count();
+            (f, p, n)
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (i, (a, pa, na)) in named.iter().enumerate() {
+        for (b, pb, nb) in &named[i + 1..] {
+            let [(short, s), (long, l)] = if na <= nb {
+                [(pa, *na), (pb, *nb)]
+            } else {
+                [(pb, *nb), (pa, *na)]
+            };
+            let alike = short == long || (s >= 4 && l - s <= 3 && long.starts_with(short.as_str()));
+            if a.parent() == b.parent() && alike {
+                pairs.push([a.path.clone(), b.path.clone()]);
+            }
+        }
+    }
+    pairs
 }

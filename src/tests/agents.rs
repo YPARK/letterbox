@@ -1,6 +1,7 @@
 //! Signing in with Microsoft, and the mail served to an AI agent over MCP.
 
 use super::*;
+use serde_json::{Value, json};
 
 // ---- Microsoft, as letterbox signs in with it ----
 
@@ -458,6 +459,80 @@ pub(super) fn demo_server(asks: bool) -> crate::mcp::Server {
             "params": { "protocolVersion": "2025-06-18", "capabilities": capabilities } }))
         .unwrap();
     server
+}
+
+// ---- Scripting the MCP server, as an agent and its user would ----
+
+/// A tools/call of `name`, as a line the agent writes.
+pub(super) fn tool(id: u64, name: &str, args: Value) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": { "name": name, "arguments": args } })
+    .to_string()
+}
+
+/// The user's answer to letterbox's question `id`.
+pub(super) fn said(id: &str, action: &str) -> String {
+    json!({ "jsonrpc": "2.0", "id": id,
+        "result": { "action": action, "content": { "confirm": true } } })
+    .to_string()
+}
+
+/// The paths of the demo's folders, as list_accounts gives them.
+pub(super) fn paths(server: &mut crate::mcp::Server) -> Vec<String> {
+    let listed = call(server, "list_accounts", json!({}));
+    listed["structuredContent"]["accounts"][0]["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// What `script` wrote back, the server serving it to its end.
+pub(super) fn served(server: &mut crate::mcp::Server, script: Vec<String>) -> Vec<Value> {
+    let out = Written::default();
+    server
+        .serve(crate::mcp::Io {
+            lines: Box::new(script.into_iter().map(Ok)),
+            out: Box::new(out.clone()),
+        })
+        .unwrap();
+    out.messages()
+}
+
+/// The result of the call `id`, among what was written.
+pub(super) fn reply(written: &[Value], id: u64) -> Value {
+    written
+        .iter()
+        .find(|m| m["id"] == id)
+        .unwrap_or_else(|| panic!("no reply {id}: {written:?}"))["result"]
+        .clone()
+}
+
+/// The uids of `folder` of the demo, newest first.
+pub(super) fn uids(server: &mut crate::mcp::Server, folder: &str) -> Vec<u64> {
+    let listed = call(server, "list_messages", json!({ "folder": folder }));
+    listed["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["uid"].as_u64().unwrap())
+        .collect()
+}
+
+/// What the user was asked, each time, in order.
+pub(super) fn asked(written: &[Value]) -> Vec<String> {
+    written
+        .iter()
+        .filter(|m| m["method"] == "elicitation/create")
+        .map(|m| m["params"]["message"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// How many messages `folder` of the demo holds.
+pub(super) fn total(server: &mut crate::mcp::Server, folder: &str) -> u64 {
+    let listed = call(server, "list_messages", json!({ "folder": folder }));
+    listed["structuredContent"]["total"].as_u64().unwrap()
 }
 
 /// The uids of the demo's Inbox, newest first, and who each is from.
