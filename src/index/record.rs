@@ -75,6 +75,9 @@ pub struct FolderState {
     /// Whether it holds every message of the account, as Gmail's All Mail.
     #[serde(default)]
     pub all: bool,
+    /// Whether the server keeps it of itself, as Gmail's Starred.
+    #[serde(default)]
+    pub kept: bool,
     /// What its path's parts are parted by.
     #[serde(default)]
     pub delimiter: Option<String>,

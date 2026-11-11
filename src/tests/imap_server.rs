@@ -263,6 +263,12 @@ pub(super) fn gmail_boxes() -> Boxes {
             Mailbox::new("[Gmail]/Drafts", "\\HasNoChildren \\Drafts", Vec::new()),
             Mailbox::new("[Gmail]/Spam", "\\HasNoChildren \\Junk", Vec::new()),
             Mailbox::new("[Gmail]/Trash", "\\HasNoChildren \\Trash", Vec::new()),
+            Mailbox::new("[Gmail]/Starred", "\\HasNoChildren \\Flagged", Vec::new()),
+            Mailbox::new(
+                "[Gmail]/Important",
+                "\\HasNoChildren \\Important",
+                Vec::new(),
+            ),
             Mailbox::new("Projects", "\\HasChildren", Vec::new()),
             Mailbox::new("Projects/Grant", "\\HasNoChildren", Vec::new()),
         ],
@@ -652,35 +658,51 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                     }
                     "COPY" | "MOVE" => {
                         let w = words(args);
-                        let uid: u32 = w[0].parse().unwrap_or(0);
+                        let wanted = set(&w[0]);
                         let dest = w.get(1).cloned().unwrap_or_default();
                         let src = selected.unwrap();
                         let seq = boxes.tick();
+                        let uids: Vec<u32> = boxes[src]
+                            .letters
+                            .iter()
+                            .map(|l| l.uid)
+                            .filter(|&u| within(&wanted, u))
+                            .collect();
                         if !boxes.iter().any(|b| b.name == dest) {
                             done = format!("{tag} NO no such folder\r\n");
-                        } else if !boxes[src].letters.iter().any(|l| l.uid == uid) {
+                        } else if uids.is_empty() {
                             done = format!("{tag} NO no such message\r\n");
                         } else {
-                            let i = boxes[src]
-                                .letters
-                                .iter()
-                                .position(|l| l.uid == uid)
-                                .unwrap();
-                            let letter = if sub == "MOVE" {
-                                boxes[src].letters.remove(i)
-                            } else {
-                                boxes[src].letters[i].clone()
-                            };
-                            let new_uid = next_uid(&boxes);
                             let at = boxes.iter().position(|b| b.name == dest).unwrap();
-                            boxes[at].push(Letter {
-                                uid: new_uid,
-                                modseq: seq,
-                                ..letter
-                            });
+                            let mut new_uids = Vec::new();
+                            for &uid in &uids {
+                                let i = boxes[src]
+                                    .letters
+                                    .iter()
+                                    .position(|l| l.uid == uid)
+                                    .unwrap();
+                                let letter = if sub == "MOVE" {
+                                    boxes[src].letters.remove(i)
+                                } else {
+                                    boxes[src].letters[i].clone()
+                                };
+                                let new_uid = next_uid(&boxes);
+                                boxes[at].push(Letter {
+                                    uid: new_uid,
+                                    modseq: seq,
+                                    ..letter
+                                });
+                                new_uids.push(new_uid);
+                            }
                             let validity = boxes[at].validity;
-                            done =
-                                format!("{tag} OK [COPYUID {validity} {uid} {new_uid}] moved\r\n");
+                            let joined = |v: &[u32]| {
+                                v.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
+                            };
+                            done = format!(
+                                "{tag} OK [COPYUID {validity} {} {}] moved\r\n",
+                                joined(&uids),
+                                joined(&new_uids)
+                            );
                         }
                     }
                     "EXPUNGE" => {
@@ -707,6 +729,15 @@ pub(super) fn serve(tcp: TcpStream, shared: Boxes) {
                     done = format!("{tag} NO exists\r\n");
                 } else {
                     boxes.push(Mailbox::new(&name, "\\HasNoChildren", Vec::new()));
+                }
+            }
+            "DELETE" => {
+                let name = words(args).into_iter().next().unwrap_or_default();
+                match boxes.iter().position(|b| b.name == name) {
+                    Some(at) => {
+                        boxes.remove(at);
+                    }
+                    None => done = format!("{tag} NO no such folder\r\n"),
                 }
             }
             "RENAME" => {

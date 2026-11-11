@@ -202,6 +202,16 @@ pub(super) fn special(attributes: &[NameAttribute]) -> Option<Role> {
     })
 }
 
+/// Whether the attributes mark a folder the server keeps of itself, of mail
+/// marked so rather than filed there: Starred (`\\Flagged`) and Important.
+pub(super) fn kept(attributes: &[NameAttribute]) -> bool {
+    attributes.iter().any(|a| match a {
+        NameAttribute::Flagged => true,
+        NameAttribute::Extension(e) => e.eq_ignore_ascii_case("\\Important"),
+        _ => false,
+    })
+}
+
 /// `words` as an IMAP quoted string: control characters as spaces, as a
 /// quoted string cannot hold a line's end, which would end the command and
 /// start another.

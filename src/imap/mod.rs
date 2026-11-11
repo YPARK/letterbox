@@ -181,16 +181,16 @@ impl Store for Imap {
             Ok(names
                 .iter()
                 .map(|n| {
-                    let selectable = !n
-                        .attributes()
-                        .iter()
-                        .any(|a| matches!(a, NameAttribute::NoSelect));
-                    let mut folder =
-                        Folder::new(n.name(), n.delimiter(), special(n.attributes()), selectable);
-                    folder.all = n
-                        .attributes()
-                        .iter()
-                        .any(|a| matches!(a, NameAttribute::All));
+                    let attributes = n.attributes();
+                    let has = |x: NameAttribute| attributes.contains(&x);
+                    let mut folder = Folder::new(
+                        n.name(),
+                        n.delimiter(),
+                        special(attributes),
+                        !has(NameAttribute::NoSelect),
+                    );
+                    folder.all = has(NameAttribute::All);
+                    folder.kept = kept(attributes);
                     folder
                 })
                 .collect::<Vec<_>>())
@@ -297,27 +297,8 @@ impl Store for Imap {
             let Some(id) = id.filter(|s| !s.is_empty()) else {
                 return Ok(Found::NoId);
             };
-            // MOVE is one step. Without it, copy and then delete, which a
-            // server that stops halfway can leave in both folders.
-            let movable = match known.or(learned) {
-                Some(movable) => movable,
-                None => match s.capabilities() {
-                    Ok(caps) => {
-                        let movable = caps.has_str("MOVE");
-                        learned = Some(movable);
-                        movable
-                    }
-                    Err(_) => false,
-                },
-            };
-            let copied = if movable {
-                transferred(s, "MOVE", uid, to)?
-            } else {
-                let copied = transferred(s, "COPY", uid, to)?;
-                s.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")?;
-                s.uid_expunge(uid.to_string())?;
-                copied
-            };
+            let movable = movable(s, known, &mut learned);
+            let copied = transfer(s, &uid.to_string(), to, movable)?;
             // The source lost a message, so its cached count no longer holds.
             *selected = None;
             if let Some(uid) = copied {
@@ -340,6 +321,28 @@ impl Store for Imap {
                 bail!("it was moved, but its new place could not be told, so it was not recorded")
             }
         }
+    }
+
+    fn move_every(&mut self, from: &str, to: &str) -> anyhow::Result<usize> {
+        let known = self.can_move;
+        let mut learned = None;
+        let moved = self.run(|s, selected| {
+            select(s, selected, from, false)?;
+            // Every UID up to the highest there now, as one short range: one
+            // that comes while this runs takes a higher UID, so it is left
+            // where it came, never deleted unmoved.
+            let uids = s.uid_search("ALL")?;
+            if let Some(highest) = uids.iter().max() {
+                let movable = movable(s, known, &mut learned);
+                transfer(s, &format!("1:{highest}"), to, movable)?;
+                *selected = None;
+            }
+            Ok(uids.len())
+        });
+        if self.session.is_some() && self.can_move.is_none() {
+            self.can_move = learned;
+        }
+        moved
     }
 
     fn uid_of(&mut self, folder: &str, message_id: &str) -> anyhow::Result<Option<u32>> {

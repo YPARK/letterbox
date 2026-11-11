@@ -110,10 +110,11 @@ fn parts(path: &str, delimiter: Option<&str>) -> Vec<String> {
 }
 
 /// The labels a folder is: each level of its path, but for the Inbox it
-/// may be under; none for a folder with a role, or one that holds all.
+/// may be under; none for a folder with a role, one that holds all, or one
+/// the server keeps of itself.
 pub fn of_folder(path: &str, state: Option<&FolderState>) -> Vec<String> {
     let role = state.and_then(|s| s.role).unwrap_or(Role::Other);
-    if role != Role::Other || state.is_some_and(|s| s.all) {
+    if role != Role::Other || state.is_some_and(|s| s.all || s.kept) {
         return Vec::new();
     }
     let delimiter = state.and_then(|s| s.delimiter.as_deref());
@@ -260,7 +261,7 @@ impl Index {
 pub fn folder_for<'a>(folders: &'a [Folder], label: &str) -> Option<&'a Folder> {
     folders
         .iter()
-        .filter(|f| f.selectable && f.role == Role::Other && !f.all)
+        .filter(|f| f.is_filed())
         .filter(|f| fold(&f.name) == fold(label))
         .min_by_key(|f| (f.path.len(), f.path.clone()))
 }

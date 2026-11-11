@@ -875,6 +875,14 @@ impl Store for Demo {
             .collect())
     }
 
+    fn move_every(&mut self, from: &str, to: &str) -> anyhow::Result<usize> {
+        let uids = self.uids(from)?;
+        for &uid in &uids {
+            self.relocate(from, uid, to, "")?;
+        }
+        Ok(uids.len())
+    }
+
     fn uids(&mut self, folder: &str) -> anyhow::Result<Vec<u32>> {
         Ok(self.mail().letters(folder)?.iter().map(|l| l.uid).collect())
     }

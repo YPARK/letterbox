@@ -334,6 +334,7 @@ fn look(
     };
     state.role = Some(folder.role);
     state.all = folder.all;
+    state.kept = folder.kept;
     state.delimiter = folder.delimiter.clone();
     let on_server = store.uids(path)?;
     let placed = if fresh {

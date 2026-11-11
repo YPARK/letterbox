@@ -18,6 +18,10 @@ things to move or forward).
    a request, a review), `read_message` with `max_chars: 4000`. Skip bulk
    mail whose preview says enough.
 3. Read no more than about 25 messages; say what was left unread.
+4. Each account says `inbox_total` and `older_in_inbox`: what else is in its
+   Inbox, older than the hours looked back over. Say it ("and 6 older still
+   in the Inbox"); never call an Inbox clear or empty unless `inbox_total`
+   is 0.
 
 ## 2. Sort each message into one of
 
@@ -44,8 +48,11 @@ At most 20 at once. Never propose a move to change what letterbox learns.
 1. Show the summary: the groups above, a line each, with who, what, what
    is needed, and by when.
 2. Offer the Trash batch and each File batch with `trash_messages` and
-   `file_messages`; letterbox lists them to the user and asks. A no is
-   final for that batch: do not ask again, whole or in parts.
+   `file_messages`; letterbox lists them to the user and asks. Batches of
+   several accounts or folders can go as one question with `move_messages`.
+   A no is final for that batch: do not ask again, whole or in parts.
+   A folder the user asks for that is not there: `create_folder`, or
+   `create: true` on the move, never a name the user did not give.
 3. Then sum up: what moved, what the user declined, how many were learnt
    (`learnt` in each result), and what is left to do, most urgent first.
 4. End with 3 to 5 questions the user might ask next, as they would type

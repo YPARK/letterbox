@@ -3401,7 +3401,7 @@ dependencies = [
 
 [[package]]
 name = "letterbox"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "age",
  "anyhow",
