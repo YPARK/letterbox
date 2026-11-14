@@ -110,16 +110,44 @@ pub(super) fn search(f: &mut Frame, app: &mut App, area: Rect) {
         }
         x += width;
     }
+    // A little mailbox in the corner, just for fun: its flag up while the
+    // Inbox has anything unread.
+    let room = usize::from(right.right().saturating_sub(x));
+    let logo_w = if room >= count.width() + usize::from(LOGO_W) {
+        LOGO_W
+    } else {
+        0
+    };
     let rest = Rect {
         x,
-        width: right.right().saturating_sub(x),
+        width: right.right().saturating_sub(x + logo_w),
         ..right
     };
     f.render_widget(
         Paragraph::new(Span::styled(count, Style::new().fg(t.dim))).alignment(Alignment::Right),
         rest,
     );
+    if logo_w > 0 {
+        let unread = app.unseen_of(crate::mail::Role::Inbox).unwrap_or(0) > 0;
+        let flag = if unread {
+            Span::styled("⚑", Style::new().fg(t.error).bold())
+        } else {
+            Span::styled("⚐", Style::new().fg(t.faint))
+        };
+        let logo = Line::from(vec![
+            Span::raw(" "),
+            Span::styled("✉", Style::new().fg(t.side).bg(t.title).bold()),
+            flag,
+        ]);
+        f.render_widget(
+            Paragraph::new(logo),
+            Rect::new(rest.right(), right.y, logo_w, 1),
+        );
+    }
 }
+
+/// How wide the little mailbox at the top right is.
+const LOGO_W: u16 = 3;
 
 /// Where the items of a list drawn in `area`, from `offset`, each as high
 /// as `heights` says, are on the screen, by their place in the list.

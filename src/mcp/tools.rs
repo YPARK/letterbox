@@ -28,10 +28,11 @@ pub(super) fn initialize(params: &Value) -> Value {
             do not say yes to; what they say yes to is learnt. Propose, in a batch, only what \
             you are sure of; never move a message to steer what is learnt. Asked to check, sort \
             or sum up new mail (\"check my email\", \"check my letterbox\", \"check lbx\"), go \
-            as the prompt mail-triage says: triage first; read what may \
-            need the user; never propose to throw away mail flagged, answered or from a \
+            as the prompt mail-triage says: triage first, and slack_recent beside it \
+            when Slack is set up; read what may need the user; never propose to throw away mail flagged, answered or from a \
             person, nor to file what needs an answer or is due; sum up by what needs an \
-            answer, what is due, what is to know, papers and junk; end with questions to ask \
+            answer, what is due, what is to know, papers and junk, Slack's among them; Slack \
+            is never moved; end with questions to ask \
             next. Started by letterbox (triage says started_by_letterbox), nothing can be \
             moved: hand it all to report_triage. Every few days, uncertain_messages finds what \
             letterbox is least sure of, and ask_about_messages asks the user, one at a time: \

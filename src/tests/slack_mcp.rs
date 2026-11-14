@@ -3,7 +3,7 @@
 
 use super::agents::{call, demo_server};
 use super::drafting::answered;
-use super::slack_tui::workspace;
+use super::slack_tui::{slack, workspace};
 use crate::slack::{Session, Slack};
 use serde_json::{Value, json};
 
@@ -47,6 +47,7 @@ fn every_slack_tool_is_offered_and_what_it_reads_is_said_to_be_data() {
         "slack_find_person",
         "slack_save_file",
         "slack_send",
+        "slack_recent",
     ] {
         assert!(named(name).is_some(), "{name}");
     }
@@ -218,4 +219,118 @@ fn nothing_is_sent_where_no_one_can_say_yes() {
     );
     assert_eq!(r["isError"], true, "{r}");
     assert!(posts(&asked).is_empty());
+}
+
+/// A workspace where the user is Bo, with a direct message from Ana and a
+/// channel naming Bo, both new, and a channel with nothing new.
+fn busy() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let message = |ts: &str, user: &str, text: &str| json!({"ts": ts, "user": user, "text": text});
+    slack(move |_| {
+        vec![
+            (
+                "auth.test",
+                json!({"ok": true, "user": "bo", "user_id": "U2", "team": "Acme",
+                                 "url": "https://acme.slack.com/"}),
+            ),
+            (
+                "users.list",
+                json!({"ok": true, "members": [
+                    {"id": "U1", "name": "ana", "profile": {"display_name": "Ana"}},
+                    {"id": "U2", "name": "bo", "profile": {"display_name": "Bo"}},
+                ]}),
+            ),
+            (
+                "users.conversations",
+                json!({"ok": true, "channels": [
+                    {"id": "D1", "is_im": true, "user": "U1", "updated": 3_000},
+                    {"id": "C00", "name": "lab", "is_channel": true, "updated": 2_000},
+                    {"id": "C01", "name": "quiet", "is_channel": true, "updated": 1_000},
+                    {"id": "C02", "name": "broken", "is_channel": true, "updated": 500},
+                    {"id": "C03", "name": "unlooked", "is_channel": true, "updated": 100},
+                ]}),
+            ),
+            (
+                "conversations.history channel=C02",
+                json!({"ok": false, "error": "missing_scope"}),
+            ),
+            (
+                "conversations.history channel=D1 oldest=",
+                json!({"ok": true, "messages": [
+                    message("1700000400.0", "U1", "can you look at the draft?"),
+                ]}),
+            ),
+            (
+                "conversations.history channel=C00 oldest=",
+                json!({"ok": true, "messages": [
+                    message("1700000300.0", "U1", "<@U2> the run finished"),
+                ]}),
+            ),
+            (
+                "conversations.history oldest=",
+                json!({"ok": true, "messages": []}),
+            ),
+        ]
+    })
+}
+
+#[test]
+fn what_came_to_slack_lately_is_gathered_beside_the_mail() {
+    let (base, asked) = busy();
+    let mut server = server_on(&base, true);
+    let r = call(
+        &mut server,
+        "slack_recent",
+        json!({ "hours": 6, "conversations": 4 }),
+    );
+    let space = &r["structuredContent"]["workspaces"][0];
+    assert_eq!(space["name"], "acme", "{r}");
+    assert_eq!(space["you"], "Bo", "{r}");
+    let found = space["conversations"].as_array().unwrap().clone();
+    assert_eq!(found.len(), 2, "the quiet channel is left out: {r}");
+    // One that cannot be read is named, and the rest still given; how many
+    // were looked at, of how many, is said.
+    assert_eq!(space["not_read"], json!(["broken"]), "{r}");
+    assert_eq!(space["looked_at"], 4, "{r}");
+    assert_eq!(space["of"], 5, "{r}");
+    assert_eq!(found[0]["name"], "Ana");
+    assert_eq!(found[0]["kind"], "direct");
+    assert_eq!(
+        found[0]["messages"][0]["text"],
+        "can you look at the draft?"
+    );
+    assert_eq!(found[1]["name"], "lab");
+    assert_eq!(found[1]["messages"][0]["text"], "@Bo the run finished");
+    assert!(
+        r["structuredContent"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("data")
+    );
+    // Only since the hours asked for.
+    let since = jiff::Timestamp::now().as_second() - 6 * 3600;
+    let histories: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|q| q.contains("/conversations.history"))
+        .cloned()
+        .collect();
+    assert_eq!(histories.len(), 4, "{histories:?}");
+    for q in histories {
+        let oldest: i64 = q
+            .split("oldest=")
+            .nth(1)
+            .and_then(|v| v.split(['&', ' ', '.']).next())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("no oldest: {q}"));
+        assert!((oldest - since).abs() < 60, "{q}");
+    }
+}
+
+#[test]
+fn with_no_slack_set_up_nothing_is_there_and_nothing_fails() {
+    let mut server = demo_server(true);
+    let r = call(&mut server, "slack_recent", json!({}));
+    assert_ne!(r["isError"], true, "{r}");
+    assert_eq!(r["structuredContent"]["workspaces"], json!([]), "{r}");
 }

@@ -132,7 +132,7 @@ pub fn agent(path: &Path) -> anyhow::Result<Option<String>> {
 }
 
 /// What Claude Code is told, to look through new mail.
-const CLAUDE_ARGS: &str = "-p /mcp__letterbox__mail-triage --allowedTools mcp__letterbox__triage,mcp__letterbox__recent_messages,mcp__letterbox__read_message,mcp__letterbox__suggest_label,mcp__letterbox__report_triage";
+const CLAUDE_ARGS: &str = "-p /mcp__letterbox__mail-triage --allowedTools mcp__letterbox__triage,mcp__letterbox__recent_messages,mcp__letterbox__read_message,mcp__letterbox__suggest_label,mcp__letterbox__slack_recent,mcp__letterbox__slack_read,mcp__letterbox__report_triage";
 
 /// Claude Code looking through new mail, as `lbx agent set` sets it unless
 /// told another: by the whole path `found` for it, if any, as a program opened

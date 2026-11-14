@@ -137,19 +137,21 @@ impl Slack {
         count: usize,
         people: &People,
     ) -> anyhow::Result<Vec<Message>> {
-        let limit = count.to_string();
-        let v = self.call(
-            "conversations.history",
-            &[("channel", channel), ("limit", &limit)],
-        )?;
-        let mut messages: Vec<_> = v["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| Message::read(m, people))
-            .collect();
-        messages.reverse();
-        Ok(messages)
+        self.history(channel, count, &[], people)
+    }
+
+    /// Up to `count` messages of a conversation since `oldest`, in seconds
+    /// since 1970, the oldest first: those it began with, not replies in
+    /// threads begun before.
+    pub fn since(
+        &self,
+        channel: &str,
+        oldest: i64,
+        count: usize,
+        people: &People,
+    ) -> anyhow::Result<Vec<Message>> {
+        let oldest = oldest.to_string();
+        self.history(channel, count, &[("oldest", &oldest)], people)
     }
 
     /// Up to `count` messages of a conversation from before the message
@@ -161,16 +163,23 @@ impl Slack {
         count: usize,
         people: &People,
     ) -> anyhow::Result<Vec<Message>> {
+        let bounds = [("latest", ts), ("inclusive", "false")];
+        self.history(channel, count, &bounds, people)
+    }
+
+    /// Up to `count` messages of a conversation within `bounds`, the oldest
+    /// first.
+    fn history(
+        &self,
+        channel: &str,
+        count: usize,
+        bounds: &[(&str, &str)],
+        people: &People,
+    ) -> anyhow::Result<Vec<Message>> {
         let limit = count.to_string();
-        let v = self.call(
-            "conversations.history",
-            &[
-                ("channel", channel),
-                ("latest", ts),
-                ("inclusive", "false"),
-                ("limit", &limit),
-            ],
-        )?;
+        let mut form = vec![("channel", channel), ("limit", limit.as_str())];
+        form.extend_from_slice(bounds);
+        let v = self.call("conversations.history", &form)?;
         let mut messages: Vec<_> = v["messages"]
             .as_array()
             .into_iter()
@@ -179,6 +188,14 @@ impl Slack {
             .collect();
         messages.reverse();
         Ok(messages)
+    }
+
+    /// The conversations this session is in, each by its name, the busiest
+    /// first.
+    pub fn busiest(&self, people: &People) -> anyhow::Result<Vec<Channel>> {
+        let mut mine = named(self.mine()?, people);
+        mine.sort_by_key(|c| std::cmp::Reverse(c.updated));
+        Ok(mine)
     }
 
     /// All of the thread begun by the message `ts`, in its order.

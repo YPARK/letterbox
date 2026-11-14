@@ -2,7 +2,7 @@
 //! Slack: one for what is read, one that counts what is unread, slowly, as
 //! that takes a call or two a conversation and Slack limits how many.
 
-use super::reading::{Message, People, named};
+use super::reading::{Message, People};
 use super::{Channel, Slack};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -113,11 +113,7 @@ fn reads(
         for ask in batch {
             let answer = match ask {
                 Ask::Conversations => {
-                    let found = slack.mine().map(|mine| {
-                        let mut mine = named(mine, known);
-                        mine.sort_by_key(|c| std::cmp::Reverse(c.updated));
-                        mine
-                    });
+                    let found = slack.busiest(known);
                     match &found {
                         Ok(mine) => {
                             let _ = count.send(mine.clone());

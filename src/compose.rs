@@ -5,6 +5,7 @@ use crate::mail::{self, Message};
 use crate::ui;
 use base64::Engine;
 use jiff::Zoned;
+use unicode_width::UnicodeWidthStr;
 
 /// A header line above the blank line that ends them.
 #[derive(Clone, Copy)]
@@ -702,11 +703,52 @@ fn quote(text: &str) -> String {
     }
     let mut out = String::new();
     for line in text.lines() {
-        out.push_str("> ");
-        out.push_str(line);
-        out.push('\n');
+        // A line that fits, as mail wrapped by its sender, kept as it was,
+        // its indents and spaces too.
+        if line.width() + 2 <= QUOTED_KEPT {
+            out.push_str(format!("> {line}").trim_end());
+            out.push('\n');
+            continue;
+        }
+        // What it quoted already, `> > `, kept before each line it wraps to.
+        let said = line.trim_start_matches(['>', ' ']);
+        let older = line[..line.len() - said.len()].trim_end();
+        let prefix = if older.is_empty() {
+            "> ".to_string()
+        } else {
+            format!("> {older} ")
+        };
+        for piece in filled(said, QUOTED_WIDTH.saturating_sub(prefix.width())) {
+            out.push_str(&prefix);
+            out.push_str(&piece);
+            out.push('\n');
+        }
     }
     out
+}
+
+/// How wide a quoted line is wrapped to, its marks and all, as mail is
+/// read; and how wide one is kept whole, so mail wrapped at 72 by its sender
+/// is not broken again into a line and a word.
+const QUOTED_WIDTH: usize = 72;
+const QUOTED_KEPT: usize = 80;
+
+/// `text` broken at spaces into lines no wider than `width`, where its
+/// words allow: a word wider, as a link, is left whole on its own line, as
+/// `ui::wrap`, which breaks it, would not.
+fn filled(text: &str, width: usize) -> Vec<String> {
+    let (mut lines, mut line) = (Vec::new(), String::new());
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.width() + 1 + word.width() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    lines.push(line);
+    lines
 }
 
 fn addresses(s: &str) -> Result<Vec<String>, String> {

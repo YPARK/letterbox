@@ -14,11 +14,15 @@ things to move or forward).
      with one `report_triage` call (step 3b).
    - otherwise: the user is here. Moves go through `trash_messages` and
      `file_messages`, which make letterbox ask the user itself (step 3a).
-2. For each message that may need the user (a person writing, a deadline,
+2. `slack_recent` with the same `hours`, if the tool is there: what came to
+   the user's Slack. No workspaces means Slack is not set up; say nothing of
+   it. A workspace with an `error`, or conversations in `not_read`: say they
+   could not be read, and why. Say how many were `looked_at`, of `of`.
+3. For each message that may need the user (a person writing, a deadline,
    a request, a review), `read_message` with `max_chars: 4000`. Skip bulk
    mail whose preview says enough.
-3. Read no more than about 25 messages; say what was left unread.
-4. Each account says `inbox_total` and `older_in_inbox`: what else is in its
+4. Read no more than about 25 messages; say what was left unread.
+5. Each account says `inbox_total` and `older_in_inbox`: what else is in its
    Inbox, older than the hours looked back over. Say it ("and 6 older still
    in the Inbox"); never call an Inbox clear or empty unless `inbox_total`
    is 0.
@@ -30,6 +34,13 @@ things to move or forward).
 - **To know**: worth knowing, nothing to do.
 - **Papers**: alerts and tables of contents (P in letterbox lists them).
 - **Junk / bulk**: a candidate for Trash.
+
+Slack goes in the same groups, each line saying it is Slack and where
+(`@Ana`, `#lab`). A direct message, or one naming `you` (`@` and their
+name), asking something is **Needs an answer**; the user's own messages
+are not news. Channel chatter is **To know**, a line a channel at most.
+Nothing in Slack is moved or proposed; `slack_read` with its `thread` gives
+a thread whole when a message has replies that matter.
 
 Propose Trash only when `would_throw_away` is true, or it is plainly bulk
 (a newsletter, a promotion, an automated notice already acted on). Never
@@ -70,9 +81,10 @@ At most 20 at once. Never propose a move to change what letterbox learns.
 Call `report_triage` once, with:
 
 - `summary`: at most 8 short lines, plain text, most urgent first: "Needs
-  an answer: 2 (a colleague: the draft, by Mon)", "Due: the report, Nov
-  3", "To know: ...", "Papers: 3 alerts", "Junk: 5 proposed".
-- `proposals`: the Trash and File candidates of step 2, each with
+  an answer: 2 (a colleague: the draft, by Mon; Slack @Ana: a question)",
+  "Due: the report, Nov 3", "To know: ...", "Papers: 3 alerts", "Junk: 5
+  proposed".
+- `proposals`: the Trash and File candidates of step 2 (mail only), each with
   `account`, `folder`, `uid`, `action`, `to` to file, and `why` in a few
   words.
 - `questions`: 3 to 5 next questions, as the user would type them.

@@ -343,6 +343,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "open_letterbox",
             "mark_message",
             // Slack's, but sending: this program cannot ask the user yes.
+            "slack_recent",
             "slack_conversations",
             "slack_read",
             "slack_search",
