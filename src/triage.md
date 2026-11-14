@@ -16,8 +16,8 @@ things to move or forward).
      `file_messages`, which make letterbox ask the user itself (step 3a).
 2. `slack_recent` with the same `hours`, if the tool is there: what came to
    the user's Slack. No workspaces means Slack is not set up; say nothing of
-   it. A workspace with an `error`, or conversations in `not_read`: say they
-   could not be read, and why. Say how many were `looked_at`, of `of`.
+   it. A workspace with an `error`: say it could not be read, and why. With
+   `more`, say there was more in Slack than was read.
 3. For each message that may need the user (a person writing, a deadline,
    a request, a review), `read_message` with `max_chars: 4000`. Skip bulk
    mail whose preview says enough.

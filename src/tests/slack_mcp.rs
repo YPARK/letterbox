@@ -25,13 +25,18 @@ fn tools(server: &mut crate::mcp::Server) -> Vec<Value> {
     reply["result"]["tools"].as_array().unwrap().clone()
 }
 
-fn posts(asked: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
+/// What was asked of Slack's `method`.
+fn asked_for(asked: &std::sync::Arc<std::sync::Mutex<Vec<String>>>, method: &str) -> Vec<String> {
     let asked = asked.lock().unwrap();
     asked
         .iter()
-        .filter(|r| r.contains("/chat.postMessage"))
+        .filter(|r| r.contains(method))
         .cloned()
         .collect()
+}
+
+fn posts(asked: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
+    asked_for(asked, "/chat.postMessage")
 }
 
 #[test]
@@ -221,16 +226,19 @@ fn nothing_is_sent_where_no_one_can_say_yes() {
     assert!(posts(&asked).is_empty());
 }
 
-/// A workspace where the user is Bo, with a direct message from Ana and a
-/// channel naming Bo, both new, and a channel with nothing new.
-fn busy() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-    let message = |ts: &str, user: &str, text: &str| json!({"ts": ts, "user": user, "text": text});
+/// A workspace where the user is Bo, in #lab, a direct message with Ana and
+/// a group of three; where Slack's search gives each page of `pages` as its
+/// number asks, of `total` pages.
+fn searched(
+    pages: Vec<Value>,
+    total: u32,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     slack(move |_| {
-        vec![
+        let mut answers = vec![
             (
                 "auth.test",
                 json!({"ok": true, "user": "bo", "user_id": "U2", "team": "Acme",
-                                 "url": "https://acme.slack.com/"}),
+                       "url": "https://acme.slack.com/"}),
             ),
             (
                 "users.list",
@@ -242,89 +250,178 @@ fn busy() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
             (
                 "users.conversations",
                 json!({"ok": true, "channels": [
-                    {"id": "D1", "is_im": true, "user": "U1", "updated": 3_000},
-                    {"id": "C00", "name": "lab", "is_channel": true, "updated": 2_000},
-                    {"id": "C01", "name": "quiet", "is_channel": true, "updated": 1_000},
-                    {"id": "C02", "name": "broken", "is_channel": true, "updated": 500},
-                    {"id": "C03", "name": "unlooked", "is_channel": true, "updated": 100},
+                    {"id": "C00", "name": "lab", "is_channel": true},
+                    {"id": "D1", "is_im": true, "user": "U1"},
+                    {"id": "G1", "name": "mpdm-ana--bo--cy-1", "is_mpim": true},
                 ]}),
             ),
-            (
-                "conversations.history channel=C02",
-                json!({"ok": false, "error": "missing_scope"}),
-            ),
-            (
-                "conversations.history channel=D1 oldest=",
-                json!({"ok": true, "messages": [
-                    message("1700000400.0", "U1", "can you look at the draft?"),
-                ]}),
-            ),
-            (
-                "conversations.history channel=C00 oldest=",
-                json!({"ok": true, "messages": [
-                    message("1700000300.0", "U1", "<@U2> the run finished"),
-                ]}),
-            ),
-            (
-                "conversations.history oldest=",
-                json!({"ok": true, "messages": []}),
-            ),
-        ]
+        ];
+        let keys = [
+            "search.messages page=1",
+            "search.messages page=2",
+            "search.messages page=3",
+        ];
+        for (key, matches) in keys.into_iter().zip(pages) {
+            answers.push((
+                key,
+                json!({"ok": true, "messages": {"matches": matches,
+                       "paging": {"pages": total}}}),
+            ));
+        }
+        answers
     })
+}
+
+/// A message Slack's search finds, `ago` seconds ago.
+fn hit(channel: Value, ago: i64, text: &str, link: &str) -> Value {
+    let ts = format!("{}.000100", jiff::Timestamp::now().as_second() - ago);
+    json!({"channel": channel, "ts": ts, "user": "U1", "text": text,
+           "permalink": format!("https://acme.slack.com/archives/{link}")})
+}
+
+fn searches(asked: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
+    asked_for(asked, "/search.messages")
 }
 
 #[test]
 fn what_came_to_slack_lately_is_gathered_beside_the_mail() {
-    let (base, asked) = busy();
-    let mut server = server_on(&base, true);
-    let r = call(
-        &mut server,
-        "slack_recent",
-        json!({ "hours": 6, "conversations": 4 }),
+    let lab = json!({"id": "C00", "name": "lab"});
+    let (base, asked) = searched(
+        vec![json!([
+            hit(
+                lab.clone(),
+                1_800,
+                "<@U2> approve this?",
+                "C00/p3?thread_ts=1600000000.0"
+            ),
+            hit(
+                json!({"id": "G1", "name": "mpdm-ana--bo--cy-1"}),
+                2_000,
+                "lunch?",
+                "G1/p9"
+            ),
+            hit(
+                json!({"id": "C99", "name": "elsewhere"}),
+                2_500,
+                "not the user's",
+                "C99/p1"
+            ),
+            hit(
+                json!({"id": "D1", "name": "U1", "is_im": true}),
+                3_600,
+                "can you look at the draft?",
+                "D1/p2"
+            ),
+            hit(lab.clone(), 7_200, "<@U2> the run finished", "C00/p1"),
+            hit(lab, 36_000, "from long before", "C00/p0"),
+        ])],
+        1,
     );
+    let mut server = server_on(&base, true);
+    let r = call(&mut server, "slack_recent", json!({ "hours": 6 }));
     let space = &r["structuredContent"]["workspaces"][0];
     assert_eq!(space["name"], "acme", "{r}");
     assert_eq!(space["you"], "Bo", "{r}");
+    // The user's conversations alone, by the one busy last first, each with
+    // its kind; each one's oldest first; what came before the hours left out.
     let found = space["conversations"].as_array().unwrap().clone();
-    assert_eq!(found.len(), 2, "the quiet channel is left out: {r}");
-    // One that cannot be read is named, and the rest still given; how many
-    // were looked at, of how many, is said.
-    assert_eq!(space["not_read"], json!(["broken"]), "{r}");
-    assert_eq!(space["looked_at"], 4, "{r}");
-    assert_eq!(space["of"], 5, "{r}");
-    assert_eq!(found[0]["name"], "Ana");
-    assert_eq!(found[0]["kind"], "direct");
+    let names: Vec<&str> = found.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["lab", "mpdm-ana--bo--cy-1", "Ana"], "{r}");
+    let kinds: Vec<&str> = found.iter().map(|c| c["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["public", "group", "direct"], "{r}");
+    let lab = found[0]["messages"].as_array().unwrap().clone();
+    assert_eq!(lab.len(), 2, "the one from before is left out: {r}");
+    assert_eq!(lab[0]["text"], "@Bo the run finished");
+    assert!(lab[0].get("thread").is_none(), "{r}");
+    // A reply in a thread begun long before is there, with its thread.
+    assert_eq!(lab[1]["text"], "@Bo approve this?");
+    assert_eq!(lab[1]["thread"], "1600000000.0");
     assert_eq!(
-        found[0]["messages"][0]["text"],
+        found[2]["messages"][0]["text"],
         "can you look at the draft?"
     );
-    assert_eq!(found[1]["name"], "lab");
-    assert_eq!(found[1]["messages"][0]["text"], "@Bo the run finished");
+    assert_eq!(space["more"], false, "{r}");
     assert!(
         r["structuredContent"]["note"]
             .as_str()
             .unwrap()
             .contains("data")
     );
-    // Only since the hours asked for.
+    // Searched from two days before the hours began: `after:` leaves out
+    // the day it names, by the user's clock, wherever they are.
     let since = jiff::Timestamp::now().as_second() - 6 * 3600;
-    let histories: Vec<String> = asked
-        .lock()
+    let day = jiff::Timestamp::from_second(since - 2 * 86_400)
         .unwrap()
-        .iter()
-        .filter(|q| q.contains("/conversations.history"))
-        .cloned()
-        .collect();
-    assert_eq!(histories.len(), 4, "{histories:?}");
-    for q in histories {
-        let oldest: i64 = q
-            .split("oldest=")
-            .nth(1)
-            .and_then(|v| v.split(['&', ' ', '.']).next())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_else(|| panic!("no oldest: {q}"));
-        assert!((oldest - since).abs() < 60, "{q}");
-    }
+        .strftime("%Y-%m-%d")
+        .to_string();
+    let searched = searches(&asked);
+    assert_eq!(searched.len(), 1, "{searched:?}");
+    assert!(
+        searched[0].contains(&format!("query=after%3A{day}")),
+        "{searched:?}"
+    );
+}
+
+#[test]
+fn pages_are_read_until_one_reaches_before_the_hours() {
+    let lab = || json!({"id": "C00", "name": "lab"});
+    let page = |ago: i64, old: bool| {
+        let mut v = vec![hit(lab(), ago, "new", "C00/p1")];
+        if old {
+            v.push(hit(lab(), 90_000, "old", "C00/p0"));
+        }
+        Value::Array(v)
+    };
+    // The second page reaches before: no third is asked for, and nothing
+    // more is said to be there.
+    let (base, asked) = searched(vec![page(100, false), page(200, true), page(300, false)], 5);
+    let mut server = server_on(&base, true);
+    let r = call(&mut server, "slack_recent", json!({ "hours": 24 }));
+    let space = &r["structuredContent"]["workspaces"][0];
+    assert_eq!(
+        space["conversations"][0]["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "{r}"
+    );
+    assert_eq!(space["more"], false, "{r}");
+    assert_eq!(searches(&asked).len(), 2);
+    // Every page new: as many as are read, and more said to be there.
+    let (base, asked) = searched(
+        vec![page(100, false), page(200, false), page(300, false)],
+        5,
+    );
+    let mut server = server_on(&base, true);
+    let r = call(&mut server, "slack_recent", json!({ "hours": 24 }));
+    let space = &r["structuredContent"]["workspaces"][0];
+    assert_eq!(
+        space["conversations"][0]["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3,
+        "{r}"
+    );
+    assert_eq!(space["more"], true, "{r}");
+    assert_eq!(searches(&asked).len(), 3);
+}
+
+#[test]
+fn a_page_that_cannot_be_read_keeps_what_was_read_before_it() {
+    let lab = json!({"id": "C00", "name": "lab"});
+    // Page two is not answered: Slack refuses it.
+    let (base, _) = searched(vec![json!([hit(lab, 100, "new", "C00/p1")])], 3);
+    let mut server = server_on(&base, true);
+    let r = call(&mut server, "slack_recent", json!({ "hours": 24 }));
+    let space = &r["structuredContent"]["workspaces"][0];
+    assert!(space.get("error").is_none(), "{r}");
+    assert_eq!(
+        space["conversations"][0]["messages"][0]["text"], "new",
+        "{r}"
+    );
+    assert_eq!(space["more"], true, "{r}");
 }
 
 #[test]

@@ -36,17 +36,66 @@ impl Slack {
     /// message with its conversation, by name, and its thread, which only
     /// its link says.
     pub fn search(&self, words: &str, people: &People) -> anyhow::Result<Vec<Hit>> {
+        Ok(self.search_page(words, 1, 50, people)?.0)
+    }
+
+    /// What Slack's search finds since `since`, in seconds since 1970, the
+    /// newest first, in threads begun before too: up to `pages` pages of
+    /// `count`, and whether there was more than was read. A page after the
+    /// first that cannot be read leaves what was.
+    pub fn search_since(
+        &self,
+        since: i64,
+        pages: u32,
+        count: u32,
+        people: &People,
+    ) -> anyhow::Result<(Vec<Hit>, bool)> {
+        // `after:` leaves out the day it names, by the user's clock,
+        // wherever they are: two days before, and what came too early
+        // dropped here, where its time is known.
+        let day = jiff::Timestamp::from_second(since - 2 * 86_400)?.strftime("%Y-%m-%d");
+        let query = format!("after:{day}");
+        let early = |h: &Hit| super::seconds(&h.message.ts).is_some_and(|t| t < since);
+        let mut hits = Vec::new();
+        for page in 1..=pages {
+            let (found, there) = match self.search_page(&query, page, count, people) {
+                Ok(read) => read,
+                Err(e) if page == 1 => return Err(e),
+                Err(_) => return Ok((hits, true)),
+            };
+            let (read, before) = (found.len(), hits.len());
+            hits.extend(found.into_iter().take_while(|h| !early(h)));
+            // Reached before `since`, or the last page: no more to read.
+            if hits.len() - before < read || page >= there {
+                return Ok((hits, false));
+            }
+        }
+        Ok((hits, true))
+    }
+
+    /// The `page`th of `count` messages Slack's search finds of `words`, the
+    /// newest first, and how many pages there are.
+    pub fn search_page(
+        &self,
+        words: &str,
+        page: u32,
+        count: u32,
+        people: &People,
+    ) -> anyhow::Result<(Vec<Hit>, u32)> {
+        let (page, count) = (page.to_string(), count.to_string());
         let v = self.call(
             "search.messages",
             &[
                 ("query", words),
-                ("count", "50"),
+                ("count", &count),
+                ("page", &page),
                 ("sort", "timestamp"),
                 ("sort_dir", "desc"),
             ],
         )?;
+        let pages = v["messages"]["paging"]["pages"].as_u64().unwrap_or(1) as u32;
         let matches = v["messages"]["matches"].as_array().into_iter().flatten();
-        Ok(matches
+        let hits = matches
             .filter_map(|m| {
                 let channel = &m["channel"];
                 let name = channel["name"].as_str().unwrap_or("");
@@ -70,7 +119,8 @@ impl Slack {
                     thread,
                 })
             })
-            .collect())
+            .collect();
+        Ok((hits, pages))
     }
 }
 
@@ -138,20 +188,6 @@ impl Slack {
         people: &People,
     ) -> anyhow::Result<Vec<Message>> {
         self.history(channel, count, &[], people)
-    }
-
-    /// Up to `count` messages of a conversation since `oldest`, in seconds
-    /// since 1970, the oldest first: those it began with, not replies in
-    /// threads begun before.
-    pub fn since(
-        &self,
-        channel: &str,
-        oldest: i64,
-        count: usize,
-        people: &People,
-    ) -> anyhow::Result<Vec<Message>> {
-        let oldest = oldest.to_string();
-        self.history(channel, count, &[("oldest", &oldest)], people)
     }
 
     /// Up to `count` messages of a conversation from before the message
