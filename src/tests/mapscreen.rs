@@ -756,3 +756,14 @@ fn how_the_model_does_on_mail_of_known_topics() {
         measure(n);
     }
 }
+
+#[test]
+fn a_little_mailbox_sits_at_the_top_right_its_flag_up_for_unread_mail() {
+    let mut app = demo();
+    let screen = app::screen(&mut app, 120, 40);
+    let top = screen.lines().next().unwrap().trim_end().to_string();
+    let unread = app.unseen_of(crate::mail::Role::Inbox).unwrap_or(0) > 0;
+    let logo = if unread { "✉⚑" } else { "✉⚐" };
+    assert!(top.ends_with(logo), "{top}");
+    assert!(top.contains("messages"), "the count is still there: {top}");
+}

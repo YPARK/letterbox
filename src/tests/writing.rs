@@ -734,3 +734,68 @@ fn a_forwards_files_keep_each_its_own_type() {
     assert_eq!(types, ["image/png", "image/jpeg"]);
     assert!(files.iter().all(|f| !f.mime.is_empty()));
 }
+
+#[test]
+fn what_a_reply_quotes_is_wrapped_to_be_read_whole() {
+    let long = "The first sentence of a long paragraph goes on. A second one follows it, \
+                and a third, until the line is far wider than any pane would show.";
+    let link = format!("https://example.com/{}", "a".repeat(90));
+    let raw = format!(
+        "From: Ada <ada@analytical.example>\r\nTo: you@example.com\r\nSubject: Long\r\n\
+         Message-ID: <l@x>\r\nDate: Mon, 2 Jan 2023 10:00:00 +0000\r\n\r\n\
+         {long}\r\n\r\n> an older quote, itself long enough to be wrapped again when it is quoted once more\r\n{link}\r\n"
+    );
+    let message = mail::message(1, raw.into_bytes()).unwrap();
+    let (text, _) = crate::compose::reply(&message);
+    let quoted: Vec<&str> = text.lines().filter(|l| l.starts_with('>')).collect();
+    for line in &quoted {
+        assert!(
+            line.chars().count() <= 76 || !line.trim_start_matches(['>', ' ']).contains(' '),
+            "too wide: {line}"
+        );
+    }
+    // Every word is still there, in order, and a link is never broken.
+    let words = |s: &str| {
+        s.split_whitespace()
+            .filter(|w| *w != ">")
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let joined: Vec<String> = quoted
+        .iter()
+        .flat_map(|l| words(l.trim_start_matches(['>', ' '])))
+        .collect();
+    let mut expected = words(long);
+    expected.extend(words(
+        "an older quote, itself long enough to be wrapped again when it is quoted once more",
+    ));
+    expected.push(link.clone());
+    assert_eq!(joined, expected, "{text}");
+    assert!(quoted.iter().any(|l| *l == format!("> {link}")), "{text}");
+    // The older quote's lines keep both marks.
+    assert!(
+        quoted.iter().filter(|l| l.starts_with("> > ")).count() >= 2,
+        "{text}"
+    );
+    // Paragraphs stay apart.
+    assert!(quoted.contains(&">"), "{text}");
+}
+
+#[test]
+fn a_quoted_line_that_fits_is_kept_as_it_was() {
+    let wrapped = "Mail already wrapped at seventy-two columns, as most clients send it, o.";
+    assert_eq!(wrapped.len(), 72);
+    let raw = format!(
+        "From: Ada <ada@analytical.example>\r\nTo: you@example.com\r\nSubject: Code\r\n\
+         Message-ID: <c@x>\r\nDate: Mon, 2 Jan 2023 10:00:00 +0000\r\n\r\n\
+         {wrapped}\r\n    let x  = 1;\r\n> > {wrapped}\r\n"
+    );
+    let message = mail::message(1, raw.into_bytes()).unwrap();
+    let (text, _) = crate::compose::reply(&message);
+    assert!(text.contains(&format!("\n> {wrapped}\n")), "{text}");
+    assert!(
+        text.contains("\n>     let x  = 1;\n"),
+        "indents and spaces kept: {text}"
+    );
+    assert!(text.contains(&format!("\n> > > {wrapped}\n")), "{text}");
+}

@@ -97,7 +97,8 @@ pub struct Server {
     /// one is there to say yes, so nothing is moved, only reported.
     pub background: bool,
     /// Slack's workspaces, each by its name, read as they are first asked of.
-    slack: Option<Vec<(String, crate::slack::Slack)>>,
+    /// One whose session cannot be read says why.
+    slack: Option<Vec<(String, Result<crate::slack::Slack, String>)>>,
 }
 
 /// The lines it reads and where it writes.
@@ -443,18 +444,13 @@ impl Server {
     /// message weighed by the map if `weigh`; an account that cannot be
     /// read says why.
     fn recent_all(&mut self, args: &Value, weigh: bool) -> Value {
-        let hours = args
-            .get("hours")
-            .and_then(Value::as_u64)
-            .unwrap_or(HOURS)
-            .clamp(1, HOURS_LIMIT);
+        let (_, since) = hours_back(args);
         let unread = args.get("unread_only").and_then(Value::as_bool) == Some(true);
         let limit = args
             .get("limit")
             .and_then(Value::as_u64)
             .map_or(50, |n| n as usize)
             .clamp(1, LISTED_LIMIT);
-        let since = jiff::Timestamp::now().as_second() - (hours * 3600) as i64;
         let asked = args.get("account").and_then(Value::as_str);
         let mut accounts = Vec::new();
         for n in self.names(asked) {
@@ -775,6 +771,20 @@ impl Server {
 /// The path, as the server keeps names (modified UTF-7), for a folder named
 /// `wanted`, trimmed, to be made: one there is none of among `folders`,
 /// whatever its case, read as the user would read its name.
+/// How many hours back `args` asks to look, as `triage` and `slack_recent`
+/// take them, and the time that many hours ago, in seconds since 1970.
+fn hours_back(args: &Value) -> (u64, i64) {
+    let hours = args
+        .get("hours")
+        .and_then(Value::as_u64)
+        .unwrap_or(HOURS)
+        .clamp(1, HOURS_LIMIT);
+    (
+        hours,
+        jiff::Timestamp::now().as_second() - (hours * 3600) as i64,
+    )
+}
+
 fn new_folder(folders: &[Folder], wanted: Option<&str>) -> anyhow::Result<String> {
     let name = wanted
         .map(str::trim)
