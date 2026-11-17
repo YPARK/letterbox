@@ -146,6 +146,7 @@ letterbox --demo                           # made-up mail
 letterbox folders                          # the first account's folders, and counts
 letterbox list --folder INBOX -n 20 --json
 letterbox read 4182 --json                 # a message, by its UID; not marked read
+letterbox read 4182 --save ~/Downloads     # its attachments, each under a name not yet taken
 letterbox search grant report --account Work
 ```
 
@@ -755,6 +756,7 @@ have your shell's `PATH`.
 | `search_messages` | a folder's messages with the words given, as the server searches; or, with folder `*`, every folder's, each with its folder, a message kept in two once | reads |
 | `find_address` | who you have written to or heard from, by name or part of an address, for an agent to fill in who a letter is to rather than guess | reads |
 | `read_message` | a message's headers, attachments, links and text, 20,000 characters at a time; not marked read | reads |
+| `save_attachment` | a message's attachments, or the one named, saved in a folder given or Downloads, under names not yet taken there | writes files |
 | `nearest_messages` | the messages nearest one on the map, by what they are about and who they are from, each with its labels and how far, in degrees | reads |
 | `suggest_label` | the label a message would be filed under, and the labels nearest it | reads |
 | `would_throw_away` | how likely you are to throw it away, as letterbox has learnt, and why | reads |
