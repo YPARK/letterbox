@@ -266,6 +266,16 @@ impl Server {
                     "more": (to < total).then(|| format!("from_char {to} for more")),
                 }))
             }
+            "save_attachment" => {
+                let uid = number("uid").context("give the message's uid")? as u32;
+                let dir = text("to")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(crate::app::downloads);
+                let raw = self.store(account.as_deref())?.raw(&folder, uid)?;
+                let saved = crate::app::save_attachments(&raw, text("name").as_deref(), &dir)?;
+                let saved: Vec<String> = saved.iter().map(|p| p.display().to_string()).collect();
+                Ok(json!({ "saved": saved }))
+            }
             "uncertain_messages" => {
                 let limit = number("limit").unwrap_or(5).clamp(1, 20);
                 self.uncertain(limit)

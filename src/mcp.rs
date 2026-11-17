@@ -817,6 +817,9 @@ fn refused(name: &str, asks: bool, background: bool) -> Option<&'static str> {
         "draft_reply" | "draft_message" if background => {
             Some("letterbox started this agent: draft a letter only as the user asks for it")
         }
+        "save_attachment" if background => {
+            Some("letterbox started this agent: save a message's files only as the user asks")
+        }
         "slack_send" if background => {
             Some("letterbox started this agent, and no one is there to say yes, so nothing is sent")
         }
