@@ -255,9 +255,17 @@ fn command(args: &Args) -> anyhow::Result<()> {
             which,
             json,
             raw,
+            save,
+            name,
         }) => {
             let mut store = store(args, which.account.as_deref())?;
             let bytes = store.raw(&which.folder, *uid)?;
+            if let Some(dir) = save {
+                for path in app::save_attachments(&bytes, name.as_deref(), dir)? {
+                    println!("{}", path.display());
+                }
+                return Ok(());
+            }
             if *raw {
                 use std::io::Write;
                 std::io::stdout().write_all(&bytes)?;

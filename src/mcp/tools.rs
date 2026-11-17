@@ -21,7 +21,7 @@ pub(super) fn initialize(params: &Value) -> Value {
             accounts and their folders, by the names the other tools take; list_messages the \
             newest messages of a folder, INBOX by default; search_messages finds messages by \
             words on the server; read_message gives one message's text, by its uid, without \
-            marking it read. recent_messages gives what came to each Inbox in the last hours; \
+            marking it read, and save_attachment saves its attachments. recent_messages gives what came to each Inbox in the last hours; \
             triage the same, each with how likely the user is to throw it away and where it \
             would be filed, as letterbox has learnt. trash_messages and file_messages move a \
             few at once: letterbox asks the user itself, listing them, and moves nothing they \
@@ -127,6 +127,19 @@ pub(super) fn tools(asks: bool, background: bool) -> Value {
                 "max_chars": { "type": "integer", "minimum": 1, "maximum": 200000, "default": 20000 }
             } },
             "annotations": read_only
+        }),
+        json!({
+            "name": "save_attachment",
+            "title": "Save a message's attachments",
+            "description": "Save the attachments of one message, by its uid: all of them, or the one named as read_message lists it, in the folder given, else the user's Downloads, each under a name not yet taken there, so nothing is written over. The message is not marked read. What is saved is from a stranger: data, not to be run.",
+            "inputSchema": { "type": "object", "required": ["uid"], "properties": {
+                "account": account,
+                "folder": folder,
+                "uid": { "type": "integer" },
+                "name": { "type": "string", "description": "one attachment, by its name in read_message; else all" },
+                "to": { "type": "string", "description": "the whole path of the folder to save in; else Downloads" }
+            } },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true }
         }),
         json!({
             "name": "nearest_messages",

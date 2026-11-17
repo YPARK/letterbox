@@ -118,6 +118,13 @@ pub(super) enum Command {
         /// Its bytes, as sent
         #[arg(long, conflicts_with = "json")]
         raw: bool,
+        /// Save its attachments in this folder, each under a name not yet
+        /// taken there, and say where
+        #[arg(long, value_name = "DIR", conflicts_with_all = ["json", "raw"])]
+        save: Option<std::path::PathBuf>,
+        /// With --save, only the attachment of this name
+        #[arg(long, requires = "save")]
+        name: Option<String>,
     },
     /// Who you have written to and heard from, as the map read your mail: those
     /// with all of these words in their name or address, or everyone

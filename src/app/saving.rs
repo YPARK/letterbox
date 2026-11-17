@@ -139,6 +139,40 @@ pub(crate) fn save_one(
     Ok(path)
 }
 
+/// Save the attachments of `raw`, a message as sent, in `dir`: all of
+/// them, or those named `name`, as read_message lists them; each under a
+/// name not yet taken there, so two of one name are both kept. Where each
+/// was saved, in turn.
+pub(crate) fn save_attachments(
+    raw: &[u8],
+    name: Option<&str>,
+    dir: &std::path::Path,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let all = crate::mail::attachments(raw);
+    if all.is_empty() {
+        anyhow::bail!("that message has no attachments");
+    }
+    let picked: Vec<_> = all
+        .iter()
+        .filter(|(a, _)| name.is_none_or(|n| a.name == n))
+        .collect();
+    if picked.is_empty() {
+        let names: Vec<&str> = all.iter().map(|(a, _)| a.name.as_str()).collect();
+        anyhow::bail!(
+            "no attachment named {}: it has {}, as read_message lists them",
+            name.unwrap_or_default(),
+            names.join(", ")
+        );
+    }
+    picked
+        .into_iter()
+        .map(|(a, bytes)| {
+            save_one(dir, &a.name, bytes)
+                .map_err(|e| anyhow::anyhow!("{} not saved in {}: {e}", a.name, dir.display()))
+        })
+        .collect()
+}
+
 impl App {
     /// List the attachments of the message read, to save.
     pub(super) fn list_to_save(&mut self) {

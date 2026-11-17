@@ -330,6 +330,7 @@ fn an_agent_lists_searches_reads_and_marks_mail() {
             "search_messages",
             "find_address",
             "read_message",
+            "save_attachment",
             "nearest_messages",
             "suggest_label",
             "would_throw_away",
