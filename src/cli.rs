@@ -28,6 +28,10 @@ pub(super) struct Args {
         global = true
     )]
     pub(super) grammar: String,
+    /// Ask, as C-c C-c sends, whether to check the grammar first; else
+    /// C-c g checks it when it is wanted
+    #[arg(long, env = "LETTERBOX_CHECK_ON_SEND", global = true)]
+    pub(super) check_grammar_on_send: bool,
     #[command(subcommand)]
     pub(super) command: Option<Command>,
 }

@@ -338,12 +338,21 @@ impl App {
         {
             return;
         }
-        // Asked as it is to go: y checks it, n sends it unchecked.
+        // Asked as it is to go: y checks it, n sends it unchecked, and C-c
+        // C-c, asked again, sends it as it is.
         if std::mem::take(&mut self.check_asked) {
             let plain = key.modifiers.is_empty();
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             match key.code {
                 KeyCode::Char('y' | 'Y') if plain => self.check_grammar(true),
                 KeyCode::Char('n' | 'N') if plain => self.send_compose(),
+                KeyCode::Char('c') if ctrl => {
+                    self.send_as_is = true;
+                    if let Some(compose) = &mut self.compose {
+                        compose.prefix = Some('c');
+                    }
+                    self.say_passing(Transient::Prefix, "C-c-".to_string());
+                }
                 _ => self.status = "kept · C-c C-c sends it".to_string(),
             }
             return;

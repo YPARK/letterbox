@@ -779,8 +779,9 @@ impl App {
             grammar_open: crate::grammar::open,
             checker: None,
             checking: None,
-            // Never in tests, which would fetch the model: those of it say so.
-            check_on_send: cfg!(feature = "grammar") && !cfg!(test),
+            // Asked only when turned on, by --check-grammar-on-send: C-c g
+            // checks it whenever it is wanted.
+            check_on_send: false,
             check_asked: false,
             grammar_waiting: false,
             saves: 0,

@@ -243,9 +243,11 @@ change in red, there and in the text: Yes (`y` or `space`) takes it, Skip
 (`i`) none, and any other key stops and is written. Nothing changes but
 what you take.
 
-Built with grammar, `C-c C-c` asks first whether to check it: Check (`y`),
-Send as it is (`n`), or any other key to go on writing; no model is read
-unless you say so. Checked, with nothing to change it goes at once; else each
+`C-c C-c` sends it as it is: the grammar is checked only when you ask, by
+`C-c g`. Started with `--check-grammar-on-send` (or
+`LETTERBOX_CHECK_ON_SEND=true`), `C-c C-c` asks first whether to check it:
+Check (`y`), Send as it is (`n`, or `C-c C-c` again), or any other key to go
+on writing; no model is read unless you say so. Checked, with nothing to change it goes at once; else each
 change is asked, and it goes once they are gone through: `C-g`, `esc` or `⏎` stops
 there and goes on writing, not sent.
 `C-c C-c` again while a change is asked sends it as it is. A model that cannot

@@ -424,3 +424,25 @@ fn each_change_is_asked_in_a_pop_up_yes_skip_accept_all_or_ignore_all() {
     assert!(app.checking.is_none());
     assert_eq!(written(&app), text);
 }
+
+#[test]
+fn c_c_c_c_again_while_asked_whether_to_check_sends_it_as_it_is() {
+    let mut app = sending("Thank you for you time.");
+    app.grammar_open = |_| anyhow::bail!("not to be read");
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(
+        app.status.contains("Check the grammar first?"),
+        "{}",
+        app.status
+    );
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.compose.is_none(), "{}", app.status);
+}
+
+#[test]
+fn unless_turned_on_c_c_c_c_sends_without_asking_about_the_grammar() {
+    let mut app = writing("Thank you for you time.");
+    assert!(!app.check_on_send);
+    press(&mut app, &["<c-c>", "<c-c>"]);
+    assert!(app.compose.is_none(), "{}", app.status);
+}
