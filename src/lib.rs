@@ -105,6 +105,7 @@ fn command(args: &Args) -> anyhow::Result<()> {
             let mut app = app::App::with_index(stores, args.config.clone(), index);
             app.theme = theme::Theme::of(args.theme);
             app.grammar_model = args.grammar.clone();
+            app.check_on_send = cfg!(feature = "grammar") && args.check_grammar_on_send;
             if args.demo {
                 app.as_demo();
             } else {
